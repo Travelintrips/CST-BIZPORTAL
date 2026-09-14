@@ -14,12 +14,14 @@ router.get("/health/ready", async (_req, res) => {
     await pool.query("select 1");
     res.json({
       status: "ok",
+      ready: true,
       database: "connected",
       databaseProvider: getDatabaseUrl()?.includes("supabase") ? "supabase" : "postgres",
     });
   } catch (error) {
     res.status(503).json({
       status: "degraded",
+      ready: false,
       database: "unavailable",
       error: error instanceof Error ? error.message : "Database connection failed",
     });
