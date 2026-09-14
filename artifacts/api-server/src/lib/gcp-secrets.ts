@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { validateUpstreamOrigin } from "../routes/proxy-policy";
+import { validateUpstreamBaseUrl } from "../routes/proxy-policy";
 
 type ServiceAccountCredentials = {
   project_id?: string;
@@ -154,9 +154,33 @@ function extractOrigin(secretValue: string, secretName: string): string {
   throw new Error(`GCP secret ${secretName} does not contain a valid API origin`);
 }
 
+function validateConfiguredOrigin(value: string, source: string): URL {
+  try {
+    const configuredUrl = validateUpstreamBaseUrl(value);
+    // BIZPORTAL_API_ORIGIN is an origin, not an API route prefix. Ignore an
+    // accidental path in the stored config so requests keep their /api/... path
+    // exactly once.
+    return new URL(configuredUrl.origin);
+  } catch {
+    let details = "unparseable";
+    try {
+      const parsed = new URL(value);
+      details = [
+        `protocol=${parsed.protocol || "missing"}`,
+        `hostname=${parsed.hostname ? "present" : "missing"}`,
+        `rootPath=${parsed.pathname === "/"}`,
+        `credentials=${Boolean(parsed.username || parsed.password)}`,
+      ].join(", ");
+    } catch {
+      // Keep the diagnostic free of the secret value.
+    }
+    throw new Error(`${source} API origin failed validation (${details})`);
+  }
+}
+
 async function loadUpstreamOrigin(): Promise<URL> {
   const explicitOrigin = process.env.BIZPORTAL_API_ORIGIN?.trim();
-  if (explicitOrigin) return validateUpstreamOrigin(explicitOrigin);
+  if (explicitOrigin) return validateConfiguredOrigin(explicitOrigin, "BIZPORTAL_API_ORIGIN");
 
   const environment = (process.env.APP_ENV ?? process.env.NODE_ENV ?? "development")
     .trim()
@@ -168,11 +192,11 @@ async function loadUpstreamOrigin(): Promise<URL> {
 
   if (process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON) {
     const origin = extractOrigin(await readSecret(secretName), secretName);
-    return validateUpstreamOrigin(origin);
+    return validateConfiguredOrigin(origin, `GCP secret ${secretName}`);
   }
 
   // Preserve the existing local setup when GCP Secret Manager is not configured.
-  return validateUpstreamOrigin(DEFAULT_UPSTREAM_ORIGIN);
+  return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
 }
 
 export function getConfiguredUpstreamOrigin(): Promise<URL> {

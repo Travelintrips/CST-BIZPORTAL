@@ -23,6 +23,34 @@ export function validateUpstreamOrigin(value: string): URL {
   return url;
 }
 
+export function validateUpstreamBaseUrl(value: string): URL {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("BIZPORTAL_API_ORIGIN must be an HTTPS URL without credentials, query, or hash");
+  }
+  return url;
+}
+
+export function buildUpstreamUrl(originalUrl: string, upstream: URL): URL {
+  const request = new URL(originalUrl, "http://local-request");
+  const basePath = upstream.pathname === "/" ? "" : upstream.pathname.replace(/\/+$/, "");
+  const requestPath = request.pathname || "/";
+  const pathAlreadyIncluded =
+    !basePath || requestPath === basePath || requestPath.startsWith(`${basePath}/`);
+  const pathname = pathAlreadyIncluded ? requestPath : `${basePath}${requestPath}`;
+  const target = new URL(upstream.origin);
+  target.pathname = pathname || "/";
+  target.search = request.search;
+  return target;
+}
+
 export function buildUpstreamHeaders(
   incoming: IncomingHttpHeaders,
   upstream: URL,

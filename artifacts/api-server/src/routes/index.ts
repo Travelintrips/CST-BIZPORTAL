@@ -3,9 +3,9 @@ import https from "node:https";
 import healthRouter from "./health";
 import { createDevAuthRouter, getDevSession } from "./dev-auth";
 import {
+  buildUpstreamUrl,
   buildUpstreamHeaders,
   rewriteSetCookies,
-  validateUpstreamOrigin,
 } from "./proxy-policy";
 import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 
@@ -30,7 +30,7 @@ router.use(async (req, res) => {
     });
   }
 
-  const upstreamUrl = new URL(req.originalUrl, upstreamOrigin);
+  const upstreamUrl = buildUpstreamUrl(req.originalUrl, upstreamOrigin);
   const headers = buildUpstreamHeaders(req.headers, upstreamOrigin, getDevSession(req));
 
   const upstream = https.request(
