@@ -166,6 +166,9 @@ function DevLoginSection() {
         setError(data.error ?? `Login gagal (${res.status})`);
         return;
       }
+      const selectedUser = users.find((user) => user.email === devEmail);
+      if (selectedUser?.role) writeRoleCache(selectedUser.role);
+      else sessionStorage.removeItem(ROLE_CACHE_KEY);
       window.location.href = "/bizportal/";
     } catch {
       setError("Gagal terhubung ke server. Pastikan API Server berjalan.");
