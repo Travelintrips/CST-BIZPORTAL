@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import https from "node:https";
 import healthRouter from "./health";
+import { createDevAuthRouter, getDevSession } from "./dev-auth";
 import {
   buildUpstreamHeaders,
   rewriteSetCookies,
@@ -10,6 +11,7 @@ import {
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(createDevAuthRouter());
 
 const upstreamOrigin = validateUpstreamOrigin(
   process.env.BIZPORTAL_API_ORIGIN ?? "https://cstlogistic.co.id",
@@ -17,7 +19,7 @@ const upstreamOrigin = validateUpstreamOrigin(
 
 router.use((req, res) => {
   const upstreamUrl = new URL(req.originalUrl, upstreamOrigin);
-  const headers = buildUpstreamHeaders(req.headers, upstreamOrigin);
+  const headers = buildUpstreamHeaders(req.headers, upstreamOrigin, getDevSession(req));
 
   const upstream = https.request(
     upstreamUrl,

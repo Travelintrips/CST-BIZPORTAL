@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
+import type { DevAuthUser } from "./dev-auth";
 
 const COOKIE_PREFIX = "bizportal_upstream_";
 const FORWARDED_HEADERS = [
@@ -20,6 +21,7 @@ export function validateUpstreamOrigin(value: string): URL {
 export function buildUpstreamHeaders(
   incoming: IncomingHttpHeaders,
   upstream: URL,
+  devUser?: DevAuthUser | null,
 ): OutgoingHttpHeaders {
   const headers: OutgoingHttpHeaders = { host: upstream.host };
   for (const name of FORWARDED_HEADERS) {
@@ -38,6 +40,20 @@ export function buildUpstreamHeaders(
 
   headers.origin = upstream.origin;
   headers.referer = `${upstream.origin}/`;
+
+  // A staging backend may explicitly opt into the signed dev identity. Never
+  // send this header to production, and keep it disabled unless the setting
+  // is deliberately enabled in a development environment.
+  if (
+    devUser &&
+    process.env.NODE_ENV === "development" &&
+    process.env.BIZPORTAL_DEV_FORWARD_IDENTITY === "true" &&
+    upstream.hostname !== "cstlogistic.co.id"
+  ) {
+    headers["x-bizportal-dev-user"] = devUser.email;
+    headers["x-bizportal-dev-role"] = devUser.role;
+  }
+
   return headers;
 }
 

@@ -455,6 +455,12 @@ function LoginScreen() {
       <div className="flex flex-col gap-3 w-72">
         {loginMode === "email" ? <EmailPasswordLoginSection /> : <WaLoginSection />}
       </div>
+
+      {IS_DEV && (
+        <div className="w-72">
+          <DevLoginSection />
+        </div>
+      )}
     </div>
   );
 }
