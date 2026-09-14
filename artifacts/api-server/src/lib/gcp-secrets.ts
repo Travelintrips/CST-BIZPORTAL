@@ -110,48 +110,52 @@ async function readSecret(secretName: string): Promise<string> {
   return Buffer.from(encoded, "base64").toString("utf8").trim();
 }
 
-function findOrigin(value: unknown): string | null {
+const BACKEND_ORIGIN_KEYS = new Set([
+  "BIZPORTAL_BACKEND_API_ORIGIN",
+  "bizportal_backend_api_origin",
+  "BACKEND_URL",
+  "backendUrl",
+  "API_URL",
+  "apiUrl",
+  "API_ORIGIN",
+  "apiOrigin",
+]);
+
+function findBackendOrigin(value: unknown): string | null {
   if (typeof value === "string") {
     return /^https?:\/\//i.test(value.trim()) ? value.trim() : null;
   }
   if (!value || typeof value !== "object") return null;
 
   const record = value as Record<string, unknown>;
-  const preferredKeys = [
-    "BIZPORTAL_API_ORIGIN",
-    "bizportal_api_origin",
-    "API_ORIGIN",
-    "apiOrigin",
-    "apiUrl",
-    "baseUrl",
-    "origin",
-    "url",
-  ];
-  for (const key of preferredKeys) {
-    const candidate = findOrigin(record[key]);
-    if (candidate) return candidate;
+  for (const [key, nested] of Object.entries(record)) {
+    if (BACKEND_ORIGIN_KEYS.has(key)) {
+      const candidate = findBackendOrigin(nested);
+      if (candidate) return candidate;
+    }
   }
 
   for (const nested of Object.values(record)) {
-    const candidate = findOrigin(nested);
+    if (!nested || typeof nested !== "object") continue;
+    const candidate = findBackendOrigin(nested);
     if (candidate) return candidate;
   }
   return null;
 }
 
-function extractOrigin(secretValue: string, secretName: string): string {
+function extractBackendOrigin(secretValue: string, secretName: string): string | null {
   const trimmed = secretValue.trim();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
 
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    const origin = findOrigin(parsed);
+    const origin = findBackendOrigin(parsed);
     if (origin) return origin;
   } catch {
     // Report a useful configuration error below without exposing the secret.
   }
 
-  throw new Error(`GCP secret ${secretName} does not contain a valid API origin`);
+  return null;
 }
 
 function validateConfiguredOrigin(value: string, source: string): URL {
@@ -191,8 +195,12 @@ async function loadUpstreamOrigin(): Promise<URL> {
       : process.env.GCP_BIZPORTAL_API_SECRET_DEV ?? DEFAULT_DEV_SECRET_NAME;
 
   if (process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON) {
-    const origin = extractOrigin(await readSecret(secretName), secretName);
-    return validateConfiguredOrigin(origin, `GCP secret ${secretName}`);
+    const origin = extractBackendOrigin(await readSecret(secretName), secretName);
+    if (origin) return validateConfiguredOrigin(origin, `GCP secret ${secretName}`);
+    if (environment === "production") return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
+    throw new Error(
+      `GCP secret ${secretName} has no backend API origin; BIZPORTAL_API_ORIGIN points to the frontend`,
+    );
   }
 
   // Preserve the existing local setup when GCP Secret Manager is not configured.
