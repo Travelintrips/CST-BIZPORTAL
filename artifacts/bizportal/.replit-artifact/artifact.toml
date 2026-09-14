@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "CST BizPortal"
+description = "An internal ERP portal for CST teams covering ecommerce, trading, logistics, accounting, administration, and operational workflows."
+version = "1.0.0"
+id = "artifacts/bizportal"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18442
+
+[services.development]
+run = "pnpm --filter @workspace/bizportal run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/bizportal", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/bizportal/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18442"
+BASE_PATH = "/"
