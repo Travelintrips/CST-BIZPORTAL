@@ -1,16 +1,20 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
+import { getDatabaseUrl } from "./connection";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
+const databaseUrl = getDatabaseUrl();
+
+if (!databaseUrl) {
   throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
+    "A Supabase Postgres URL is required. Set SUPABASE_DATABASE_URL_DEV for development or SUPABASE_DATABASE_URL for production.",
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({ connectionString: databaseUrl });
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
+export { getDatabaseUrl } from "./connection";
