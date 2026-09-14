@@ -7,17 +7,29 @@ import {
   rewriteSetCookies,
   validateUpstreamOrigin,
 } from "./proxy-policy";
+import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(createDevAuthRouter());
 
-const upstreamOrigin = validateUpstreamOrigin(
-  process.env.BIZPORTAL_API_ORIGIN ?? "https://cstlogistic.co.id",
-);
+router.use(async (req, res) => {
+  let upstreamOrigin: URL;
+  try {
+    upstreamOrigin = await getConfiguredUpstreamOrigin();
+  } catch (error) {
+    req.log.error(
+      {
+        errorMessage: error instanceof Error ? error.message : "Unknown configuration error",
+      },
+      "BizPortal upstream configuration unavailable",
+    );
+    return res.status(503).json({
+      error: "BizPortal API environment configuration is unavailable",
+    });
+  }
 
-router.use((req, res) => {
   const upstreamUrl = new URL(req.originalUrl, upstreamOrigin);
   const headers = buildUpstreamHeaders(req.headers, upstreamOrigin, getDevSession(req));
 
@@ -60,6 +72,7 @@ router.use((req, res) => {
   }
 
   req.pipe(upstream);
+  return;
 });
 
 export default router;

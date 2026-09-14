@@ -4,6 +4,10 @@ import { pool, getDatabaseUrl } from "@workspace/db";
 
 const router: IRouter = Router();
 
+router.get("/health/live", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
   res.json(data);

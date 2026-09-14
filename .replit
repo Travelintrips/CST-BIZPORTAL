@@ -32,3 +32,6 @@ DEV_LOGIN_ROLE = "admin"
 [userenv.production]
 APP_ENV = "production"
 MKT_DUAL_WRITE_RETRY_ENABLED = "false"
+
+[nix]
+channel = "stable-25_05"
