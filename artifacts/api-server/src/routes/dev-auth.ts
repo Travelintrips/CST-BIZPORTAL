@@ -18,12 +18,24 @@ interface DevSession extends DevAuthUser {
 const DEV_SESSION_COOKIE = "bizportal_dev_session";
 const DEV_SESSION_TTL_SECONDS = 8 * 60 * 60;
 
-function isDevelopment(): boolean {
-  return process.env.NODE_ENV === "development" || process.env.APP_ENV === "development";
+export function isDevelopmentEnvironment(): boolean {
+  const appEnvironment = process.env.APP_ENV?.trim().toLowerCase();
+  const nodeEnvironment = process.env.NODE_ENV?.trim().toLowerCase();
+
+  if (appEnvironment !== undefined) {
+    return appEnvironment === "development";
+  }
+
+  return nodeEnvironment === "development";
 }
 
 function getSessionSecret(): string | null {
   const secret = process.env.SESSION_SECRET;
+  return secret && secret.length >= 32 ? secret : null;
+}
+
+function getDevIdentitySecret(): string | null {
+  const secret = process.env.DEV_IDENTITY_SECRET ?? process.env.SESSION_SECRET;
   return secret && secret.length >= 32 ? secret : null;
 }
 
@@ -60,6 +72,15 @@ function decode(value: string): string {
 
 function sign(value: string, secret: string): string {
   return crypto.createHmac("sha256", secret).update(value).digest("base64url");
+}
+
+export function getDevIdentitySignature(user: DevAuthUser): string | null {
+  if (!isDevelopmentEnvironment()) return null;
+
+  const secret = getDevIdentitySecret();
+  if (!secret) return null;
+
+  return sign(`${user.email}\n${user.role}`, secret);
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -102,7 +123,7 @@ function clearSessionCookie(response: Response): void {
 }
 
 export function getDevSession(request: Request): DevAuthUser | null {
-  if (!isDevelopment()) return null;
+  if (!isDevelopmentEnvironment()) return null;
 
   const secret = getSessionSecret();
   const raw = getCookie(request, DEV_SESSION_COOKIE);
@@ -144,12 +165,12 @@ export function createDevAuthRouter(): Router {
   const router = Router();
 
   router.get("/auth/dev-users", (_request, response) => {
-    if (!isDevelopment()) return response.status(404).json({ error: "Not found" });
+    if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
     return response.json({ users: getDevUsers() });
   });
 
   router.post("/auth/dev-login", (request, response) => {
-    if (!isDevelopment()) return response.status(404).json({ error: "Not found" });
+    if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
 
     const email =
       typeof request.body?.email === "string"
@@ -183,7 +204,7 @@ export function createDevAuthRouter(): Router {
   });
 
   router.get("/auth/user", (request, response, next) => {
-    if (!isDevelopment()) return next();
+    if (!isDevelopmentEnvironment()) return next();
 
     const user = getDevSession(request);
     if (user) return response.json({ user });
@@ -191,7 +212,7 @@ export function createDevAuthRouter(): Router {
   });
 
   router.get("/logout", (request, response, next) => {
-    if (!isDevelopment() || !getDevSession(request)) return next();
+    if (!isDevelopmentEnvironment() || !getDevSession(request)) return next();
 
     clearSessionCookie(response);
     return response.redirect(getSafeRedirect(request.query.redirect));

@@ -1,7 +1,12 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
-import type { DevAuthUser } from "./dev-auth";
+import {
+  getDevIdentitySignature,
+  isDevelopmentEnvironment,
+  type DevAuthUser,
+} from "./dev-auth";
 
 const COOKIE_PREFIX = "bizportal_upstream_";
+const PRODUCTION_UPSTREAM_HOST = "cstlogistic.co.id";
 const FORWARDED_HEADERS = [
   "accept",
   "accept-language",
@@ -41,17 +46,20 @@ export function buildUpstreamHeaders(
   headers.origin = upstream.origin;
   headers.referer = `${upstream.origin}/`;
 
-  // A staging backend may explicitly opt into the signed dev identity. Never
-  // send this header to production, and keep it disabled unless the setting
-  // is deliberately enabled in a development environment.
+  // The staging backend can authenticate the local session with a shared HMAC.
+  // The source environment is the security boundary: this must never be sent
+  // by production, even if an incoming request contains forged dev headers.
+  const identitySignature = devUser ? getDevIdentitySignature(devUser) : null;
   if (
     devUser &&
-    process.env.NODE_ENV === "development" &&
-    process.env.BIZPORTAL_DEV_FORWARD_IDENTITY === "true" &&
-    upstream.hostname !== "cstlogistic.co.id"
+    identitySignature &&
+    isDevelopmentEnvironment() &&
+    process.env.BIZPORTAL_DEV_FORWARD_IDENTITY !== "false" &&
+    upstream.hostname !== PRODUCTION_UPSTREAM_HOST
   ) {
     headers["x-bizportal-dev-user"] = devUser.email;
     headers["x-bizportal-dev-role"] = devUser.role;
+    headers["x-bizportal-dev-signature"] = identitySignature;
   }
 
   return headers;
