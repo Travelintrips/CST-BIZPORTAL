@@ -509,9 +509,27 @@ export function VendorInvoiceEditorPage() {
       return body;
     },
     onSuccess: async () => {
-      toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
+      const detailResponse = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
+        { cache: "no-store" },
+      );
+      const latestInvoice = await detailResponse.json().catch(() => null) as Partial<VI> | null;
+      if (detailResponse.ok && latestInvoice) {
+        qcClient.setQueryData(
+          ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
+          latestInvoice,
+        );
+      }
       await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
       await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+      const latestAmountPaid = Number(latestInvoice?.amountPaid);
+      if (detailResponse.ok && Number.isFinite(latestAmountPaid) && latestAmountPaid <= 0.01) {
+        toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
+      } else {
+        toast.error(
+          "Reset diterima, tetapi invoice masih terbaca sudah terbayar. Periksa settlement atau pembayaran bank yang masih tertaut.",
+        );
+      }
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal mereset status pembayaran"),
   });
