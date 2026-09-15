@@ -176,14 +176,19 @@ export function createDevAuthRouter(): Router {
       typeof request.body?.email === "string"
         ? request.body.email.trim().toLowerCase()
         : "";
-    const user = getDevUsers().find((candidate) => candidate.email === email);
+    const configuredUsers = getDevUsers();
+    // An empty email is the intentional development auto-login path. Prefer
+    // an explicitly configured admin, then fall back to the first dev user.
+    const user = email
+      ? configuredUsers.find((candidate) => candidate.email === email)
+      : configuredUsers.find((candidate) => candidate.role === "admin") ?? configuredUsers[0];
 
     if (!getSessionSecret()) {
       return response.status(503).json({
         error: "Dev login belum aktif: SESSION_SECRET harus tersedia.",
       });
     }
-    if (getDevUsers().length === 0) {
+    if (configuredUsers.length === 0) {
       return response.status(503).json({
         error: "Dev login belum dikonfigurasi: DEV_LOGIN_EMAILS masih kosong.",
       });

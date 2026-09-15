@@ -184,9 +184,44 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
+  const createDevSession = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/dev-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) return false;
+      const data = await res.json() as { user?: AuthUser };
+      if (!data.user) return false;
+      writeCache(data.user);
+      setUser(data.user);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
-    void fetchUser();
-  }, [fetchUser]);
+    let cancelled = false;
+
+    const loadUser = async () => {
+      // Development uses the configured admin session automatically. The
+      // endpoint is unavailable outside development, so production keeps the
+      // normal authentication flow unchanged.
+      if (IS_DEV && await createDevSession()) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+      await fetchUser();
+    };
+
+    void loadUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [createDevSession, fetchUser]);
 
   const exchangeToken = useCallback(async (access_token: string) => {
     try {

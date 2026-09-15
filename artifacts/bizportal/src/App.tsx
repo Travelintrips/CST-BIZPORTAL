@@ -496,12 +496,13 @@ function AuthRouteGuard() {
 }
 
 function AppContent() {
-  const { isApiAvailable, isApiReady, isAuthenticated } = useSupabaseAuth();
+  const { isApiAvailable, isApiReady, isAuthenticated, isLoading } = useSupabaseAuth();
 
   // The login page must not depend on the long-running readiness poll. A
   // logged-out user can see the form immediately and receive a normal request
   // error if the API is unavailable. Only authenticated users wait before
   // route/provider side effects are mounted.
+  if (IS_DEV && isLoading) return <LoadingSpinner />;
   if (!isAuthenticated) return <LoginScreen />;
   if (!isApiAvailable || !isApiReady) return <ApiPreparingScreen />;
 
