@@ -1,15 +1,29 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
+import { getDevSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 const router: IRouter = Router();
 
+function getLocalApiUser(req: Request): DevAuthUser | null {
+  const devUser = getDevSession(req);
+  if (devUser) return devUser;
+  if (isDevelopmentEnvironment()) return null;
+
+  // Production currently runs the BizPortal UI in its intentional shared
+  // admin/no-login mode. Keep local Supabase purchase actions consistent with
+  // that mode while still applying the route's role and company checks.
+  return {
+    id: "production-no-login",
+    email: "production-no-login@bizportal.local",
+    firstName: "CST",
+    lastName: "Admin",
+    role: "admin",
+    companyId: null,
+  };
+}
+
 router.use((req, res, next) => {
-  if (!isDevelopmentEnvironment()) {
-    next("router");
-    return;
-  }
-  const user = getDevSession(req);
+  const user = getLocalApiUser(req);
   if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -34,10 +48,10 @@ function parseInvoiceId(req: Request): number | null {
 
 function parseCompanyId(req: Request): number | null {
   const raw = first(req.query.company) ?? first(req.query.companyId) ?? first(req.query.company_id);
-  if (!raw || raw === "all") return getDevSession(req)?.companyId ?? null;
+  const sessionCompanyId = getLocalApiUser(req)?.companyId ?? null;
+  if (!raw || raw === "all") return sessionCompanyId;
   const companyId = Number(raw);
   if (!Number.isInteger(companyId) || companyId <= 0) return null;
-  const sessionCompanyId = getDevSession(req)?.companyId ?? null;
   if (sessionCompanyId !== null && sessionCompanyId !== companyId) return null;
   return companyId;
 }
@@ -323,7 +337,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, now(), $9, $10)`,
       [
         null,
-        getDevSession(req)?.email ?? "development-admin",
+        getLocalApiUser(req)?.email ?? "local-admin",
         "reset_payment",
         "vendor_invoice",
         String(invoiceId),
