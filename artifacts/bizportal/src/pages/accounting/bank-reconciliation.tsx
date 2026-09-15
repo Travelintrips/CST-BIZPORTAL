@@ -3190,8 +3190,9 @@ function VendorInvoicePaymentDialog({
     0,
     Math.round((mutationAmount - selectedTotal) * 100) / 100,
   );
+  const hasInvoiceSelection = selectedInvoices.length > 0;
   const selectionFitsMutation =
-    selectedInvoices.length > 0
+    hasInvoiceSelection
     && selectedAmountsValid
     && selectedTotal <= mutationAmount + 0.01;
 
@@ -3302,11 +3303,19 @@ function VendorInvoicePaymentDialog({
               <strong>{idr(mutationAmount)}</strong>
             </div>
             <div className="mt-1 text-xs">
-              Jurnal: <strong>Debit Hutang Vendor/AP</strong>
-              {wrongTransferAmount > 0.01 && (
-                <> + <strong>Debit 2-1011-CST — Salah Transfer ({idr(wrongTransferAmount)})</strong></>
+              {hasInvoiceSelection ? (
+                <>
+                  Jurnal: <strong>Debit Hutang Vendor/AP</strong>
+                  {wrongTransferAmount > 0.01 && (
+                    <> + <strong>Debit 2-1011-CST — Salah Transfer ({idr(wrongTransferAmount)})</strong></>
+                  )}
+                  {" "}— <strong>Kredit Bank</strong>. Jika pelunasan bersih penuh, PPh otomatis dikredit ke COA Hutang PPh.
+                </>
+              ) : (
+                <>
+                  Jurnal akan dihitung setelah invoice vendor dipilih. Selisih pembayaran baru dicatat ke COA Salah Transfer jika nominal invoice yang dipilih lebih kecil dari mutasi.
+                </>
               )}
-              {" "}— <strong>Kredit Bank</strong>. Jika pelunasan bersih penuh, PPh otomatis dikredit ke COA Hutang PPh.
             </div>
           </div>
 
