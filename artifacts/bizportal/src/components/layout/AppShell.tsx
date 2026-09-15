@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CommandPalette, useCommandPalette, usePageTracker } from "@/components/CommandPalette";
 import { Link, useLocation } from "wouter";
 import { useGetCurrentUser, getGetCurrentUserQueryKey, useListAiDraftQuotations, getListAiDraftQuotationsQueryKey } from "@shared/api-client-react";
+import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
 import {
   LayoutDashboard,
   Package,
@@ -163,13 +164,24 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   const [location, navigate] = useLocation();
   const { t } = useLanguage();
   const { activeCompany, isConsolidated } = useCompany();
+  const { user: authUser } = useSupabaseAuth();
   const secondaryReady = useAfterFirstPaint(500);
-  const { data: dbUser } = useGetCurrentUser({
+  const { data: fetchedDbUser } = useGetCurrentUser({
     query: {
+      enabled: IS_DEV,
       queryKey: getGetCurrentUserQueryKey(),
       staleTime: Infinity,
     },
   });
+  const dbUser = fetchedDbUser ?? (!IS_DEV && authUser
+    ? {
+        id: authUser.id,
+        email: authUser.email ?? null,
+        name: [authUser.firstName, authUser.lastName].filter(Boolean).join(" ") || "CST Admin",
+        role: authUser.role ?? "admin",
+        companyId: authUser.companyId ?? null,
+      }
+    : undefined);
   const { dbUnreadTotal } = useOrderNotificationsContext();
   const { data: portalWorkload } = useQuery({
     queryKey: ["/api/portal/admin/service-operations", "pending-count"],
@@ -1152,13 +1164,15 @@ export function AppShell({ children, noPadding }: AppShellProps) {
                       {dbUser?.role} {t.common.division}
                     </Badge>
                   </div>
-                  <DropdownMenuItem
-                    onClick={() => { window.location.href = "/api/logout?redirect=/bizportal/"; }}
-                    className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
-                  >
-                    <LogOut className="mr-2 h-4 w-4" />
-                    <span>{t.common.logOut}</span>
-                  </DropdownMenuItem>
+                  {IS_DEV && (
+                    <DropdownMenuItem
+                      onClick={() => { window.location.href = "/api/logout?redirect=/bizportal/"; }}
+                      className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
+                    >
+                      <LogOut className="mr-2 h-4 w-4" />
+                      <span>{t.common.logOut}</span>
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

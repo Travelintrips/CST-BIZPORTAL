@@ -105,6 +105,7 @@ function ApiPreparingScreen() {
 }
 
 const IS_DEV = import.meta.env.DEV;
+const IS_PROD_NO_LOGIN = import.meta.env.PROD;
 
 type DevUser = { id: string; email: string; firstName: string | null; lastName: string | null; role: string | null };
 
@@ -469,11 +470,11 @@ function LoginScreen() {
 }
 
 function AuthRouteGuard() {
-  const { isAuthenticated, isLoading, isApiAvailable } = useSupabaseAuth();
+  const { user, isAuthenticated, isLoading, isApiAvailable } = useSupabaseAuth();
   const cachedRole = readRoleCache();
   const { data: dbUser, isLoading: dbLoading } = useGetCurrentUser({
     query: {
-      enabled: isAuthenticated && isApiAvailable,
+      enabled: isAuthenticated && isApiAvailable && !IS_PROD_NO_LOGIN,
       queryKey: getGetCurrentUserQueryKey(),
       staleTime: 5 * 60 * 1000,
       retry: 1,
@@ -491,8 +492,8 @@ function AuthRouteGuard() {
   // A cached role is enough to choose the first route. The user query still
   // runs in the background and will correct the route if the role changed,
   // but the app no longer shows a full-screen spinner while it waits.
-  if (dbLoading && !cachedRole) return <LoadingSpinner />;
-  return <Redirect to={roleToPath(dbUser?.role ?? cachedRole)} />;
+  if (dbLoading && !cachedRole && !user?.role) return <LoadingSpinner />;
+  return <Redirect to={roleToPath(dbUser?.role ?? cachedRole ?? user?.role)} />;
 }
 
 function AppContent() {

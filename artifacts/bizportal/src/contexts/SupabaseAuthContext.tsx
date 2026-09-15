@@ -24,6 +24,13 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
 const IS_DEV = import.meta.env.DEV;
+const PROD_NO_LOGIN_USER: AuthUser = {
+  id: "production-no-login",
+  firstName: "CST",
+  lastName: "Admin",
+  role: "admin",
+  companyId: null,
+};
 const READINESS_POLL_INTERVAL_MS = 2_000;
 const LIVENESS_REQUEST_TIMEOUT_MS = 5_000;
 const READINESS_REQUEST_TIMEOUT_MS = 5_000;
@@ -52,8 +59,8 @@ function getOrigin(): string {
 
 export function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   const cached = readCache();
-  const [user, setUser] = useState<AuthUser | null>(cached);
-  const [isLoading, setIsLoading] = useState(IS_DEV || !cached);
+  const [user, setUser] = useState<AuthUser | null>(IS_DEV ? cached : PROD_NO_LOGIN_USER);
+  const [isLoading, setIsLoading] = useState(IS_DEV && !cached);
   const [isApiAvailable, setIsApiAvailable] = useState(!IS_DEV);
   const [isApiReady, setIsApiReady] = useState(!IS_DEV);
   const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
@@ -207,9 +214,18 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     let cancelled = false;
 
     const loadUser = async () => {
-      // Development uses the configured admin session automatically. The
-      // endpoint is unavailable outside development, so production keeps the
-      // normal authentication flow unchanged.
+      // Production intentionally runs without a login screen. Authentication
+      // requests are skipped and every visitor receives the shared admin UI.
+      if (!IS_DEV) {
+        writeCache(PROD_NO_LOGIN_USER);
+        if (!cancelled) {
+          setUser(PROD_NO_LOGIN_USER);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      // Development uses the configured admin session automatically.
       if (IS_DEV && await createDevSession()) {
         if (!cancelled) setIsLoading(false);
         return;
@@ -325,6 +341,11 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   }, [fetchUser]);
 
   const signOut = useCallback(() => {
+    if (!IS_DEV) {
+      writeCache(PROD_NO_LOGIN_USER);
+      setUser(PROD_NO_LOGIN_USER);
+      return;
+    }
     writeCache(null);
     setUser(null);
     if (supabase) supabase.auth.signOut().catch(() => {});
