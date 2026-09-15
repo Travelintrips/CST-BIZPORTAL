@@ -1,1 +1,2 @@
 - [GCP API origin separation](gcp-api-origin.md) — the development secret currently has a frontend URL, so a separate backend API origin is required.
+- [Production no-login API access](production-no-login-api.md) — bypassing frontend login does not authenticate proxied backend endpoints; production access must be handled consistently.
