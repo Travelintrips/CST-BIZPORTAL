@@ -14,3 +14,9 @@ Development accounting queries also require `SUPABASE_DATABASE_URL_DEV` as a val
 **Why:** The Accounting Hub reads reporting tables directly through the server-side pool, so an API URL or malformed connection string produces a 503 even when the frontend and API health checks are working.
 
 **How to apply:** Keep the frontend Supabase URL and environment-specific PostgreSQL connection separate, and validate the database connection after changing either secret.
+
+Development module access also requires an upstream `sid` session in addition to the local development session. The development login bridge should namespace that upstream cookie before returning it to the browser.
+
+**Why:** The development backend accepts its own `/api/auth/dev-login` session cookie for notifications, drivers, and related modules; a local-only session otherwise leaves those routes at 401 even when the API origin is correct.
+
+**How to apply:** Keep the local cookie for Replit-owned accounting/auth routes and forward only the namespaced upstream cookie through the development proxy. Do not apply this bridge to production.

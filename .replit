@@ -24,6 +24,10 @@ timeoutMs = 60000
 [userenv.development]
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
+<<<<<<< HEAD
 
 [nix]
 channel = "stable-25_05"
+=======
+BIZPORTAL_API_ORIGIN_DEV = "https://cc6b75e2-f780-4c65-8bc7-9d6c3d3e25b8-00-3isou4hw49j9r.pike.replit.dev"
+>>>>>>> 17ad1258a45f5b5cd40c71ebaf30c15d7e92aa3d

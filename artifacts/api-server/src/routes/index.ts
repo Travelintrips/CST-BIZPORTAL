@@ -1,10 +1,10 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
-import { createDevAuthRouter, getDevSession } from "./dev-auth";
+import { createDevAuthRouter, getDevSession, type DevAuthUser } from "./dev-auth";
 import {
   buildUpstreamUrl,
   buildUpstreamHeaders,
@@ -14,8 +14,43 @@ import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 
 const router: IRouter = Router();
 
+async function bridgeDevelopmentLogin(
+  user: DevAuthUser,
+  response: Response,
+): Promise<void> {
+  const upstreamOrigin = await getConfiguredUpstreamOrigin();
+  const upstreamResponse = await fetch(
+    new URL("/api/auth/dev-login", upstreamOrigin),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: user.email }),
+    },
+  );
+  if (!upstreamResponse.ok) {
+    throw new Error(`Development upstream login returned ${upstreamResponse.status}`);
+  }
+
+  const headers = upstreamResponse.headers as Headers & {
+    getSetCookie?: () => string[];
+  };
+  const upstreamCookies = headers.getSetCookie?.() ?? [];
+  const rewrittenCookies = rewriteSetCookies(upstreamCookies);
+  if (!rewrittenCookies || rewrittenCookies.length === 0) {
+    throw new Error("Development upstream login did not return a session cookie");
+  }
+
+  const currentCookies = response.getHeader("set-cookie");
+  const localCookies = Array.isArray(currentCookies)
+    ? currentCookies.map(String)
+    : currentCookies
+      ? [String(currentCookies)]
+      : [];
+  response.setHeader("set-cookie", [...localCookies, ...rewrittenCookies]);
+}
+
 router.use(healthRouter);
-router.use(createDevAuthRouter());
+router.use(createDevAuthRouter({ onLogin: bridgeDevelopmentLogin }));
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);

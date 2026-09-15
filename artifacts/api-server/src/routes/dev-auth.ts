@@ -15,6 +15,11 @@ interface DevSession extends DevAuthUser {
   expiresAt: number;
 }
 
+export type DevLoginHook = (
+  user: DevAuthUser,
+  response: Response,
+) => Promise<void>;
+
 const DEV_SESSION_COOKIE = "bizportal_dev_session";
 const DEV_SESSION_TTL_SECONDS = 8 * 60 * 60;
 
@@ -166,7 +171,7 @@ function getSafeRedirect(value: unknown): string {
   return value;
 }
 
-export function createDevAuthRouter(): Router {
+export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): Router {
   const router = Router();
 
   router.get("/auth/dev-users", (_request, response) => {
@@ -174,7 +179,7 @@ export function createDevAuthRouter(): Router {
     return response.json({ users: getDevUsers() });
   });
 
-  router.post("/auth/dev-login", (request, response) => {
+  router.post("/auth/dev-login", async (request, response) => {
     if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
 
     const email =
@@ -210,6 +215,14 @@ export function createDevAuthRouter(): Router {
       issuedAt: now,
       expiresAt: now + DEV_SESSION_TTL_SECONDS * 1000,
     });
+    try {
+      await options.onLogin?.(user, response);
+    } catch (error) {
+      request.log.error({ error }, "Development upstream login failed");
+      return response.status(502).json({
+        error: "Development API login is unavailable",
+      });
+    }
     return response.json({ user });
   });
 
