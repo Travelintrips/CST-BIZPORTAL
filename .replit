@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "python-base-3.13"]
 
 [deployment]
 router = "application"
@@ -30,6 +30,7 @@ APP_ENV = "development"
 VITE_API_SERVER_URL_DEV = "/api"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
+BIZPORTAL_API_ORIGIN_DEV = "https://cc6b75e2-f780-4c65-8bc7-9d6c3d3e25b8-00-3isou4hw49j9r.pike.replit.dev"
 
 [userenv.production]
 APP_ENV = "production"
