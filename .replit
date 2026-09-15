@@ -25,7 +25,9 @@ timeoutMs = 20000
 
 [userenv.development]
 APP_ENV = "development"
-VITE_API_SERVER_URL_DEV = "https://1c591a26-1875-444f-9a51-2733d23fd756-00-3bxi1sstpdetn.pike.replit.dev/bizportal/"
+# Path-based Replit routing: the API workflow is served from the current
+# development origin under /api; do not pin an ephemeral *.replit.dev host.
+VITE_API_SERVER_URL_DEV = "/api"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
 
