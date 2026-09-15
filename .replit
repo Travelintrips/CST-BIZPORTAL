@@ -24,3 +24,13 @@ timeoutMs = 20000
 [userenv.development]
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
+APP_ENV = "development"
+BIZPORTAL_API_ORIGIN_DEV = "https://cc6b75e2-f780-4c65-8bc7-9d6c3d3e25b8-00-3isou4hw49j9r.pike.replit.dev"
+DEV_LOGIN_EMAILS = "admcst001@gmail.com"
+DEV_LOGIN_ROLE = "admin"
+VITE_API_SERVER_URL_DEV = "/api"
+
+[userenv.production]
+APP_ENV = "production"
+BIZPORTAL_API_ORIGIN_PROD = "https://cstlogistic.co.id"
+MKT_DUAL_WRITE_RETRY_ENABLED = "false"
