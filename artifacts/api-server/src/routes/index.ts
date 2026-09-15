@@ -3,6 +3,7 @@ import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
+import accountingRouter from "./accounting";
 import { createDevAuthRouter, getDevSession } from "./dev-auth";
 import {
   buildUpstreamUrl,
@@ -17,6 +18,7 @@ router.use(healthRouter);
 router.use(createDevAuthRouter());
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
+router.use(accountingRouter);
 
 router.use(async (req, res) => {
   let upstreamOrigin: URL;

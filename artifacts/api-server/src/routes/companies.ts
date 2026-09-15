@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
+import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
 
 interface CompanyRow {
   id: number;
@@ -18,8 +19,21 @@ interface CompanyRow {
 
 const router: IRouter = Router();
 
-router.get("/companies", async (req, res) => {
+router.use((req, res, next) => {
+  if (!isDevelopmentEnvironment()) {
+    next("router");
+    return;
+  }
+  if (!getDevSession(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  next();
+});
+
+router.get(["/companies", "/companies/list"], async (req, res) => {
   try {
+    const sessionCompanyId = getDevSession(req)?.companyId ?? null;
     const result = await pool.query<CompanyRow>(`
       select
         id,
@@ -36,14 +50,17 @@ router.get("/companies", async (req, res) => {
         is_holding
       from public.companies
       where coalesce(is_active, true) = true
+        and ($1::int is null or id = $1)
       order by coalesce(company_name, name), id
-    `);
+    `, [sessionCompanyId]);
 
     res.json(
       result.rows.map((company) => ({
         id: company.id,
         companyName: company.company_name ?? company.name ?? `Perusahaan ${company.id}`,
         companyCode: company.company_code ?? company.code ?? "",
+        name: company.company_name ?? company.name ?? `Perusahaan ${company.id}`,
+        code: company.company_code ?? company.code ?? "",
         logoUrl: company.logo_url,
         address: company.address,
         phone: company.phone,
