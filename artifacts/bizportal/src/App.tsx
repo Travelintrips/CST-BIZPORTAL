@@ -27,6 +27,7 @@ const queryClient = new QueryClient({
   },
 });
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const appRootPath = basePath ? `${basePath}/` : "/";
 
 const ROLE_CACHE_KEY = "biz_user_role_v1";
 function readRoleCache() {
@@ -170,7 +171,7 @@ function DevLoginSection() {
       const selectedUser = users.find((user) => user.email === devEmail);
       if (selectedUser?.role) writeRoleCache(selectedUser.role);
       else sessionStorage.removeItem(ROLE_CACHE_KEY);
-      window.location.href = "/bizportal/";
+      window.location.href = appRootPath;
     } catch {
       setError("Gagal terhubung ke server. Pastikan API Server berjalan.");
     } finally {
@@ -296,7 +297,7 @@ function WaLoginSection() {
     setError(null);
     const result = await loginWithWA(phone, code);
     if (result.error) { setError(result.error); setLoading(false); return; }
-    window.location.href = "/bizportal/";
+    window.location.href = appRootPath;
   }
 
   return (
@@ -384,7 +385,7 @@ function EmailPasswordLoginSection() {
       });
       const data = await r.json();
       if (!r.ok) { setError(data.error ?? "Login gagal"); setLoading(false); return; }
-      window.location.href = "/bizportal/";
+      window.location.href = appRootPath;
     } catch {
       setError("Tidak dapat terhubung ke server");
       setLoading(false);
