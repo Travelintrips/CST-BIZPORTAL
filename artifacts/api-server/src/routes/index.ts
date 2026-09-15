@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
+import bankReconciliationRouter from "./bank-reconciliation";
 import { createDevAuthRouter, getDevSession } from "./dev-auth";
 import {
   buildUpstreamUrl,
@@ -15,6 +16,7 @@ const router: IRouter = Router();
 router.use(healthRouter);
 router.use(createDevAuthRouter());
 router.use(companiesRouter);
+router.use(bankReconciliationRouter);
 
 router.use(async (req, res) => {
   let upstreamOrigin: URL;
