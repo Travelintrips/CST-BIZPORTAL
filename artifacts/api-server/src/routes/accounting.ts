@@ -508,6 +508,92 @@ router.get("/accounting/hub/overview", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/accounting/hub/posting-errors", async (req, res): Promise<void> => {
+  try {
+    const page = Math.max(1, Number(first(req.query.page) ?? 1) || 1);
+    const limit = Math.min(100, Math.max(1, Number(first(req.query.limit) ?? 50) || 50));
+    const offset = (page - 1) * limit;
+    const unresolved = first(req.query.unresolved) !== "false";
+    const sourceModule = first(req.query.source_module)?.trim();
+    const values: QueryValue[] = [];
+    let where = "where true";
+
+    const companyId = requestedCompanyId(req);
+    if (companyId !== null) {
+      values.push(companyId);
+      where += ` and pe.company_id = $${values.length}`;
+    }
+    if (sourceModule) {
+      values.push(sourceModule);
+      where += ` and pe.source_module = $${values.length}`;
+    }
+    if (unresolved) where += " and pe.resolved_at is null";
+
+    const countResult = await pool.query<{ total: number }>(
+      `select count(*)::int total
+       from public.accounting_posting_errors pe
+       ${where}`,
+      values,
+    );
+    values.push(limit, offset);
+    const rows = await pool.query(
+      `select pe.id, pe.company_id, pe.branch_id, pe.source_module, pe.source_table,
+              pe.source_id, pe.source_ref, pe.error_code, pe.error_message, pe.payload,
+              pe.resolved_at, pe.resolved_by, pe.resolve_note, pe.created_at
+       from public.accounting_posting_errors pe
+       ${where}
+       order by pe.created_at desc, pe.id desc
+       limit $${values.length - 1} offset $${values.length}`,
+      values,
+    );
+
+    res.json({
+      data: rows.rows,
+      total: countResult.rows[0]?.total ?? 0,
+      page,
+      limit,
+    });
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
+router.patch("/accounting/hub/posting-errors/:id/resolve", async (req, res): Promise<void> => {
+  try {
+    const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "ID error posting tidak valid" });
+      return;
+    }
+    const resolveNote =
+      typeof req.body?.resolve_note === "string" ? req.body.resolve_note.trim() : "";
+    const resolvedBy = getDevSession(req)?.email ?? "development-admin";
+    const companyId = requestedCompanyId(req);
+    const values: QueryValue[] = [resolveNote, resolvedBy, id];
+    let companySql = "";
+    if (companyId !== null) {
+      values.push(companyId);
+      companySql = ` and company_id = $${values.length}`;
+    }
+
+    const result = await pool.query(
+      `update public.accounting_posting_errors
+       set resolved_at = now(), resolved_by = $2, resolve_note = $1
+       where id = $3 and resolved_at is null ${companySql}
+       returning id, resolved_at, resolved_by, resolve_note`,
+      values,
+    );
+    if (result.rowCount === 0) {
+      res.status(404).json({ error: "Error posting tidak ditemukan atau sudah diselesaikan" });
+      return;
+    }
+    res.json({ ok: true, data: result.rows[0] });
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
 router.get("/accounting/hub/trial-balance", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];
