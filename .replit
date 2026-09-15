@@ -18,3 +18,9 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.development]
+DEV_LOGIN_EMAILS = "admcst001@gmail.com"
+DEV_LOGIN_ROLE = "admin"
