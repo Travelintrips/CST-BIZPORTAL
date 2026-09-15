@@ -183,28 +183,42 @@ function validateConfiguredOrigin(value: string, source: string): URL {
 }
 
 async function loadUpstreamOrigin(): Promise<URL> {
-  const explicitOrigin = process.env.BIZPORTAL_API_ORIGIN?.trim();
-  if (explicitOrigin) return validateConfiguredOrigin(explicitOrigin, "BIZPORTAL_API_ORIGIN");
-
   const environment = (process.env.APP_ENV ?? process.env.NODE_ENV ?? "development")
     .trim()
     .toLowerCase();
+  const isProduction = environment === "production";
+  const environmentOriginKey = isProduction
+    ? "BIZPORTAL_API_ORIGIN_PROD"
+    : "BIZPORTAL_API_ORIGIN_DEV";
+  const explicitOrigin = process.env[environmentOriginKey]?.trim();
+  if (explicitOrigin) return validateConfiguredOrigin(explicitOrigin, environmentOriginKey);
+
+  const legacyOrigin = process.env.BIZPORTAL_API_ORIGIN?.trim();
+  if (legacyOrigin) {
+    throw new Error(
+      `BIZPORTAL_API_ORIGIN is no longer accepted; configure ${environmentOriginKey} so development and production remain separate`,
+    );
+  }
+
   const secretName =
-    environment === "production"
+    isProduction
       ? process.env.GCP_BIZPORTAL_API_SECRET_PROD ?? DEFAULT_PROD_SECRET_NAME
       : process.env.GCP_BIZPORTAL_API_SECRET_DEV ?? DEFAULT_DEV_SECRET_NAME;
 
   if (process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON) {
     const origin = extractBackendOrigin(await readSecret(secretName), secretName);
     if (origin) return validateConfiguredOrigin(origin, `GCP secret ${secretName}`);
-    if (environment === "production") return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
+    if (isProduction) return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
     throw new Error(
-      `GCP secret ${secretName} has no backend API origin; BIZPORTAL_API_ORIGIN points to the frontend`,
+      `GCP secret ${secretName} has no backend API origin; configure ${environmentOriginKey} with a separate development backend`,
     );
   }
 
   // Preserve the existing local setup when GCP Secret Manager is not configured.
-  return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
+  if (isProduction) return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
+  throw new Error(
+    `${environmentOriginKey} is not configured; development must use a separate backend and cannot fall back to production`,
+  );
 }
 
 export function getConfiguredUpstreamOrigin(): Promise<URL> {

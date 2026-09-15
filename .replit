@@ -32,6 +32,7 @@ DEV_LOGIN_ROLE = "admin"
 [userenv.production]
 APP_ENV = "production"
 MKT_DUAL_WRITE_RETRY_ENABLED = "false"
+BIZPORTAL_API_ORIGIN_PROD = "https://cstlogistic.co.id"
 
 [nix]
 channel = "stable-25_05"
