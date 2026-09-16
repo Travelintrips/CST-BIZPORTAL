@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, ChevronRight, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   canonicalAmountPaid,
@@ -83,12 +83,31 @@ interface VI {
 }
 interface LiabilityAccount { id: number; code: string; name: string; }
 type VendorInvoiceListItem = Record<string, unknown>;
+interface VendorInvoicePage {
+  data: VendorInvoiceListItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+}
 
-function parseVendorInvoiceList(payload: unknown): VendorInvoiceListItem[] {
-  if (Array.isArray(payload)) return payload as VendorInvoiceListItem[];
+function parseVendorInvoicePage(payload: unknown): VendorInvoicePage {
+  if (Array.isArray(payload)) {
+    const data = payload as VendorInvoiceListItem[];
+    return { data, page: 1, pageSize: data.length, total: data.length, hasMore: false };
+  }
   if (payload && typeof payload === "object") {
     const data = (payload as { data?: unknown }).data;
-    if (Array.isArray(data)) return data as VendorInvoiceListItem[];
+    if (Array.isArray(data)) {
+      const response = payload as Partial<VendorInvoicePage>;
+      return {
+        data: data as VendorInvoiceListItem[],
+        page: Number(response.page) || 1,
+        pageSize: Number(response.pageSize) || data.length,
+        total: Number(response.total) || data.length,
+        hasMore: response.hasMore === true,
+      };
+    }
   }
   throw new Error("Format data vendor invoice dari server tidak valid.");
 }
@@ -96,15 +115,17 @@ function parseVendorInvoiceList(payload: unknown): VendorInvoiceListItem[] {
 export function VendorInvoicesListPage() {
   const { activeCompanyId } = useCompany();
   const qcClient = useQueryClient();
+  const [page, setPage] = useState(1);
   const [postingId, setPostingId] = useState<number | null>(null);
   const [recoveringId, setRecoveringId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const pageSize = 50;
 
-  const { data: vis = [], isLoading, isError, error } = useQuery({
-    queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId],
+  const { data: invoicePage, isLoading, isFetching, isError, error } = useQuery<VendorInvoicePage>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId, page],
     queryFn: async () => {
-      const response = await fetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}`, {
+      const response = await fetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}&page=${page}&pageSize=${pageSize}`, {
         credentials: "include",
       });
       const payload = await response.json().catch(() => null);
@@ -116,10 +137,20 @@ export function VendorInvoicesListPage() {
           : "Gagal memuat vendor invoice.";
         throw new Error(message);
       }
-      return parseVendorInvoiceList(payload);
+      return parseVendorInvoicePage(payload);
     },
     enabled: activeCompanyId != null,
   });
+  const vis = invoicePage?.data ?? [];
+  const totalPages = Math.max(1, Math.ceil((invoicePage?.total ?? 0) / pageSize));
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeCompanyId]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const handlePost = async (id: number) => {
     setPostingId(id);
@@ -311,6 +342,34 @@ export function VendorInvoicesListPage() {
                     ))}
                   </tbody>
                 </table>
+                <div className="flex items-center justify-between gap-3 border-t px-3 py-3 text-xs text-muted-foreground">
+                  <span>
+                    Menampilkan {((page - 1) * pageSize) + 1}–{Math.min(page * pageSize, invoicePage?.total ?? vis.length)}
+                    {" "}dari {invoicePage?.total ?? vis.length} invoice
+                    {isFetching ? " · Memuat..." : ""}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1"
+                      disabled={page <= 1 || isFetching}
+                      onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    >
+                      <ChevronLeft className="h-4 w-4" /> Sebelumnya
+                    </Button>
+                    <span className="min-w-20 text-center">Halaman {page} / {totalPages}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1"
+                      disabled={!invoicePage?.hasMore || isFetching}
+                      onClick={() => setPage((current) => current + 1)}
+                    >
+                      Berikutnya <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
           </CardContent>

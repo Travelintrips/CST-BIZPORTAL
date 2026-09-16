@@ -70,7 +70,8 @@ export function AccountingWidget() {
       return r.json() as Promise<AccountingKPI>;
     },
     refetchInterval: isCurrentPeriod ? 10 * 60_000 : false,
-    retry: 1,
+    retry: false,
+    staleTime: 5 * 60_000,
   });
 
   function prevMonth() {

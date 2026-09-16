@@ -193,7 +193,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       if (!response.ok) throw new Error("Portal workload unavailable");
       return response.json() as Promise<{ summary?: Array<{ pending?: number }> }>;
     },
-    enabled: ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
+    enabled: secondaryReady && ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
     retry: false,
     refetchInterval: 30_000,
   });
@@ -202,7 +202,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     0,
   );
 
-  useAlertWebSocket({ enabled: secondaryReady });
+  useAlertWebSocket({ enabled: secondaryReady && Boolean(authUser) });
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -501,7 +501,9 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     return keys.some((key) => customRolePermissions.includes(key));
   };
 
-  const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences();
+  const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences({
+    enabled: secondaryReady,
+  });
   const [customizeMode, setCustomizeMode] = useState(false);
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {

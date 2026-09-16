@@ -14,6 +14,8 @@ import {
 import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 
 const router: IRouter = Router();
+const UPSTREAM_REQUEST_TIMEOUT_MS = 15_000;
+const UPSTREAM_STREAM_TIMEOUT_MS = 120_000;
 
 router.use(healthRouter);
 
@@ -73,6 +75,9 @@ async function establishDevelopmentUpstreamSession(
       },
     );
 
+    upstream.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      upstream.destroy(new Error("Development upstream login timed out"));
+    });
     upstream.on("error", () => {
       // The upstream bridge is optional in development. The local signed
       // session remains sufficient for API-owned routes when the temporary
@@ -124,6 +129,9 @@ async function establishProductionUpstreamSession(
       },
     );
 
+    upstream.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      upstream.destroy(new Error("Production upstream session exchange timed out"));
+    });
     upstream.on("error", reject);
     upstream.end(body);
   });
@@ -176,6 +184,18 @@ router.use(async (req, res) => {
     },
   );
 
+  const isStream = req.originalUrl.endsWith("/alerts/stream")
+    || req.originalUrl.endsWith("/drivers/events");
+  upstream.setTimeout(
+    isStream ? UPSTREAM_STREAM_TIMEOUT_MS : UPSTREAM_REQUEST_TIMEOUT_MS,
+    () => {
+      upstream.destroy(new Error("BizPortal upstream request timed out"));
+    },
+  );
+  req.on("aborted", () => upstream.destroy(new Error("Client request aborted")));
+  res.on("close", () => {
+    if (!res.writableFinished) upstream.destroy(new Error("Client response closed"));
+  });
   upstream.on("error", (error) => {
     req.log.error({ error, upstream: upstreamUrl.origin }, "BizPortal API proxy failed");
     if (!res.headersSent) {
