@@ -14,6 +14,8 @@ interface AuthContextValue {
   retryApiReadiness: () => void;
   signInWithGoogle: () => void;
   signInWithEmail: (email: string, password: string) => Promise<{ error: string | null }>;
+  sendEmailOtp: (email: string) => Promise<{ error: string | null }>;
+  verifyEmailOtp: (email: string, code: string) => Promise<{ error: string | null }>;
   devLogin: (email: string) => Promise<{ error: string | null }>;
   loginWithWA: (phone: string, code: string) => Promise<{ error: string | null }>;
   signOut: () => void;
@@ -24,13 +26,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
 const IS_DEV = import.meta.env.DEV;
-const PROD_NO_LOGIN_USER: AuthUser = {
-  id: "production-no-login",
-  firstName: "CST",
-  lastName: "Admin",
-  role: "admin",
-  companyId: null,
-};
+const ADMIN_OTP_EMAIL = "admcst001@gmail.com";
 const READINESS_POLL_INTERVAL_MS = 2_000;
 const LIVENESS_REQUEST_TIMEOUT_MS = 5_000;
 const READINESS_REQUEST_TIMEOUT_MS = 5_000;
@@ -38,7 +34,8 @@ const READINESS_REQUEST_TIMEOUT_MS = 5_000;
 function readCache(): AuthUser | null {
   try {
     const v = sessionStorage.getItem(CACHE_KEY);
-    return v ? (JSON.parse(v) as AuthUser) : null;
+    const cached = v ? (JSON.parse(v) as AuthUser) : null;
+    return cached?.id === "production-no-login" ? null : cached;
   } catch { return null; }
 }
 
@@ -59,8 +56,8 @@ function getOrigin(): string {
 
 export function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   const cached = readCache();
-  const [user, setUser] = useState<AuthUser | null>(IS_DEV ? cached : PROD_NO_LOGIN_USER);
-  const [isLoading, setIsLoading] = useState(IS_DEV && !cached);
+  const [user, setUser] = useState<AuthUser | null>(cached);
+  const [isLoading, setIsLoading] = useState(!cached);
   const [isApiAvailable, setIsApiAvailable] = useState(!IS_DEV);
   const [isApiReady, setIsApiReady] = useState(!IS_DEV);
   const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
@@ -214,17 +211,6 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     let cancelled = false;
 
     const loadUser = async () => {
-      // Production intentionally runs without a login screen. Authentication
-      // requests are skipped and every visitor receives the shared admin UI.
-      if (!IS_DEV) {
-        writeCache(PROD_NO_LOGIN_USER);
-        if (!cancelled) {
-          setUser(PROD_NO_LOGIN_USER);
-          setIsLoading(false);
-        }
-        return;
-      }
-
       // Development uses the configured admin session automatically.
       if (IS_DEV && await createDevSession()) {
         if (!cancelled) setIsLoading(false);
@@ -239,7 +225,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     };
   }, [createDevSession, fetchUser]);
 
-  const exchangeToken = useCallback(async (access_token: string) => {
+  const exchangeToken = useCallback(async (access_token: string): Promise<{ error: string | null }> => {
     try {
       const res = await fetch("/api/auth/supabase-exchange", {
         method: "POST",
@@ -249,12 +235,18 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
       });
       if (res.ok) {
         const data = await res.json() as { user: AuthUser };
-        if (data.user) { writeCache(data.user); setUser(data.user); }
+        if (data.user) {
+          writeCache(data.user);
+          setUser(data.user);
+          return { error: null };
+        }
+        return { error: "Session admin tidak ditemukan." };
       } else {
-        await fetchUser();
+        const data = await res.json().catch(() => null) as { error?: string; message?: string } | null;
+        return { error: data?.error ?? data?.message ?? "Session admin ditolak oleh server." };
       }
     } catch {
-      await fetchUser();
+      return { error: "Koneksi ke server gagal." };
     }
   }, [fetchUser]);
 
@@ -294,7 +286,10 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!supabase) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_IN" && session?.access_token) {
+      if (
+        (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION")
+        && session?.access_token
+      ) {
         await exchangeToken(session.access_token);
       }
     });
@@ -302,8 +297,47 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   }, [exchangeToken]);
 
   const signInWithEmail = useCallback(async (_email: string, _password: string) => {
-    return { error: "Email login tidak didukung. Gunakan Google login." };
+    return { error: "Login password tidak didukung. Gunakan kode OTP email." };
   }, []);
+
+  const sendEmailOtp = useCallback(async (email: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail !== ADMIN_OTP_EMAIL) {
+      return { error: "Email ini tidak diizinkan untuk login admin." };
+    }
+    if (!supabase) {
+      return { error: "Konfigurasi Supabase belum tersedia." };
+    }
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: normalizedEmail,
+      options: { shouldCreateUser: false },
+    });
+    return { error: error?.message ?? null };
+  }, []);
+
+  const verifyEmailOtp = useCallback(async (email: string, code: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail !== ADMIN_OTP_EMAIL) {
+      return { error: "Email ini tidak diizinkan untuk login admin." };
+    }
+    if (!supabase) {
+      return { error: "Konfigurasi Supabase belum tersedia." };
+    }
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: normalizedEmail,
+      token: code,
+      type: "email",
+    });
+    if (error) return { error: error.message };
+    if (!data.session?.access_token || data.user?.email?.toLowerCase() !== ADMIN_OTP_EMAIL) {
+      await supabase.auth.signOut().catch(() => {});
+      return { error: "Verifikasi OTP tidak menghasilkan session admin yang valid." };
+    }
+
+    return exchangeToken(data.session.access_token);
+  }, [exchangeToken]);
 
   const devLogin = useCallback(async (email: string) => {
     try {
@@ -341,11 +375,6 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   }, [fetchUser]);
 
   const signOut = useCallback(() => {
-    if (!IS_DEV) {
-      writeCache(PROD_NO_LOGIN_USER);
-      setUser(PROD_NO_LOGIN_USER);
-      return;
-    }
     writeCache(null);
     setUser(null);
     if (supabase) supabase.auth.signOut().catch(() => {});
@@ -364,6 +393,8 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     retryApiReadiness,
     signInWithGoogle,
     signInWithEmail,
+    sendEmailOtp,
+    verifyEmailOtp,
     devLogin,
     loginWithWA,
     signOut,
