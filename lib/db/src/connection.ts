@@ -1,7 +1,7 @@
 import {
   extractDatabaseUrl,
   getDatabaseSecretName,
-  readGcpSecret,
+  readSecret,
   validateDatabaseUrl,
 } from "./gcp-database-secret";
 
@@ -35,7 +35,7 @@ export async function resolveDatabaseUrl(): Promise<string> {
   const isProduction = isProductionEnvironment();
   const secretKey = isProduction ? "SUPABASE_DATABASE_URL" : "SUPABASE_DATABASE_URL_DEV";
   const secretName = getDatabaseSecretName(isProduction);
-  const secretValue = await readGcpSecret(secretName);
+  const secretValue = await readSecret(secretName);
   const databaseUrl = extractDatabaseUrl(secretValue, secretKey);
 
   if (!databaseUrl) {

@@ -85,7 +85,7 @@ async function getAccessToken(credentials: ServiceAccountCredentials): Promise<s
   return data.access_token;
 }
 
-export async function readGcpSecret(secretName: string): Promise<string> {
+export async function readSecret(secretName: string): Promise<string> {
   const credentials = getCredentials();
   const accessToken = await getAccessToken(credentials);
   const resource = [
