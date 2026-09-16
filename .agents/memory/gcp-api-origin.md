@@ -7,7 +7,7 @@ The development Secret Manager payload currently provides a frontend URL instead
 
 **Why:** Requests sent to the frontend URL return 404 for BizPortal API routes, while forwarding development identity to the production host is intentionally blocked.
 
-**How to apply:** Keep `BIZPORTAL_API_ORIGIN_PROD` pointed at the production API and configure `BIZPORTAL_API_ORIGIN_DEV` only with a separate development API origin. If the development origin is missing, fail clearly instead of using production.
+**How to apply:** Keep `BIZPORTAL_API_ORIGIN_PROD` pointed at the production API and configure `BIZPORTAL_API_ORIGIN_DEV` with the stable `bizportal.cstlogistic.co.id` backend origin. Reject ephemeral `*.replit.dev` hosts and fail clearly if the development origin is missing instead of using production.
 
 Development accounting queries also require `SUPABASE_DATABASE_URL_DEV` as a valid PostgreSQL connection string; `SUPABASE_URL_DEV` is a frontend Supabase URL and cannot replace the database connection.
 
@@ -20,3 +20,9 @@ Development module access also requires an upstream `sid` session in addition to
 **Why:** The development backend accepts its own `/api/auth/dev-login` session cookie for notifications, drivers, and related modules; a local-only session otherwise leaves those routes at 401 even when the API origin is correct.
 
 **How to apply:** Keep the local cookie for Replit-owned accounting/auth routes and forward only the namespaced upstream cookie through the development proxy. Do not apply this bridge to production.
+
+The stable `bizportal.cstlogistic.co.id` host currently serves the API health endpoint but returns 404 for `/api/auth/dev-login`; do not assume the stable host supports the upstream development-login bridge.
+
+**Why:** Host migration can remove the temporary backend's development-only login route while leaving health and regular API routing available.
+
+**How to apply:** Verify the upstream authentication contract separately before treating a host migration as a complete login migration.
