@@ -17,6 +17,56 @@ vi.mock("@/contexts/CompanyContext", () => ({
   }),
 }));
 
+vi.mock("@/components/ui/select", () => {
+  const SelectContext = React.createContext<{
+    onValueChange?: (value: string) => void;
+  }>({});
+
+  function Select({
+    children,
+    onValueChange,
+  }: {
+    children: React.ReactNode;
+    onValueChange?: (value: string) => void;
+  }) {
+    return <SelectContext.Provider value={{ onValueChange }}>{children}</SelectContext.Provider>;
+  }
+
+  function SelectTrigger({
+    children,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+    return <button type="button" {...props}>{children}</button>;
+  }
+
+  function SelectContent({ children }: { children: React.ReactNode }) {
+    return <div role="listbox">{children}</div>;
+  }
+
+  function SelectItem({
+    value,
+    children,
+  }: {
+    value: string;
+    children: React.ReactNode;
+  }) {
+    const { onValueChange } = React.useContext(SelectContext);
+    return (
+      <button type="button" role="option" onClick={() => onValueChange?.(value)}>
+        {children}
+      </button>
+    );
+  }
+
+  return {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  };
+});
+
 import AccountingHubGLPage from "@/pages/accounting/hub/general-ledger";
 
 const bankPaymentRow = {
@@ -66,7 +116,6 @@ describe("Buku Besar bank payment filters", () => {
   const requests: string[] = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     requests.push(String(input));
-    console.error("GL-FETCH", requests.length, String(input));
     return {
       ok: true,
       status: 200,
@@ -81,7 +130,6 @@ describe("Buku Besar bank payment filters", () => {
     localStorage.clear();
     Element.prototype.scrollIntoView = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    window.fetch = fetchMock as typeof window.fetch;
   });
 
   afterEach(() => {
@@ -89,37 +137,25 @@ describe("Buku Besar bank payment filters", () => {
   });
 
   it("submits Rekonsiliasi Bank and Transfer Bank filters while preserving payment amounts", async () => {
-    console.error("GL-MARK render");
-    console.error("GL-GLOBAL-BEFORE", globalThis.fetch === fetchMock, window.fetch === fetchMock);
     render(<AccountingHubGLPage />);
 
-    console.error("GL-MARK before initial wait");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    console.error("GL-MARK after initial wait", requests);
     const rowBeforeFiltering = screen.getAllByRole("row")[1].textContent;
 
-    console.error("GL-MARK before source trigger");
     fireEvent.click(screen.getByTestId("select-gl-source-module"));
-    console.error("GL-MARK after source trigger");
     fireEvent.click(await screen.findByRole("option", { name: "Rekonsiliasi Bank" }));
-    console.error("GL-MARK after source option");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.click(screen.getByTestId("select-gl-payment-method"));
-    console.error("GL-MARK after payment trigger");
     fireEvent.click(await screen.findByRole("option", { name: "Transfer Bank" }));
-    console.error("GL-MARK after payment option");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.click(screen.getByRole("button", { name: "Terapkan" }));
-    console.error("GL-GLOBAL-EQ", globalThis.fetch === fetchMock, window.fetch === fetchMock);
 
-    console.error("GL-MARK before filtered wait");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    console.error("GL-MARK after filtered wait", requests);
     const filteredRequest = new URL(requests[requests.length - 1], "http://localhost");
     expect(filteredRequest.searchParams.get("source_module")).toBe("bank_reconciliation");
     expect(filteredRequest.searchParams.get("payment_method")).toBe("bank");
 
-    console.error("GL-MARK before row wait", screen.getAllByRole("row")[1].textContent);
     await waitFor(() => expect(screen.getAllByRole("row")[1].textContent).toContain("Transfer Bank"));
-    console.error("GL-MARK after row wait", screen.getAllByRole("row")[1].textContent);
     const rowAfterFiltering = screen.getAllByRole("row")[1].textContent;
     expect(rowAfterFiltering).toBe(rowBeforeFiltering);
     expect(rowAfterFiltering).toContain("100.000");
