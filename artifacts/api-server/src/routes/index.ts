@@ -1,11 +1,11 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
-import { createDevAuthRouter, getDevSession } from "./dev-auth";
+import { createDevAuthRouter, getDevSession, type DevAuthUser } from "./dev-auth";
 import {
   buildUpstreamUrl,
   buildUpstreamHeaders,
@@ -16,7 +16,60 @@ import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 const router: IRouter = Router();
 
 router.use(healthRouter);
-router.use(createDevAuthRouter());
+
+function rewriteUpstreamAuthCookies(cookies: string[] | undefined): string[] {
+  return (cookies ?? []).map((cookie) => {
+    const withoutDomain = cookie.replace(/;\s*Domain=[^;]+/gi, "");
+    return withoutDomain.replace(/^([^=]+)=/, `bizportal_upstream_$1=`);
+  });
+}
+
+async function establishDevelopmentUpstreamSession(
+  user: DevAuthUser,
+  response: Response,
+): Promise<void> {
+  const upstreamOrigin = await getConfiguredUpstreamOrigin();
+  if (upstreamOrigin.hostname === "cstlogistic.co.id") {
+    throw new Error("Development login cannot use the production upstream");
+  }
+
+  const loginUrl = new URL("/api/auth/dev-login", upstreamOrigin);
+  const body = JSON.stringify({ email: user.email });
+
+  return new Promise((resolve, reject) => {
+    const upstream = https.request(
+      loginUrl,
+      {
+        method: "POST",
+        headers: {
+          host: loginUrl.host,
+          origin: loginUrl.origin,
+          referer: `${loginUrl.origin}/`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      },
+      (upstreamResponse) => {
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        const cookies = rewriteUpstreamAuthCookies(upstreamResponse.headers["set-cookie"]);
+        upstreamResponse.resume();
+        upstreamResponse.on("end", () => {
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`Development upstream login failed (${statusCode})`));
+            return;
+          }
+          for (const cookie of cookies) response.append("Set-Cookie", cookie);
+          resolve();
+        });
+      },
+    );
+
+    upstream.on("error", reject);
+    upstream.end(body);
+  });
+}
+
+router.use(createDevAuthRouter({ onLogin: establishDevelopmentUpstreamSession }));
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);

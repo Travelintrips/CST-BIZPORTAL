@@ -50,10 +50,7 @@ function getAllowedEmails(): string[] {
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
 
-  // Keep the local admin login usable when the optional allowlist is not
-  // provisioned yet. This route is development-only, and production is still
-  // gated by isDevelopmentEnvironment() below.
-  return configuredEmails.length > 0 ? configuredEmails : ["admcst001@gmail.com"];
+  return configuredEmails;
 }
 
 function getDevUsers(): DevAuthUser[] {
@@ -209,12 +206,6 @@ export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): R
       });
     }
 
-    const now = Date.now();
-    setSessionCookie(response, {
-      ...user,
-      issuedAt: now,
-      expiresAt: now + DEV_SESSION_TTL_SECONDS * 1000,
-    });
     try {
       await options.onLogin?.(user, response);
     } catch (error) {
@@ -223,6 +214,13 @@ export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): R
         error: "Development API login is unavailable",
       });
     }
+
+    const now = Date.now();
+    setSessionCookie(response, {
+      ...user,
+      issuedAt: now,
+      expiresAt: now + DEV_SESSION_TTL_SECONDS * 1000,
+    });
     return response.json({ user });
   });
 
