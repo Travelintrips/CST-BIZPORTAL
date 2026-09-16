@@ -225,4 +225,104 @@ router.post("/bank-reconciliation/sheet-configs/:id/test", async (req, res): Pro
   }
 });
 
+router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const companyId = parsePositiveInt(req.header("x-company-id") ?? req.query.company);
+  if (mutationId === null || companyId === null) {
+    res.status(400).json({ error: "ID mutasi atau company tidak valid" });
+    return;
+  }
+
+  try {
+    const result = await pool.query<{
+      id: number;
+      invoice_number: string;
+      vendor_invoice_ref: string | null;
+      supplier_name: string;
+      subtotal: string;
+      tax_amount: string;
+      grand_total: string;
+      canonical_paid: string;
+      remaining_net: string;
+      due_date: string | null;
+      withholding_tax_amount: string | null;
+      invoice_breakdown: unknown;
+      tax_review_status: string | null;
+    }>(
+      `with requested_mutation as (
+         select id
+         from public.bank_mutations
+         where id = $1
+           and company_id = $2
+       ),
+       canonical_invoice_payments as (
+         select pa.invoice_id,
+                sum(coalesce(pa.allocated_amount, 0))::numeric canonical_paid
+         from public.payment_allocations pa
+         join public.payment_matching_groups pmg on pmg.id = pa.group_id
+         join public.bank_mutations bm
+           on bm.id = pa.mutation_id
+          and bm.company_id = pa.company_id
+         where pa.company_id = $2
+           and pa.mutation_id is not null
+           and coalesce(pa.is_active, true) = true
+           and lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')
+         group by pa.invoice_id
+       ),
+       eligible_invoices as (
+         select vi.id,
+                vi.invoice_number,
+                vi.vendor_invoice_ref,
+                vi.supplier_name,
+                vi.total_amount subtotal,
+                vi.tax_amount,
+                vi.grand_total,
+                coalesce(cip.canonical_paid, 0)::numeric canonical_paid,
+                greatest(vi.grand_total - coalesce(cip.canonical_paid, 0), 0)::numeric remaining_net,
+                vi.due_date,
+                vi.withholding_tax_amount,
+                vi.invoice_breakdown,
+                vi.tax_review_status
+         from public.vendor_invoices vi
+         join public.suppliers s
+           on s.id = vi.supplier_id
+          and coalesce(s.is_active, false) = true
+          and lower(coalesce(s.status, 'active')) not in ('inactive', 'disabled', 'suspended', 'deleted')
+         left join canonical_invoice_payments cip on cip.invoice_id = vi.id
+         where vi.company_id = $2
+           and vi.status::text = 'posted'
+           and greatest(vi.grand_total - coalesce(cip.canonical_paid, 0), 0) > 0
+       )
+       select ei.*
+       from eligible_invoices ei
+       cross join requested_mutation
+       order by ei.due_date nulls last, ei.id`,
+      [mutationId, companyId],
+    );
+
+    res.json({
+      invoices: result.rows.map((row) => ({
+        id: row.id,
+        docNumber: row.invoice_number,
+        billNumber: row.vendor_invoice_ref,
+        supplierName: row.supplier_name,
+        subtotal: Number(row.subtotal),
+        taxAmount: Number(row.tax_amount),
+        grandTotal: Number(row.grand_total),
+        amountPaid: Number(row.canonical_paid),
+        outstanding: Number(row.remaining_net),
+        dueDate: row.due_date,
+        withholdingTaxAmount: row.withholding_tax_amount == null ? undefined : Number(row.withholding_tax_amount),
+        invoiceBreakdown: row.invoice_breakdown,
+        taxReviewStatus: row.tax_review_status,
+        source: "vendor_invoice",
+        settlementStatus: Number(row.canonical_paid) > 0 ? "partially_settled" : "outstanding",
+      })),
+    });
+  } catch (error) {
+    req.log.error({ error, mutationId, companyId }, "Failed to load vendor invoice candidates");
+    res.status(503).json({ error: "Kandidat invoice vendor tidak dapat dimuat" });
+  }
+});
+
 export default router;

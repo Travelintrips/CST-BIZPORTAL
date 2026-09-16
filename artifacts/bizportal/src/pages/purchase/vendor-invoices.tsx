@@ -605,11 +605,8 @@ export function VendorInvoiceEditorPage() {
               : item),
         );
       }
-      const latestAmountPaid = Number(latestInvoice?.amountPaid);
-       if (Number.isFinite(latestAmountPaid) && latestAmountPaid <= 0.01) {
-    onSuccess: async () => {
-      const latestInvoice = await refreshInvoiceDetail();
-      if (canonicalAmountPaid(latestInvoice) <= 0.01) {
+      const latestAmountPaid = canonicalAmountPaid(latestInvoice ?? {});
+      if (latestAmountPaid <= 0.01) {
         toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
       } else {
         toast.error(

@@ -3162,9 +3162,7 @@ function VendorInvoicePaymentDialog({
   const invoices = (invoicesQuery.data ?? []).filter(
     (invoice) =>
       invoice.source === "vendor_invoice"
-      && Number(invoice.outstanding) > 0.01
-      && invoice.settlementStatus !== "settled"
-      && invoice.settlementStatus !== "settled_unlinked",
+      && Number(invoice.outstanding) > 0.01,
   );
   const selectedInvoices = invoices.filter((invoice) => selectedIds.includes(invoice.id));
   const withholdingForInvoice = (invoice: OutstandingVendorInvoice) =>
