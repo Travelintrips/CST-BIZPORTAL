@@ -241,11 +241,14 @@ export default function AccountingHubGLPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detailRow, setDetailRow] = useState<GLRow | null>(null);
+  const fetcherRef = useRef(fetch);
 
   const load = useCallback(async (p: number, sb: SortCol, sd: SortDir, rpp: RppOption) => {
     const lim = rpp === "all" ? 999999 : rpp;
-    setLoading(true);
-    setError(null);
+    console.error("GL-LOAD", p, sb, sd, rpp, appliedFilters);
+    // setLoading(true);
+    // setError(null);
+    console.error("GL-LOAD-BEFORE-PARAMS");
     try {
       const params = new URLSearchParams({
         page: String(p),
@@ -256,8 +259,10 @@ export default function AccountingHubGLPage() {
       Object.entries(appliedFilters).forEach(([k, v]) => {
         if (v && k !== "account_name") params.set(k, v);
       });
+      console.error("GL-LOAD-BEFORE-FETCH", params.toString());
+      console.error("GL-FETCH-TYPE", typeof fetch);
       // payment_method is already included via the loop above
-      const res = await fetch(`/api/accounting/hub/general-ledger?${params}`, { credentials: "include" });
+      const res = await fetcherRef.current(`/api/accounting/hub/general-ledger?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
         setError(`Gagal memuat data: ${res.status}${msg ? ` — ${msg}` : ""}`);
@@ -280,6 +285,7 @@ export default function AccountingHubGLPage() {
   }, [appliedFilters]);
 
   useEffect(() => {
+    console.error("GL-EFFECT", appliedFilters.company_id, contextCompanyId, urlHasCompanyFilter, isCompanyLoading);
     if (!urlHasCompanyFilter && isCompanyLoading) return;
     if (!urlHasCompanyFilter && appliedFilters.company_id !== contextCompanyId) return;
     const { sortBy: currentSortBy, sortDir: currentSortDir, rowsPerPage: currentRowsPerPage } = queryOptionsRef.current;
@@ -293,7 +299,11 @@ export default function AccountingHubGLPage() {
     urlHasCompanyFilter,
   ]);
 
-  const applyFilters = () => { setPage(1); setAppliedFilters({ ...filters }); };
+  const applyFilters = () => {
+    console.error("GL-APPLY", filters);
+    setPage(1);
+    setAppliedFilters({ ...filters });
+  };
 
   // Toggle sort: same col → flip dir; new col → default desc (except entry_number → asc)
   const handleSort = (col: SortCol) => {
@@ -505,7 +515,10 @@ export default function AccountingHubGLPage() {
             </div>
             <DatePicker value={filters.date_from} onChange={v => { setMonth(""); setFilters(f => ({...f, date_from: v})); }} className="w-40" />
             <DatePicker value={filters.date_to} onChange={v => { setMonth(""); setFilters(f => ({...f, date_to: v})); }} className="w-40" />
-            <Select value={filters.source_module || "__all"} onValueChange={v => setFilters(f => ({...f, source_module: v === "__all" ? "" : v}))}>
+            <Select value={filters.source_module || "__all"} onValueChange={v => {
+              console.error("GL-SOURCE", v);
+              setFilters(f => ({...f, source_module: v === "__all" ? "" : v}));
+            }}>
               <SelectTrigger className="w-44" data-testid="select-gl-source-module"><SelectValue placeholder="Modul" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">Semua Modul</SelectItem>
@@ -518,7 +531,10 @@ export default function AccountingHubGLPage() {
               onChange={e => setFilters(f => ({...f, account_id: e.target.value, account_name: ""}))}
               className="w-32"
             />
-            <Select value={filters.payment_method || "__all"} onValueChange={v => setFilters(f => ({...f, payment_method: v === "__all" ? "" : v}))}>
+            <Select value={filters.payment_method || "__all"} onValueChange={v => {
+              console.error("GL-PAYMENT", v);
+              setFilters(f => ({...f, payment_method: v === "__all" ? "" : v}));
+            }}>
               <SelectTrigger className="w-44" data-testid="select-gl-payment-method"><SelectValue placeholder="Metode Pembayaran" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">Semua Metode</SelectItem>
