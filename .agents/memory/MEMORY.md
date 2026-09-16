@@ -7,3 +7,4 @@
 - [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy.
 - [Purchase workflow ownership](purchase-workflow-ownership.md) — purchase-workflow handlers and payment aggregation live in an external upstream service, not this proxy workspace.
 - [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy
+- [Sport Center draft idempotency](sport-center-draft-idempotency.md) — reversed historical payment journals require exact reversal validation and a draft-only unique index.
