@@ -1,6 +1,7 @@
 - [GCP API origin separation](gcp-api-origin.md) — the development secret currently has a frontend URL, so a separate backend API origin is required.
 - [Production purchase proxy auth](production-purchase-proxy-auth.md) — OTP login must establish both local and upstream sessions because purchase routes have split ownership.
 - [Production verification prerequisites](production-verification.md) — Replit production SQL and a published URL are unavailable until the app has a deployment.
+- [Production API database DNS](production-api-database-dns.md) — the published API can serve the frontend while its production database host fails DNS resolution; check `/api/health/ready`.
 - [Replit API routing](replit-api-routing.md) — use same-origin `/api`; never pin an ephemeral `*.replit.dev` host in project config.
 - [Vendor invoice payment settlement](vendor-invoice-payment-settlement.md) — AP Terbayar must come from final/posted reconciliation allocations, with legacy invoice totals excluded.
 - [Post-merge configuration integrity](post-merge-config.md) — keep `.replit` schema-valid with one post-merge hook and no duplicate environment keys.
