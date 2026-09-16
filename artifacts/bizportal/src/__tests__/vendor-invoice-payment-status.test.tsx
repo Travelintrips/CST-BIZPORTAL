@@ -45,6 +45,7 @@ const postedFullyPaidInvoice = {
   totalAmount: "26852296",
   taxAmount: "0",
   grandTotal: "26852296",
+  reconciledAmountPaid: "26852296",
   amountPaid: "26852296",
   journalStatus: "posted",
   threeWayMatchStatus: "unmatched",
@@ -78,7 +79,12 @@ describe("vendor invoice payment status", () => {
           ok: true,
           invoiceId: 64,
           paymentStatus: { status: "unpaid", amountPaid: 0 },
-          invoice: { ...postedFullyPaidInvoice, status: "posted", amountPaid: "0" },
+          invoice: {
+            ...postedFullyPaidInvoice,
+            status: "posted",
+            reconciledAmountPaid: "0",
+            amountPaid: "0",
+          },
         });
       }
 
@@ -99,6 +105,9 @@ describe("vendor invoice payment status", () => {
         return response({
           ...postedFullyPaidInvoice,
           status: resetRequested && detailReads > 1 ? "posted" : detailReads === 1 ? "posted" : "paid",
+          reconciledAmountPaid: resetRequested && detailReads > 1
+            ? "0"
+            : postedFullyPaidInvoice.reconciledAmountPaid,
           amountPaid: resetRequested && detailReads > 1 ? "0" : postedFullyPaidInvoice.amountPaid,
         });
       }

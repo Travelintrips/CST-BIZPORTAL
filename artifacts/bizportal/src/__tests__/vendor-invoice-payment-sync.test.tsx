@@ -38,6 +38,7 @@ const postedInvoice = {
   totalAmount: "100000",
   taxAmount: "0",
   grandTotal: "100000",
+  reconciledAmountPaid: "100000",
   amountPaid: "100000",
   journalStatus: "posted",
   journalEntryNumber: "JRNL-042",

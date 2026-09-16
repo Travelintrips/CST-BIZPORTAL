@@ -1,6 +1,11 @@
 export type VendorInvoicePaymentFields = {
   grandTotal?: unknown;
   grand_total?: unknown;
+  /**
+   * Backend projection of active final/posted Bank Reconciliation
+   * allocations. This is the preferred payment field for AP.
+   */
+  reconciledAmountPaid?: unknown;
   amountPaid?: unknown;
   amount_paid?: unknown;
   status?: unknown;
@@ -80,15 +85,14 @@ function nonNegativeAmount(value: unknown): number {
 
 /**
  * Payment source of truth:
- * - amount_paid is the database/API canonical field
- * - amountPaid is accepted only as the API's camelCase serialization of that
- *   same field
+ * - reconciledAmountPaid is the backend SUM of canonical Bank Reconciliation
+ *   allocations with a final/posted settlement
  *
  * Never derive payment from grand total, payable amount, invoice status, or
  * invoice breakdown snapshots.
  */
 export function canonicalAmountPaid(invoice: VendorInvoicePaymentFields): number {
-  return nonNegativeAmount(invoice.amount_paid ?? invoice.amountPaid);
+  return nonNegativeAmount(invoice.reconciledAmountPaid);
 }
 
 export function canonicalGrandTotal(invoice: VendorInvoicePaymentFields): number {

@@ -1,3 +1,4 @@
 - [GCP API origin separation](gcp-api-origin.md) — the development secret currently has a frontend URL, so a separate backend API origin is required.
 - [Production no-login API access](production-no-login-api.md) — bypassing frontend login does not authenticate proxied backend endpoints; production access must be handled consistently.
 - [Replit API routing](replit-api-routing.md) — use same-origin `/api`; never pin an ephemeral `*.replit.dev` host in project config.
+- [Vendor invoice payment settlement](vendor-invoice-payment-settlement.md) — AP Terbayar must come from final/posted reconciliation allocations, with legacy invoice totals excluded.

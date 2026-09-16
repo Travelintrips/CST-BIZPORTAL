@@ -40,6 +40,44 @@ function sendError(res: Response, status: number, error: string, code: string, d
   res.status(status).json({ error, code, ...(details === undefined ? {} : { details }) });
 }
 
+/**
+ * `vendor_invoices.amount_paid` is a legacy denormalized value and is not the
+ * source of truth for the AP screen. A vendor invoice is paid only by active
+ * allocations owned by a final Bank Reconciliation settlement.
+ *
+ * The allocation table has had more than one amount-column name across the
+ * upstream schema revisions. Reading the JSON representation keeps this
+ * projection compatible without changing the schema or mutating any data.
+ */
+const CANONICAL_VENDOR_INVOICE_PAID_SQL = `
+  coalesce((
+    select sum(
+      coalesce(
+        nullif(to_jsonb(pa)->>'amount', '')::numeric,
+        nullif(to_jsonb(pa)->>'allocated_amount', '')::numeric,
+        nullif(to_jsonb(pa)->>'allocation_amount', '')::numeric,
+        0
+      )
+    )
+    from public.payment_allocations pa
+    left join public.payment_matching_groups pmg
+      on pmg.id = nullif(to_jsonb(pa)->>'group_id', '')::bigint
+    left join public.bank_mutations bm
+      on bm.id = nullif(to_jsonb(pa)->>'mutation_id', '')::bigint
+    where coalesce(
+            nullif(to_jsonb(pa)->>'vendor_invoice_id', ''),
+            nullif(to_jsonb(pa)->>'invoice_id', '')
+          ) = vi.id::text
+      and nullif(to_jsonb(pa)->>'company_id', '') = vi.company_id::text
+      and lower(coalesce(to_jsonb(pa)->>'is_active', 'true')) in ('true', 't', '1')
+      and (
+        lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+        or lower(coalesce(to_jsonb(pa)->>'status', '')) in ('final', 'posted', 'reconciled')
+        or lower(coalesce(to_jsonb(bm)->>'status', '')) in ('final', 'posted')
+      )
+  ), 0)
+`;
+
 function parseInvoiceId(req: Request): number | null {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = Number(raw);
@@ -62,16 +100,18 @@ function invoiceResponse(row: {
   invoice_number: string;
   status: string;
   grand_total: string | number;
-  amount_paid: string | number;
+  reconciled_amount_paid: string | number;
   updated_at: Date | string;
 }) {
+  const reconciledAmountPaid = Number(row.reconciled_amount_paid);
   return {
     id: row.id,
     invoiceNumber: row.invoice_number,
     companyId: row.company_id,
     status: row.status,
     grandTotal: Number(row.grand_total),
-    amountPaid: Number(row.amount_paid),
+    reconciledAmountPaid: Number.isFinite(reconciledAmountPaid) ? Math.max(0, reconciledAmountPaid) : 0,
+    amountPaid: Number.isFinite(reconciledAmountPaid) ? Math.max(0, reconciledAmountPaid) : 0,
     updatedAt: row.updated_at,
   };
 }
@@ -84,8 +124,9 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   }
   try {
     const result = await pool.query(`
-      select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
-             vi.status::text status, vi.grand_total, vi.amount_paid,
+       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
+              vi.status::text status, vi.grand_total,
+             ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
              vi.journal_entry_id, ae.status::text journal_status
       from public.vendor_invoices vi
@@ -100,7 +141,8 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
       supplierName: row.supplier_name,
       status: row.status,
       grandTotal: Number(row.grand_total),
-      amountPaid: Number(row.amount_paid),
+      reconciledAmountPaid: Number(row.reconciled_amount_paid),
+      amountPaid: Number(row.reconciled_amount_paid),
       threeWayMatchStatus: row.three_way_match_status,
       companyId: row.company_id,
       invoiceDate: row.invoice_date,
@@ -148,6 +190,7 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
   try {
     const invoiceResult = await pool.query(`
       select vi.*, vi.status::text status,
+             ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
              ae.status::text journal_status, ae.entry_number journal_entry_number
       from public.vendor_invoices vi
       left join public.accounting_entries ae on ae.id = vi.journal_entry_id
@@ -201,7 +244,8 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       totalAmount: row.total_amount,
       taxAmount: row.tax_amount,
       grandTotal: row.grand_total,
-      amountPaid: row.amount_paid,
+      reconciledAmountPaid: row.reconciled_amount_paid,
+      amountPaid: row.reconciled_amount_paid,
       threeWayMatchStatus: row.three_way_match_status,
       matchNotes: row.match_notes,
       journalEntryId: row.journal_entry_id,
@@ -281,7 +325,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
        where pa.invoice_id = $1
          and pa.company_id = $2
          and coalesce(pa.is_active, true) = true
-         and lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')
+         and lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
        order by pa.id
        limit 1`,
       [invoiceId, companyId],
@@ -317,6 +361,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
       status: string;
       grand_total: string;
       amount_paid: string;
+      reconciled_amount_paid: string;
       updated_at: Date;
     }>(
       `update public.vendor_invoices
@@ -325,7 +370,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
            updated_at = now()
        where id = $1 and company_id = $2
        returning id, company_id, invoice_number, status::text status,
-                 grand_total, amount_paid, updated_at`,
+                 grand_total, amount_paid, 0::numeric reconciled_amount_paid, updated_at`,
       [invoiceId, companyId],
     );
     const nextInvoice = updated.rows[0];
