@@ -31,6 +31,18 @@ describe("vendor invoice payment source of truth", () => {
     });
   });
 
+  it("keeps a posted-but-unpaid invoice unpaid", () => {
+    expect(vendorInvoicePaymentSummary({
+      grand_total: 100000,
+      amount_paid: 0,
+      status: "posted",
+    })).toEqual({
+      amountPaid: 0,
+      estimatedNet: 100000,
+      outstanding: 100000,
+    });
+  });
+
   it("does not infer payment from posted status or grand total", () => {
     expect(canonicalAmountPaid({
       grandTotal: 100000,
