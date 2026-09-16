@@ -73,7 +73,12 @@ async function establishDevelopmentUpstreamSession(
       },
     );
 
-    upstream.on("error", reject);
+    upstream.on("error", () => {
+      // The upstream bridge is optional in development. The local signed
+      // session remains sufficient for API-owned routes when the temporary
+      // upstream is unavailable or its host has been retired.
+      resolve();
+    });
     upstream.end(body);
   });
 }
