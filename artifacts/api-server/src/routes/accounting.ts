@@ -809,7 +809,7 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
       values.push(paymentMethod);
       filters += ` and coalesce(e.payment_method, '') = $${values.length}`;
     }
-    const limit = Math.min(Math.max(Number(first(req.query.limit) ?? 50), 1), 500);
+    const limit = Math.min(Math.max(Number(first(req.query.limit) ?? 50), 1), 999999);
     const page = Math.max(Number(first(req.query.page) ?? 1), 1);
     if (!Number.isFinite(limit) || !Number.isFinite(page)) throw new Error("INVALID_FILTER");
     const sortBy = first(req.query.sort_by) ?? "date";
