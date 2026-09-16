@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "postgresql-16"]
+modules = ["nodejs-24"]
 
 [deployment]
 router = "application"
@@ -19,10 +19,6 @@ expertMode = true
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
-<<<<<<< HEAD
-[nix]
-channel = "stable-25_05"
-=======
 [userenv]
 
 [userenv.shared]
@@ -30,8 +26,12 @@ channel = "stable-25_05"
 [userenv.development]
 APP_ENV = "development"
 VITE_API_SERVER_URL_DEV = "https://1c591a26-1875-444f-9a51-2733d23fd756-00-3bxi1sstpdetn.pike.replit.dev/bizportal/"
+DEV_LOGIN_EMAILS = "admcst001@gmail.com"
+DEV_LOGIN_ROLE = "admin"
 
 [userenv.production]
 APP_ENV = "production"
 MKT_DUAL_WRITE_RETRY_ENABLED = "false"
->>>>>>> 89c0c84f3d0843b0580de481b9092a103c40301b
+
+[nix]
+channel = "stable-25_05"
