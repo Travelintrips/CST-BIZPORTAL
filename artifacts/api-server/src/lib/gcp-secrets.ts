@@ -161,6 +161,12 @@ function extractBackendOrigin(secretValue: string, secretName: string): string |
 function validateConfiguredOrigin(value: string, source: string): URL {
   try {
     const configuredUrl = validateUpstreamBaseUrl(value);
+    if (
+      source === "BIZPORTAL_API_ORIGIN_DEV" &&
+      configuredUrl.hostname.endsWith(".replit.dev")
+    ) {
+      throw new Error("ephemeral Replit development host");
+    }
     // BIZPORTAL_API_ORIGIN is an origin, not an API route prefix. Ignore an
     // accidental path in the stored config so requests keep their /api/... path
     // exactly once.
