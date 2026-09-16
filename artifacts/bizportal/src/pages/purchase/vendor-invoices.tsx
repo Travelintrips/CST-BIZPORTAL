@@ -576,9 +576,37 @@ export function VendorInvoiceEditorPage() {
       }
       return body;
     },
-    onSuccess: async () => {
-      const latestInvoice = await refreshInvoiceDetail();
-      if (canonicalAmountPaid(latestInvoice) <= 0.01) {
+    onSuccess: async (resetResponse) => {
+      const detailResponse = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
+        { cache: "no-store" },
+      );
+      const resetInvoice = resetResponse?.invoice as Partial<VI> | undefined;
+      const latestInvoice = detailResponse.ok
+        ? await detailResponse.json().catch(() => null) as Partial<VI> | null
+        : resetInvoice ?? null;
+      if (detailResponse.ok && latestInvoice) {
+        qcClient.setQueryData(["/api/purchase-workflow/vendor-invoices", id, activeCompanyId], latestInvoice);
+      } else if (resetInvoice) {
+        qcClient.setQueryData(["/api/purchase-workflow/vendor-invoices", id, activeCompanyId], (current: VI | undefined) => ({
+          ...current,
+          ...resetInvoice,
+        }));
+      }
+      if (detailResponse.ok) {
+        await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
+        await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+      } else if (resetInvoice) {
+        qcClient.setQueryData(
+          ["/api/purchase-workflow/vendor-invoices", activeCompanyId],
+          (current: VendorInvoiceListItem[] | undefined) =>
+            current?.map((item) => Number(item.id) === Number(id)
+              ? { ...item, amountPaid: resetInvoice.amountPaid, status: resetInvoice.status }
+              : item),
+        );
+      }
+      const latestAmountPaid = canonicalAmountPaid(latestInvoice ?? {});
+      if (latestAmountPaid <= 0.01) {
         toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
       } else {
         toast.error(

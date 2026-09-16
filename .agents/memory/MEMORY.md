@@ -2,3 +2,4 @@
 - [Production no-login API access](production-no-login-api.md) — bypassing frontend login does not authenticate proxied backend endpoints; production access must be handled consistently.
 - [Replit API routing](replit-api-routing.md) — use same-origin `/api`; never pin an ephemeral `*.replit.dev` host in project config.
 - [Purchase workflow ownership](purchase-workflow-ownership.md) — purchase-workflow handlers and payment aggregation live in an external upstream service, not this proxy workspace.
+- [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy

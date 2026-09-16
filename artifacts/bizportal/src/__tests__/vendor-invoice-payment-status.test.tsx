@@ -32,6 +32,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { VendorInvoiceEditorPage } from "@/pages/purchase/vendor-invoices";
+import { toast } from "sonner";
 
 const postedFullyPaidInvoice = {
   id: 64,
@@ -62,6 +63,7 @@ function response(body: unknown, status = 200): Response {
 
 describe("vendor invoice payment status", () => {
   let detailReads = 0;
+  let resetRequested = false;
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -69,6 +71,16 @@ describe("vendor invoice payment status", () => {
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       const method = init?.method ?? "GET";
+
+      if (path.includes("/vendor-invoices/64/reset-payment") && method === "POST") {
+        resetRequested = true;
+        return response({
+          ok: true,
+          invoiceId: 64,
+          paymentStatus: { status: "unpaid", amountPaid: 0 },
+          invoice: { ...postedFullyPaidInvoice, status: "posted", amountPaid: "0" },
+        });
+      }
 
       if (path.includes("/vendor-invoices/64/recalculate-payment-status") && method === "POST") {
         return response({
@@ -86,7 +98,8 @@ describe("vendor invoice payment status", () => {
         detailReads += 1;
         return response({
           ...postedFullyPaidInvoice,
-          status: detailReads === 1 ? "posted" : "paid",
+          status: resetRequested && detailReads > 1 ? "posted" : detailReads === 1 ? "posted" : "paid",
+          amountPaid: resetRequested && detailReads > 1 ? "0" : postedFullyPaidInvoice.amountPaid,
         });
       }
 
@@ -130,5 +143,40 @@ describe("vendor invoice payment status", () => {
     });
     await waitFor(() => expect(screen.getByText("paid")).toBeTruthy());
     expect(detailReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("resets an orphan payment and refreshes the invoice status", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.spyOn(window, "prompt").mockReturnValue(
+      "Koreksi settlement orphan; invoice dikembalikan menjadi belum terbayar.",
+    );
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <VendorInvoiceEditorPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reset Pembayaran" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/purchase-workflow/vendor-invoices/64/reset-payment?company=1",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            reason: "Koreksi settlement orphan; invoice dikembalikan menjadi belum terbayar.",
+          }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Status pembayaran dikoreksi menjadi belum terbayar");
+    });
   });
 });
