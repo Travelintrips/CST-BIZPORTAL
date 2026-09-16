@@ -17,7 +17,7 @@ expertMode = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
-timeoutMs = 20000
+timeoutMs = 120000
 
 [userenv]
 
@@ -25,11 +25,11 @@ timeoutMs = 20000
 
 [userenv.development]
 APP_ENV = "development"
-# Path-based Replit routing: the API workflow is served from the current
-# development origin under /api; do not pin an ephemeral *.replit.dev host.
-VITE_API_SERVER_URL_DEV = "/api"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
+BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
+# Path-based Replit routing: browser requests stay same-origin under /api.
+VITE_API_SERVER_URL_DEV = "/api"
 
 [userenv.production]
 APP_ENV = "production"

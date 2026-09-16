@@ -1,4 +1,5 @@
 - [GCP API origin separation](gcp-api-origin.md) — the development secret currently has a frontend URL, so a separate backend API origin is required.
 - [Production no-login API access](production-no-login-api.md) — bypassing frontend login does not authenticate proxied backend endpoints; production access must be handled consistently.
 - [Replit API routing](replit-api-routing.md) — use same-origin `/api`; never pin an ephemeral `*.replit.dev` host in project config.
+- [Post-merge configuration integrity](post-merge-config.md) — keep `.replit` schema-valid with one post-merge hook and no duplicate environment keys.
 - [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy.
