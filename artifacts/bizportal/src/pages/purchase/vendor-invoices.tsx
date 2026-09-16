@@ -577,9 +577,6 @@ export function VendorInvoiceEditorPage() {
       }
       return body;
     },
-    onSuccess: async () => {
-      const latestInvoice = await refreshInvoiceDetail();
-      if (canonicalAmountPaid(latestInvoice) <= 0.01) {
     onSuccess: async (resetResponse) => {
       const detailResponse = await apiFetch(
         `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
