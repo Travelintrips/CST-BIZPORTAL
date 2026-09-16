@@ -29,6 +29,21 @@ const idr = (n: number | string | null | undefined) => {
     .format(Number.isFinite(amount) ? amount : 0);
 };
 const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { credentials: "include", headers: { "Content-Type": "application/json" }, ...opts });
+const VENDOR_INVOICE_REQUEST_TIMEOUT_MS = 15_000;
+const vendorInvoiceFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), VENDOR_INVOICE_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Server tidak merespons. Silakan coba lagi.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
 const formatPostingError = (body: unknown, fallback: string) => {
   return formatPaymentMutationError(body, fallback);
 };
@@ -125,7 +140,7 @@ export function VendorInvoicesListPage() {
   const { data: invoicePage, isLoading, isFetching, isError, error } = useQuery<VendorInvoicePage>({
     queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId, page],
     queryFn: async () => {
-      const response = await fetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}&page=${page}&pageSize=${pageSize}`, {
+      const response = await vendorInvoiceFetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}&page=${page}&pageSize=${pageSize}`, {
         credentials: "include",
       });
       const payload = await response.json().catch(() => null);
@@ -400,7 +415,10 @@ export function VendorInvoiceEditorPage() {
   const { data: vi, isLoading, isError, error } = useQuery<VI>({
     queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
     queryFn: async () => {
-      const response = await apiFetch(`/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`);
+      const response = await vendorInvoiceFetch(
+        `/api/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
+        { credentials: "include", headers: { "Content-Type": "application/json" } },
+      );
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         const message = payload && typeof payload === "object"
