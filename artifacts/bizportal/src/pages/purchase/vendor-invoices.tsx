@@ -113,7 +113,7 @@ function parseVendorInvoicePage(payload: unknown): VendorInvoicePage {
 }
 
 export function VendorInvoicesListPage() {
-  const { activeCompanyId } = useCompany();
+  const { activeCompanyId, isLoading: isCompanyLoading, refetch: refetchCompanies } = useCompany();
   const qcClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [postingId, setPostingId] = useState<number | null>(null);
@@ -257,7 +257,16 @@ export function VendorInvoicesListPage() {
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Daftar Vendor Invoice</CardTitle></CardHeader>
           <CardContent>
-            {isLoading ? <div className="text-center py-8">Loading...</div> : isError ? (
+            {isCompanyLoading || isLoading ? <div className="text-center py-8">Loading...</div> : activeCompanyId == null ? (
+              <div className="flex flex-col items-center gap-3 py-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Perusahaan belum tersedia. Silakan muat ulang data perusahaan.
+                </p>
+                <Button variant="outline" onClick={() => void refetchCompanies()}>
+                  Muat ulang
+                </Button>
+              </div>
+            ) : isError ? (
               <div className="text-center py-8 text-destructive">
                 Gagal memuat vendor invoice: {error instanceof Error ? error.message : "Terjadi kesalahan."}
               </div>
@@ -385,7 +394,7 @@ export function VendorInvoiceEditorPage() {
   const sp = new URLSearchParams(search);
   const [, navigate] = useLocation();
   const qcClient = useQueryClient();
-  const { activeCompanyId } = useCompany();
+  const { activeCompanyId, isLoading: isCompanyLoading, refetch: refetchCompanies } = useCompany();
   const isNew = !id || id === "new";
 
   const { data: vi, isLoading, isError, error } = useQuery<VI>({
@@ -712,8 +721,27 @@ export function VendorInvoiceEditorPage() {
   };
 
   const isDraft = !vi || vi.status === "draft";
-  if (!isNew && (activeCompanyId == null || isLoading)) {
+  if (!isNew && (isCompanyLoading || isLoading)) {
     return <AppShell><div className="flex items-center justify-center h-64">Loading...</div></AppShell>;
+  }
+  if (!isNew && activeCompanyId == null) {
+    return (
+      <AppShell>
+        <div className="flex flex-col items-center justify-center gap-3 h-64 text-center">
+          <p className="text-destructive">
+            Perusahaan belum tersedia. Session Anda mungkin sudah berakhir.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => void refetchCompanies()}>
+              Muat ulang
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/purchase/vendor-invoices")}>
+              <ChevronLeft className="mr-1 h-4 w-4" />Kembali
+            </Button>
+          </div>
+        </div>
+      </AppShell>
+    );
   }
   if (!isNew && isError) {
     return (
