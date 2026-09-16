@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalAmountPaid,
+  formatPaymentMutationError,
+  hasPaymentResetBlockers,
   outstandingNetPayment,
   vendorInvoicePaymentSummary,
 } from "@/lib/vendorInvoicePayment";
@@ -58,5 +60,37 @@ describe("vendor invoice payment source of truth", () => {
       estimatedNet: 98000,
       outstanding: 98000,
     });
+  });
+
+  it("supports camelCase PPh values without treating them as payment", () => {
+    expect(vendorInvoicePaymentSummary({
+      grandTotal: 100000,
+      amountPaid: 25000,
+      invoiceBreakdown: {
+        totals: {
+          withholdingTaxAmount: 2000,
+          payable_amount: 98000,
+        },
+      },
+    })).toEqual({
+      amountPaid: 25000,
+      estimatedNet: 98000,
+      outstanding: 73000,
+    });
+  });
+
+  it("surfaces active payment records when reset is blocked", () => {
+    const response = {
+      blocked: true,
+      message: "Reset pembayaran ditolak.",
+      activePaymentLinks: [
+        { id: 781, paymentNumber: "BD-00781", status: "posted" },
+      ],
+    };
+
+    expect(hasPaymentResetBlockers(response)).toBe(true);
+    expect(formatPaymentMutationError(response, "Fallback")).toBe(
+      "Reset pembayaran ditolak. BD-00781 (posted)",
+    );
   });
 });

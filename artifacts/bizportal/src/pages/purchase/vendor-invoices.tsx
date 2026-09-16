@@ -17,6 +17,8 @@ import {
   canonicalAmountPaid,
   canonicalGrandTotal,
   canonicalWithholdingAmount,
+  formatPaymentMutationError,
+  hasPaymentResetBlockers,
   outstandingNetPayment,
   vendorInvoicePaymentSummary,
 } from "@/lib/vendorInvoicePayment";
@@ -28,18 +30,7 @@ const idr = (n: number | string | null | undefined) => {
 };
 const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { credentials: "include", headers: { "Content-Type": "application/json" }, ...opts });
 const formatPostingError = (body: unknown, fallback: string) => {
-  const payload = body && typeof body === "object" ? body as Record<string, unknown> : {};
-  const base = String(payload.message ?? payload.error ?? fallback);
-  const reasons = Array.isArray(payload.reasons)
-    ? payload.reasons
-      .map((reason) => {
-        if (!reason || typeof reason !== "object") return String(reason ?? "");
-        const item = reason as Record<string, unknown>;
-        return String(item.message ?? item.code ?? "");
-      })
-      .filter(Boolean)
-    : [];
-  return reasons.length > 0 ? `${base} ${reasons.join(" ")}` : base;
+  return formatPaymentMutationError(body, fallback);
 };
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
@@ -577,7 +568,12 @@ export function VendorInvoiceEditorPage() {
         body: JSON.stringify({ reason }),
       });
       const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(formatPostingError(body, "Gagal mereset status pembayaran"));
+      if (!r.ok || hasPaymentResetBlockers(body)) {
+        throw new Error(formatPostingError(
+          body,
+          "Reset ditolak karena masih ada payment link atau pembayaran bank yang aktif.",
+        ));
+      }
       return body;
     },
     onSuccess: async () => {
