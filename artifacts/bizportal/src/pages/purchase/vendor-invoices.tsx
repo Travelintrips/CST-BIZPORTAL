@@ -13,6 +13,13 @@ import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import {
+  canonicalAmountPaid,
+  canonicalGrandTotal,
+  canonicalWithholdingAmount,
+  outstandingNetPayment,
+  vendorInvoicePaymentSummary,
+} from "@/lib/vendorInvoicePayment";
 
 const idr = (n: number | string | null | undefined) => {
   const amount = Number(n);
@@ -40,7 +47,48 @@ interface VIInvoiceBreakdownComponent {
   withholding_tax_type?: string | null;
   withholding_tax_amount?: number | null;
 }
-interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; journalStatus?: string | null; journalEntryNumber?: string | null; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ id?: number; invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>; }
+interface VI {
+  id: number;
+  invoiceNumber: string;
+  status: string;
+  supplierName: string;
+  vendorInvoiceRef?: string;
+  poId?: number;
+  grId?: number;
+  invoiceDate: string;
+  dueDate?: string;
+  paymentTermDays: number;
+  totalAmount: string;
+  taxAmount: string;
+  grandTotal: string;
+  grand_total?: string | number | null;
+  amountPaid?: string | number | null;
+  amount_paid?: string | number | null;
+  journalStatus?: string | null;
+  journalEntryNumber?: string | null;
+  withholdingTaxAmount?: string | number | null;
+  withholding_tax_amount?: string | number | null;
+  invoiceBreakdown?: {
+    components?: VIInvoiceBreakdownComponent[];
+    totals?: {
+      withholding_tax_amount?: string | number | null;
+      payable_amount?: string | number | null;
+    } | null;
+  } | null;
+  threeWayMatchStatus: string;
+  matchNotes?: string;
+  lines: VILine[];
+  lineTaxes?: Array<{
+    id?: number;
+    invoiceLineId: number;
+    taxType: string;
+    taxObject: string;
+    taxAmount: string;
+    liabilityAccountId?: number | null;
+    resolutionStatus?: string | null;
+  }>;
+  withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>;
+}
 interface LiabilityAccount { id: number; code: string; name: string; }
 type VendorInvoiceListItem = Record<string, unknown>;
 
@@ -200,6 +248,7 @@ export function VendorInvoicesListPage() {
                     <th className="text-left py-2 px-3">3-Way Match</th>
                     <th className="text-right py-2 px-3">Grand Total</th>
                     <th className="text-right py-2 px-3">Terbayar</th>
+                    <th className="text-right py-2 px-3">Sisa</th>
                     <th className="text-right py-2 px-3">Aksi</th>
                   </tr></thead>
                   <tbody>
@@ -213,8 +262,9 @@ export function VendorInvoicesListPage() {
                           </Badge>
                         </td>
                         <td className="py-2 px-3"><Badge variant={vi.threeWayMatchStatus === "matched" ? "default" : vi.threeWayMatchStatus === "partial" ? "secondary" : "outline"} className="text-xs">{String(vi.threeWayMatchStatus)}</Badge></td>
-                        <td className="py-2 px-3 text-right font-mono">{idr(Number(vi.grandTotal))}</td>
-                        <td className="py-2 px-3 text-right font-mono text-muted-foreground">{idr(Number(vi.amountPaid))}</td>
+                        <td className="py-2 px-3 text-right font-mono">{idr(canonicalGrandTotal(vi))}</td>
+                        <td className="py-2 px-3 text-right font-mono text-muted-foreground">{idr(canonicalAmountPaid(vi))}</td>
+                        <td className="py-2 px-3 text-right font-mono text-red-600">{idr(outstandingNetPayment(vi))}</td>
                         <td className="py-2 px-3">
                           <div className="flex items-center justify-end gap-1">
                             {vi.status === "draft" && (
@@ -242,7 +292,7 @@ export function VendorInvoicesListPage() {
                                 {recoveringId === Number(vi.id) ? "..." : "Pulihkan Jurnal"}
                               </Button>
                             )}
-                            {(vi.status === "posted" || vi.status === "matched") && Number(vi.grandTotal) - Number(vi.amountPaid) > 0 && (
+                            {(vi.status === "posted" || vi.status === "matched") && outstandingNetPayment(vi) > 0.01 && (
                               <Link href={`/accounting/bank-disbursements?mode=vendor_invoice&invoiceIds=${vi.id}`}>
                                 <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1 text-orange-600 border-orange-300 hover:bg-orange-50">
                                   <Banknote className="h-3 w-3" />Bayar
@@ -316,6 +366,28 @@ export function VendorInvoiceEditorPage() {
     },
     enabled: !isNew && activeCompanyId != null,
   });
+  const refreshInvoiceDetail = async (): Promise<VI> => {
+    const response = await apiFetch(
+      `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || typeof payload !== "object") {
+      throw new Error("Detail invoice terbaru gagal dimuat.");
+    }
+    const latestInvoice = payload as VI;
+    qcClient.setQueryData(
+      ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
+      latestInvoice,
+    );
+    await qcClient.invalidateQueries({
+      queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
+    });
+    await qcClient.invalidateQueries({
+      queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId],
+    });
+    return latestInvoice;
+  };
 
   const [form, setForm] = useState({ supplierName: "", vendorInvoiceRef: "", poId: sp.get("poId") ?? "", grId: sp.get("grId") ?? "", invoiceDate: new Date().toISOString().substring(0, 10), paymentTermDays: "30", notes: "" });
   const emptyLine = (): VILine => ({ name: "", quantity: "1", unit: "pcs", unitCost: "0", subtotal: "0", taxAmount: "0", coaAccountId: "", taxType: "", taxObject: "", withholdingAmount: "0", liabilityAccountId: "", notes: "" });
@@ -509,21 +581,8 @@ export function VendorInvoiceEditorPage() {
       return body;
     },
     onSuccess: async () => {
-      const detailResponse = await apiFetch(
-        `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
-        { cache: "no-store" },
-      );
-      const latestInvoice = await detailResponse.json().catch(() => null) as Partial<VI> | null;
-      if (detailResponse.ok && latestInvoice) {
-        qcClient.setQueryData(
-          ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
-          latestInvoice,
-        );
-      }
-      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
-      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
-      const latestAmountPaid = Number(latestInvoice?.amountPaid);
-      if (detailResponse.ok && Number.isFinite(latestAmountPaid) && latestAmountPaid <= 0.01) {
+      const latestInvoice = await refreshInvoiceDetail();
+      if (canonicalAmountPaid(latestInvoice) <= 0.01) {
         toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
       } else {
         toast.error(
@@ -544,26 +603,22 @@ export function VendorInvoiceEditorPage() {
       return body;
     },
     onSuccess: async (body) => {
-      const paymentStatus = body?.paymentStatus;
-      if (paymentStatus?.status === "paid") {
-        toast.success("Invoice ditandai paid dari rekonsiliasi yang sudah cocok");
-      } else if (paymentStatus?.amountPaid != null) {
-        toast.success(
-          paymentStatus.withholdingComplete === false
-            ? "Pembayaran bruto tersinkron; lengkapi bukti potong PPh untuk status paid"
-            : "Status pembayaran invoice berhasil disinkronkan",
-        );
-      } else {
-        toast.success("Status pembayaran invoice berhasil disinkronkan");
-      }
-      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
-      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+      // The operation response is not the display source. Read the refreshed
+      // invoice so the UI only renders the canonical amount_paid value.
+      void body;
+      const latestInvoice = await refreshInvoiceDetail();
+      const latestAmountPaid = canonicalAmountPaid(latestInvoice);
+      toast.success(
+        latestAmountPaid > 0
+          ? `Status pembayaran tersinkron dari rekonsiliasi valid: ${idr(latestAmountPaid)}`
+          : "Tidak ada pembayaran dari rekonsiliasi valid; Terbayar tetap Rp0",
+      );
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal menyinkronkan status pembayaran"),
   });
 
   const handleResetPayment = () => {
-    if (!vi || Number(vi.amountPaid) <= 0) return;
+    if (!vi || canonicalAmountPaid(vi) <= 0) return;
     const reason = window.prompt(
       "Alasan koreksi pembayaran (minimal 10 karakter):",
       "Koreksi settlement orphan; invoice dikembalikan menjadi belum terbayar.",
@@ -595,16 +650,25 @@ export function VendorInvoiceEditorPage() {
   const taxAmount = lines.reduce((s, l) => s + Number(l.taxAmount), 0);
   const summarySubtotal = vi ? Number(vi.totalAmount) : totalAmount;
   const summaryTax = vi ? Number(vi.taxAmount) : taxAmount;
-  const summaryGrandTotal = vi ? Number(vi.grandTotal) : summarySubtotal + summaryTax;
+  const summaryGrandTotal = vi ? canonicalGrandTotal(vi) : summarySubtotal + summaryTax;
   const lineWithholding = lines.reduce((sum, line) => sum + Number(line.withholdingAmount ?? 0), 0);
   const summaryWithholding = vi
-    ? Math.max(Number(vi.withholdingTaxAmount ?? 0), lineWithholding)
+    ? Math.max(canonicalWithholdingAmount(vi), lineWithholding)
     : lineWithholding;
   const withholdingLines = lines.filter((line) => Number(line.withholdingAmount ?? 0) > 0);
   const incompleteWithholdingLines = withholdingLines.filter((line) =>
     !line.taxType?.trim() || !line.taxObject?.trim() || !line.liabilityAccountId,
   );
-  const estimatedNetPayment = Math.max(0, summaryGrandTotal - summaryWithholding);
+  const paymentSummary = vi
+    ? vendorInvoicePaymentSummary(vi, lineWithholding)
+    : {
+      amountPaid: 0,
+      estimatedNet: Math.max(0, summaryGrandTotal - summaryWithholding),
+      outstanding: 0,
+    };
+  const estimatedNetPayment = paymentSummary.estimatedNet;
+  const amountPaid = paymentSummary.amountPaid;
+  const outstandingPayment = paymentSummary.outstanding;
 
   return (
     <AppShell>
@@ -638,7 +702,7 @@ export function VendorInvoiceEditorPage() {
                 {recoverMut.isPending ? "Memulihkan..." : "Pulihkan Journal"}
               </Button>
             )}
-            {!isNew && vi && Number(vi.amountPaid) > 0 && (
+            {!isNew && vi && canonicalAmountPaid(vi) > 0 && (
               <Button
                 variant="outline"
                 className="text-red-700 border-red-300 hover:bg-red-50"
@@ -649,7 +713,7 @@ export function VendorInvoiceEditorPage() {
                 {resetPaymentMut.isPending ? "Mengoreksi..." : "Reset Pembayaran"}
               </Button>
             )}
-            {!isNew && vi && vi.status !== "paid" && Number(vi.amountPaid) > 0 && (
+            {!isNew && vi && vi.status !== "paid" && vi.status !== "draft" && (
               <Button
                 variant="outline"
                 className="text-blue-700 border-blue-300 hover:bg-blue-50"
@@ -700,7 +764,7 @@ export function VendorInvoiceEditorPage() {
           </div>
         )}
 
-        {!isNew && vi && vi.status === "posted" && Number(vi.grandTotal) - Number(vi.amountPaid) > 0 && (
+        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && (
           <div className="flex gap-2">
             <Link href={`/accounting/bank-disbursements?mode=vendor_invoice&invoiceIds=${vi.id}`}>
               <Button className="bg-orange-600 hover:bg-orange-700 text-white gap-1" size="sm">
@@ -734,12 +798,12 @@ export function VendorInvoiceEditorPage() {
               <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total (bruto)</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
               <div className="flex justify-between font-semibold text-blue-600 border-t pt-2"><span>Estimasi transfer (neto)</span><span className="font-mono">{idr(estimatedNetPayment)}</span></div>
               {vi && (
-                <div className={`flex justify-between ${Number(vi.amountPaid) > 0 ? "text-green-600" : "text-muted-foreground"}`}>
-                  <span>{Number(vi.amountPaid) > 0 ? "Terbayar" : "Belum terbayar"}</span>
-                  <span className="font-mono">{idr(Number(vi.amountPaid))}</span>
+                <div className={`flex justify-between ${amountPaid > 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                  <span>Terbayar</span>
+                  <span className="font-mono">{idr(amountPaid)}</span>
                 </div>
               )}
-              {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
+              {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(outstandingPayment)}</span></div>}
             </CardContent>
           </Card>
         </div>
