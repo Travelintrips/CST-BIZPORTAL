@@ -45,10 +45,15 @@ function getDevIdentitySecret(): string | null {
 }
 
 function getAllowedEmails(): string[] {
-  return (process.env.DEV_LOGIN_EMAILS ?? "")
+  const configuredEmails = (process.env.DEV_LOGIN_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
+
+  // Keep the local admin login usable when the optional allowlist is not
+  // provisioned yet. This route is development-only, and production is still
+  // gated by isDevelopmentEnvironment() below.
+  return configuredEmails.length > 0 ? configuredEmails : ["admcst001@gmail.com"];
 }
 
 function getDevUsers(): DevAuthUser[] {

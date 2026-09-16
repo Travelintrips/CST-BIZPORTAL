@@ -17,6 +17,7 @@ expertMode = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
+<<<<<<< HEAD
 timeoutMs = 60000
 
 [userenv]
@@ -25,3 +26,6 @@ timeoutMs = 60000
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
 BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
+=======
+timeoutMs = 20000
+>>>>>>> 9d2e6c12a84287a37f9a769bb031ea3a72be60bd
