@@ -7964,12 +7964,8 @@ export default function BankReconciliationPage() {
   const qrisPaymentAmountDelta = qrisAmountTarget && Number.isFinite(Number(qrisPaymentAmount))
     ? Number(qrisPaymentAmount) - qrisAmountTarget.currentAmount
     : null;
-  const [qrisSettlementResetTarget, setQrisSettlementResetTarget] = useState<{
-    paymentId: number;
-    paymentNumber: string;
-    settlementStatus: string;
-  } | null>(null);
-  const [qrisSettlementResetReason, setQrisSettlementResetReason] = useState("");
+  const [qrisBulkResetDate, setQrisBulkResetDate] = useState("");
+  const [qrisBulkResetPending, setQrisBulkResetPending] = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = [
@@ -8053,7 +8049,7 @@ export default function BankReconciliationPage() {
        // review panel must also show REVIEW/UNMATCHED candidates so the
        // operator can see why QRIS is not yet approvable.
        const params = new URLSearchParams({
-         limit: "50",
+        limit: "500",
          companyId: String(qrisCompanyId),
          status: "ALL",
        });
@@ -8234,10 +8230,9 @@ export default function BankReconciliationPage() {
   const qrisSettlementStatusMut = useMutation({
     mutationFn: async ({
       paymentId,
-      reason,
     }: {
       paymentId: number;
-      reason: string;
+      silent?: boolean;
     }) => {
       const response = await fetch(
         `/api/bank-reconciliation/qris-candidates/payments/${paymentId}/settlement-status`,
@@ -8247,7 +8242,9 @@ export default function BankReconciliationPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             settlementStatus: "unsettled",
-            reason,
+            // The audit trail remains explicit, but the operator no longer
+            // needs to type a reason for this controlled reset action.
+            reason: "Reset status settlement QRIS melalui aksi langsung.",
             companyId: qrisCompanyId,
           }),
         },
@@ -8262,24 +8259,26 @@ export default function BankReconciliationPage() {
         payment?: { settlement_status?: string };
       };
     },
-    onSuccess: async (result) => {
-      setQrisSettlementResetTarget(null);
-      setQrisSettlementResetReason("");
-      toast({
-        title: result.changed ? "Status settlement di-reset" : "Tidak ada perubahan",
-        description: result.message ?? "Status payment sudah diperbarui.",
-      });
-      await Promise.all([refetchQrisAudit(), refetch()]);
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+    onSuccess: async (result, variables) => {
+      if (!variables.silent) {
+        toast({
+          title: result.changed ? "Status settlement di-reset" : "Tidak ada perubahan",
+          description: result.message ?? "Status payment sudah diperbarui.",
+        });
+        await Promise.all([refetchQrisAudit(), refetch()]);
+        qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+        qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      }
     },
-    onError: (error: Error) => {
-      toast({
-        title: "Gagal mereset status settlement",
-        description: error.message,
-        variant: "destructive",
-      });
-      void refetchQrisAudit();
+    onError: (error: Error, variables) => {
+      if (!variables.silent) {
+        toast({
+          title: "Gagal mereset status settlement",
+          description: error.message,
+          variant: "destructive",
+        });
+        void refetchQrisAudit();
+      }
     },
   });
 
@@ -8396,6 +8395,85 @@ export default function BankReconciliationPage() {
       String(candidate.status ?? "").toLowerCase(),
     ),
   );
+  const qrisResettablePayments = Array.from(
+    (qrisAuditData?.candidates ?? []).reduce((payments, candidate) => {
+      const blockedPaymentIds = new Set(
+        (
+          candidate.active_settlement_payment_ids
+          ?? candidate.settled_payment_ids
+          ?? []
+        ).map(Number),
+      );
+      for (const item of candidate.payment_items ?? []) {
+        const paymentId = Number(item.paymentId ?? item.payment_id);
+        const settlementStatus = String(
+          item.settlementStatus
+          ?? item.settlement_status
+          ?? "unsettled",
+        ).toLowerCase();
+        const settlementDate = String(
+          candidate.estimated_settlement_date
+          ?? item.expectedSettlementDate
+          ?? item.expected_settlement_date
+          ?? "",
+        ).slice(0, 10);
+        if (
+          Number.isSafeInteger(paymentId)
+          && paymentId > 0
+          && settlementDate
+          && settlementStatus !== "unsettled"
+          && !blockedPaymentIds.has(paymentId)
+          && !payments.has(paymentId)
+        ) {
+          payments.set(paymentId, {
+            paymentId,
+            paymentNumber: item.payment_number ?? item.paymentNumber ?? `SCPAY-SC-${paymentId}`,
+            settlementDate,
+          });
+        }
+      }
+      return payments;
+    }, new Map<number, {
+      paymentId: number;
+      paymentNumber: string;
+      settlementDate: string;
+    }>()),
+  ).map(([, payment]) => payment);
+  const qrisResettableDates = Array.from(
+    new Set(qrisResettablePayments.map((payment) => payment.settlementDate)),
+  ).sort();
+  const selectedQrisBulkResetPayments = qrisResettablePayments.filter(
+    (payment) => payment.settlementDate === qrisBulkResetDate,
+  );
+
+  const handleBulkQrisSettlementReset = async () => {
+    if (!qrisBulkResetDate || selectedQrisBulkResetPayments.length === 0 || qrisBulkResetPending) {
+      return;
+    }
+
+    setQrisBulkResetPending(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const payment of selectedQrisBulkResetPayments) {
+      try {
+        await qrisSettlementStatusMut.mutateAsync({ paymentId: payment.paymentId, silent: true });
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setQrisBulkResetPending(false);
+    await Promise.all([refetchQrisAudit(), refetch()]);
+    qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+    toast({
+      title: `${succeeded} payment berhasil di-reset`,
+      description: failed > 0
+        ? `${failed} payment gagal di-reset karena statusnya berubah atau masih terhubung ke batch aktif.`
+        : `Semua payment QRIS pada tanggal ${fmtDate(qrisBulkResetDate)} kembali menjadi belum settle.`,
+      variant: failed > 0 ? "destructive" : "default",
+    });
+  };
   const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] =>
     getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
@@ -10320,12 +10398,7 @@ export default function BankReconciliationPage() {
                                                    onClick={(event) => {
                                                      event.stopPropagation();
                                                      if (canRequestUnsettle) {
-                                                       setQrisSettlementResetTarget({
-                                                         paymentId: numericPaymentId,
-                                                         paymentNumber: paymentNumber || `SCPAY-SC-${numericPaymentId}`,
-                                                         settlementStatus: paymentSettlementStatus,
-                                                       });
-                                                       setQrisSettlementResetReason("");
+                                                       qrisSettlementStatusMut.mutate({ paymentId: numericPaymentId });
                                                      }
                                                    }}
                                                  >
@@ -10531,6 +10604,61 @@ export default function BankReconciliationPage() {
               </Button>
             </div>
           )}
+          {qrisResettableDates.length > 0 && (
+            <Card className="mb-3 border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/30">
+              <CardContent className="flex flex-wrap items-end justify-between gap-3 p-3">
+                <div className="min-w-[220px] flex-1">
+                  <p className="text-xs font-semibold text-amber-950 dark:text-amber-100">
+                    Reset settlement QRIS massal
+                  </p>
+                  <p className="mt-1 text-[11px] text-amber-900/80 dark:text-amber-200/80">
+                    Pilih tanggal rekonsiliasi QR untuk mengembalikan semua payment yang eligible menjadi belum settle.
+                    Payment yang masih ada di batch posted/reconciled tetap dilindungi.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="qris-bulk-reset-date" className="text-[11px] text-amber-950 dark:text-amber-100">
+                      Tanggal rekonsiliasi QR
+                    </Label>
+                    <Select
+                      value={qrisBulkResetDate || "none"}
+                      onValueChange={(value) => setQrisBulkResetDate(value === "none" ? "" : value)}
+                      disabled={qrisBulkResetPending}
+                    >
+                      <SelectTrigger id="qris-bulk-reset-date" className="h-8 w-[190px] bg-background text-xs">
+                        <SelectValue placeholder="Pilih tanggal" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Pilih tanggal</SelectItem>
+                        {qrisResettableDates.map((date) => (
+                          <SelectItem key={date} value={date}>
+                            {fmtDate(date)} · {qrisResettablePayments.filter((payment) => payment.settlementDate === date).length} payment
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 gap-1.5 bg-amber-600 text-xs text-white hover:bg-amber-700"
+                    disabled={!qrisBulkResetDate || selectedQrisBulkResetPayments.length === 0 || qrisBulkResetPending}
+                    onClick={() => void handleBulkQrisSettlementReset()}
+                  >
+                    {qrisBulkResetPending
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <RotateCcw className="h-3.5 w-3.5" />}
+                    {qrisBulkResetPending
+                      ? "Mereset..."
+                      : selectedQrisBulkResetPayments.length > 0
+                        ? `Reset ${selectedQrisBulkResetPayments.length} payment`
+                        : "Pilih tanggal"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {isLoading ? (
             <div className="space-y-3">
@@ -10596,8 +10724,7 @@ export default function BankReconciliationPage() {
                     setQrisPaymentDate(target.paymentDate);
                   }}
                    onRequestUnsettlePayment={(target) => {
-                     setQrisSettlementResetTarget(target);
-                     setQrisSettlementResetReason("");
+                     qrisSettlementStatusMut.mutate({ paymentId: target.paymentId });
                    }}
                    unsettledPaymentId={
                      qrisSettlementStatusMut.isPending
@@ -10847,84 +10974,6 @@ export default function BankReconciliationPage() {
             >
               {qrisPaymentAmountMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               {qrisPaymentAmountMut.isPending ? "Menyimpan..." : "Konfirmasi koreksi"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={qrisSettlementResetTarget != null}
-        onOpenChange={(open) => {
-          if (!open && !qrisSettlementStatusMut.isPending) {
-            setQrisSettlementResetTarget(null);
-            setQrisSettlementResetReason("");
-          }
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Reset status settlement payment?</DialogTitle>
-            <DialogDescription>
-              Status sumber canonical akan diubah dari{" "}
-              <strong>{paymentSettlementStatusLabel(qrisSettlementResetTarget?.settlementStatus)}</strong>{" "}
-              menjadi <strong>Belum settle</strong>.
-            </DialogDescription>
-          </DialogHeader>
-          {qrisSettlementResetTarget && (
-            <div className="space-y-4">
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                <p className="font-medium">{qrisSettlementResetTarget.paymentNumber}</p>
-                <p className="mt-1 text-xs">
-                  Aksi hanya aman jika payment tidak lagi menjadi anggota batch settlement
-                  posted/reconciled. Sistem akan menolak reset bila batch aktif masih ada.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="qris-settlement-reset-reason">Alasan perubahan *</Label>
-                <Textarea
-                  id="qris-settlement-reset-reason"
-                  value={qrisSettlementResetReason}
-                  onChange={(event) => setQrisSettlementResetReason(event.target.value)}
-                  placeholder="Contoh: status settled tersisa dari import lama, tidak ada batch settlement aktif."
-                  maxLength={500}
-                  rows={4}
-                  disabled={qrisSettlementStatusMut.isPending}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Minimal 5 karakter. Perubahan dicatat di audit log.
-                </p>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setQrisSettlementResetTarget(null);
-                setQrisSettlementResetReason("");
-              }}
-              disabled={qrisSettlementStatusMut.isPending}
-            >
-              Batal
-            </Button>
-            <Button
-              className="gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
-              onClick={() => {
-                if (qrisSettlementResetTarget && qrisSettlementResetReason.trim().length >= 5) {
-                  qrisSettlementStatusMut.mutate({
-                    paymentId: qrisSettlementResetTarget.paymentId,
-                    reason: qrisSettlementResetReason.trim(),
-                  });
-                }
-              }}
-              disabled={
-                !qrisSettlementResetTarget
-                || qrisSettlementResetReason.trim().length < 5
-                || qrisSettlementStatusMut.isPending
-              }
-            >
-              {qrisSettlementStatusMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-              {qrisSettlementStatusMut.isPending ? "Menyimpan..." : "Konfirmasi reset"}
             </Button>
           </DialogFooter>
         </DialogContent>
