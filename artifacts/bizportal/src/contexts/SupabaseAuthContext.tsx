@@ -26,7 +26,6 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
 const IS_DEV = import.meta.env.DEV;
-const ADMIN_OTP_EMAIL = "admcst001@gmail.com";
 const READINESS_POLL_INTERVAL_MS = 2_000;
 const LIVENESS_REQUEST_TIMEOUT_MS = 5_000;
 const READINESS_REQUEST_TIMEOUT_MS = 5_000;
@@ -293,8 +292,8 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
 
   const sendEmailOtp = useCallback(async (email: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    if (normalizedEmail !== ADMIN_OTP_EMAIL) {
-      return { error: "Email ini tidak diizinkan untuk login admin." };
+    if (!normalizedEmail) {
+      return { error: "Masukkan email admin." };
     }
     if (!supabase) {
       return { error: "Konfigurasi Supabase belum tersedia." };
@@ -304,13 +303,17 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
       email: normalizedEmail,
       options: { shouldCreateUser: false },
     });
-    return { error: error?.message ?? null };
+    return {
+      error: error
+        ? "Email tidak dapat digunakan untuk login admin."
+        : null,
+    };
   }, []);
 
   const verifyEmailOtp = useCallback(async (email: string, code: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    if (normalizedEmail !== ADMIN_OTP_EMAIL) {
-      return { error: "Email ini tidak diizinkan untuk login admin." };
+    if (!normalizedEmail) {
+      return { error: "Masukkan email admin." };
     }
     if (!supabase) {
       return { error: "Konfigurasi Supabase belum tersedia." };
@@ -321,13 +324,23 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
       token: code,
       type: "email",
     });
-    if (error) return { error: error.message };
-    if (!data.session?.access_token || data.user?.email?.toLowerCase() !== ADMIN_OTP_EMAIL) {
+    if (error) {
+      return { error: "Email atau kode OTP tidak dapat digunakan untuk login admin." };
+    }
+    if (
+      !data.session?.access_token
+      || data.user?.email?.trim().toLowerCase() !== normalizedEmail
+    ) {
       await supabase.auth.signOut().catch(() => {});
-      return { error: "Verifikasi OTP tidak menghasilkan session admin yang valid." };
+      return { error: "Email atau kode OTP tidak dapat digunakan untuk login admin." };
     }
 
-    return exchangeToken(data.session.access_token);
+    const result = await exchangeToken(data.session.access_token);
+    if (result.error) {
+      await supabase.auth.signOut().catch(() => {});
+      return { error: "Email atau kode OTP tidak dapat digunakan untuk login admin." };
+    }
+    return result;
   }, [exchangeToken]);
 
   const devLogin = useCallback(async (email: string) => {

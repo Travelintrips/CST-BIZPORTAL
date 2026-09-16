@@ -366,7 +366,7 @@ function WaLoginSection() {
 
 function EmailPasswordLoginSection() {
   const { sendEmailOtp, verifyEmailOtp } = useSupabaseAuth();
-  const [email] = React.useState("admcst001@gmail.com");
+  const [email, setEmail] = React.useState("");
   const [code, setCode] = React.useState("");
   const [otpSent, setOtpSent] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
@@ -380,7 +380,7 @@ function EmailPasswordLoginSection() {
   }, [countdown]);
 
   const sendOtp = async () => {
-    if (loading) return;
+    if (!email.trim() || loading) return;
     setLoading(true);
     setError(null);
     const result = await sendEmailOtp(email);
@@ -417,10 +417,13 @@ function EmailPasswordLoginSection() {
       <input
         type="email"
         aria-label="Email admin"
+        placeholder="Email admin"
         value={email}
-        readOnly
+        onChange={(event) => setEmail(event.target.value)}
+        readOnly={otpSent}
+        required
         autoComplete="email"
-        className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300"
+        className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 read-only:cursor-not-allowed read-only:opacity-70"
       />
       {otpSent && (
         <>
@@ -455,7 +458,7 @@ function EmailPasswordLoginSection() {
             onClick={() => { setOtpSent(false); setCode(""); setError(null); }}
             className="hover:text-slate-300"
           >
-            Batalkan
+            Ganti email
           </button>
           {countdown > 0 ? (
             <span>Kirim ulang ({countdown}s)</span>

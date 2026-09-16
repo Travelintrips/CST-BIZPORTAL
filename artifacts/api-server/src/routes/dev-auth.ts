@@ -369,12 +369,10 @@ export function createDevAuthRouter(options: {
         expiresAt: verified.expiresAt,
       };
       const user = await getProductionUser(productionSession);
-      if (!user) {
-        response.status(403).json({ error: "User tidak terdaftar di BizPortal." });
-        return;
-      }
-      if (user.role !== "admin") {
-        response.status(403).json({ error: "Akses hanya tersedia untuk admin." });
+      if (!user || user.role !== "admin") {
+        response.status(403).json({
+          error: "Email atau kode OTP tidak dapat digunakan untuk login admin.",
+        });
         return;
       }
 

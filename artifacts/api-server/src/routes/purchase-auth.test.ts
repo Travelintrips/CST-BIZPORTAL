@@ -179,6 +179,9 @@ describe("production purchase authentication", () => {
       body: { access_token: makeSupabaseToken("otp") },
     });
     expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      error: "Email atau kode OTP tidak dapat digunakan untuk login admin.",
+    });
     expect(response.headers["set-cookie"]).toBeUndefined();
   });
 
