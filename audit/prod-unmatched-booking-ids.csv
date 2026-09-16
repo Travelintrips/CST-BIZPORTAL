@@ -1,0 +1,234 @@
+booking_number,booking_id,payment_numbers,mutation_ids,mutation_count,gross_amount,payment_statuses,settlement_statuses,sample_customer
+SC-0001,9,SCPAY-SC-9,428,1,100000,confirmed,unsettled,jay
+SC-0003,11,SCPAY-SC-11,422,1,200000,confirmed,unsettled,Fachril
+SC-0004,21,SCPAY-SC-18,422,1,30000,confirmed,unsettled,NUr
+SC-0007,24,SCPAY-SC-16,552,1,30000,confirmed,unsettled,rafip
+SC-0009,29,SCPAY-SC-15,350,1,100000,confirmed,unsettled,ida
+SC-0013,33,SCPAY-SC-20,422,1,240000,confirmed,unsettled,Atika Nur hidayat
+SC-0014,34,SCPAY-SC-19,428,1,960000,confirmed,unsettled,Atika Nur hidayat
+SC-0045,75,SCPAY-SC-24,422,1,30000,confirmed,unsettled,rama
+SC-0046,76,SCPAY-SC-25,422,1,30000,confirmed,unsettled,siti
+SC-0047,77,SCPAY-SC-26,428,1,30000,confirmed,unsettled,NUr
+SC-0048,78,SCPAY-SC-27,422,1,100000,confirmed,unsettled,iqbal
+SC-0069,99,SCPAY-SC-34,414,1,30000,confirmed,unsettled,Nisa
+SC-0070,100,SCPAY-SC-35,414,1,30000,confirmed,unsettled,Nisa
+SC-0071,101,SCPAY-SC-36,414,1,30000,confirmed,unsettled,rama
+SC-0072,102,SCPAY-SC-37,414,1,400000,confirmed,unsettled,fraha seno
+SC-0075,105,SCPAY-SC-40,410,1,400000,confirmed,unsettled,Ismi Singapure Airlanes
+SC-0086,116,SCPAY-SC-44,410,1,30000,confirmed,unsettled,windi
+SC-0087,117,SCPAY-SC-45,410,1,30000,confirmed,unsettled,dita
+SC-0088,118,SCPAY-SC-46,410,1,30000,confirmed,unsettled,hani
+SC-0089,119,SCPAY-SC-47,415,1,30000,confirmed,unsettled,elang
+SC-0090,120,SCPAY-SC-48,414,1,30000,confirmed,unsettled,egi
+SC-0091,121,SCPAY-SC-49,414,1,200000,confirmed,unsettled,ida
+SC-0105,135,SCPAY-SC-64,399,1,100000,confirmed,unsettled,jay
+SC-0124,164,SCPAY-SC-82,379,1,200000,confirmed,unsettled,Fachril
+SC-0125,165,SCPAY-SC-83,378,1,30000,confirmed,unsettled,rama
+SC-0126,166,SCPAY-SC-143,447,1,30000,confirmed,unsettled,Reviansyah
+SC-0127,167,SCPAY-SC-84,378,1,30000,confirmed,unsettled,windi
+SC-0128,168,SCPAY-SC-85,378,1,30000,confirmed,unsettled,hani
+SC-0129,169,SCPAY-SC-86,378,1,200000,confirmed,unsettled,ida
+SC-0130,170,SCPAY-SC-87,378,1,100000,confirmed,unsettled,iqbal
+SC-0131,171,SCPAY-SC-88,379,1,100000,confirmed,unsettled,omwisnu
+SC-0132,172,SCPAY-SC-89,378,1,300000,confirmed,unsettled,citylink
+SC-0133,173,SCPAY-SC-90,377,1,60000,confirmed,unsettled,ajeng
+SC-0134,174,SCPAY-SC-91,377,1,400000,confirmed,unsettled,Fachril
+SC-0135,175,SCPAY-SC-92,449,1,1000000,confirmed,unsettled,Prahaseno
+SC-0136,176,SCPAY-SC-93,348,1,200000,confirmed,unsettled,irta
+SC-0137,177,SCPAY-SC-94,377,1,60000,confirmed,unsettled,geo
+SC-0138,178,SCPAY-SC-95,449,1,400000,confirmed,unsettled,CPNPERTAMINA
+SC-0139,179,SCPAY-SC-96,377,1,60000,confirmed,unsettled,rama GSO
+SC-0140,180,SCPAY-SC-97,449,1,400000,confirmed,unsettled,irta
+SC-0141,181,SCPAY-SC-98,358,1,30000,confirmed,unsettled,windi
+SC-0142,182,SCPAY-SC-99,348,1,30000,confirmed,unsettled,Neneng
+SC-0143,183,SCPAY-SC-100,348,1,30000,confirmed,unsettled,Adi
+SC-0144,184,SCPAY-SC-101,348,1,30000,confirmed,unsettled,Reviansyah
+SC-0145,185,SCPAY-SC-102,348,1,350000,confirmed,unsettled,PT. HK
+SC-0146,186,SCPAY-SC-103,449,1,200000,confirmed,unsettled,ida
+SC-0148,188,SCPAY-SC-104,358,1,200000,confirmed,unsettled,Fachril
+SC-0149,189,SCPAY-SC-105,449,1,60000,confirmed,unsettled,Sena
+SC-0150,190,SCPAY-SC-106,449,1,600000,confirmed,unsettled,ida
+SC-0151,191,SCPAY-SC-107,449,1,600000,confirmed,unsettled,Fachril
+SC-0154,194,SCPAY-SC-111,449,1,60000,confirmed,unsettled,geo
+SC-0159,199,SCPAY-SC-116,358,1,30000,confirmed,unsettled,citra
+SC-0160,200,SCPAY-SC-117,358,1,100000,confirmed,unsettled,iqbal
+SC-0161,201,SCPAY-SC-118,358,1,200000,confirmed,unsettled,Oyi
+SC-0162,202,SCPAY-SC-119,358,1,30000,confirmed,unsettled,rama
+SC-0163,203,SCPAY-SC-120,358,1,30000,confirmed,unsettled,Api
+SC-0164,204,SCPAY-SC-121,358,1,30000,confirmed,unsettled,windi
+SC-0165,205,SCPAY-SC-145,464,1,30000,confirmed,unsettled,Nia
+SC-0166,206,SCPAY-SC-122,358,1,200000,confirmed,unsettled,Siti.
+SC-0168,208,SCPAY-SC-124,358,1,200000,confirmed,unsettled,omwisnu
+SC-0172,212,SCPAY-SC-128,360,1,30000,confirmed,unsettled,Joshua
+SC-0173,213,SCPAY-SC-129,360,1,200000,confirmed,unsettled,ida
+SC-0174,214,SCPAY-SC-130,360,1,200000,confirmed,unsettled,Karantina
+SC-0175,215,SCPAY-SC-131,360,1,700000,confirmed,unsettled,Imigrasbasket
+SC-0186,226,SCPAY-SC-142,464,1,350000,confirmed,unsettled,danil
+SC-0188,228,SCPAY-SC-153,377,1,320000,confirmed,unsettled,Mutia
+SC-0189,229,SCPAY-SC-154,377,1,320000,confirmed,unsettled,Mutia
+SC-0190,230,SCPAY-SC-155,592,1,160000,confirmed,unsettled,Mutia
+SC-0192,232,SCPAY-SC-147,464,1,30000,confirmed,unsettled,windi
+SC-0193,233,SCPAY-SC-144,350,1,200000,confirmed,unsettled,Fachril
+SC-0194,234,SCPAY-SC-146,464,1,30000,confirmed,unsettled,Neneng
+SC-0195,235,SCPAY-SC-148,464,1,30000,confirmed,unsettled,Wita
+SC-0196,236,SCPAY-SC-149,464,1,100000,confirmed,unsettled,Chepy
+SC-0202,245,SCPAY-SC-166,467,1,200000,confirmed,unsettled,PT Hutama Karya
+SC-0203,246,SCPAY-SC-168,467,1,100000,confirmed,unsettled,iqbal
+SC-0205,248,SCPAY-SC-167,467,1,100000,confirmed,unsettled,KSA
+SC-0206,249,SCPAY-SC-169,467,1,30000,confirmed,unsettled,Nur Imigrasi
+SC-0207,250,SCPAY-SC-172,467,1,600000,confirmed,unsettled,kilen
+SC-0208,251,SCPAY-SC-173,592,1,200000,confirmed,unsettled,kilen
+SC-0209,252,SCPAY-SC-174,592,1,200000,confirmed,unsettled,kilen
+SC-0210,253,SCPAY-SC-178,467,1,30000,confirmed,unsettled,windi
+SC-0211,254,SCPAY-SC-183,592,1,200000,confirmed,unsettled,albert
+SC-0213,256,SCPAY-SC-182,467,1,80000,confirmed,unsettled,arhan
+SC-0221,264,SCPAY-SC-186,470,1,200000,confirmed,unsettled,Anthony
+SC-0222,265,SCPAY-SC-185,470,1,350000,confirmed,unsettled,Tio Rangga
+SC-0223,266,SCPAY-SC-187,470,1,200000,confirmed,unsettled,Edberd
+SC-0224,267,SCPAY-SC-188,470,1,30000,confirmed,unsettled,Reviansyah
+SC-0227,270,SCPAY-SC-213,489,1,160000,confirmed,unsettled,Muhammad Alif widodo
+SC-0228,271,SCPAY-SC-214,489,1,160000,confirmed,unsettled,Muhammad Alif widodo
+SC-0230,273,SCPAY-SC-216,489,1,160000,confirmed,unsettled,Muhammad Alif widodo
+SC-0232,275,SCPAY-SC-190,479,1,100000,confirmed,unsettled,Maulana
+SC-0234,277,SCPAY-SC-191,479,1,200000,confirmed,unsettled,Chevi badminton
+SC-0235,278,SCPAY-SC-194,479,1,30000,confirmed,unsettled,ica
+SC-0237,280,SCPAY-SC-195,479,1,30000,confirmed,unsettled,Pandi
+SC-0239,283,SCPAY-SC-198,377,1,320000,confirmed,unsettled,fitri apindo
+SC-0240,284,SCPAY-SC-199,377,1,320000,confirmed,unsettled,fitri apindo
+SC-0241,285,SCPAY-SC-200,467,1,160000,confirmed,unsettled,fitri apindo
+SC-0257,313,SCPAY-SC-211,489,1,100000,confirmed,unsettled,iqbal
+SC-0258,314,SCPAY-SC-217,489,1,700000,confirmed,unsettled,Imigrasbasket
+SC-0261,319,SCPAY-SC-220,489,1,200000,confirmed,unsettled,Joni Fernandes
+SC-0262,320,SCPAY-SC-219,489,1,300000,confirmed,unsettled,Joni Fernandes
+SC-0266,324,SCPAY-SC-227,499,1,30000,confirmed,unsettled,rama GSO
+SC-0267,325,SCPAY-SC-221,499,1,200000,confirmed,unsettled,Adinda
+SC-0268,326,SCPAY-SC-222,499,1,30000,confirmed,unsettled,Arman
+SC-0269,327,SCPAY-SC-224,499,1,200000,confirmed,unsettled,Sherathon
+SC-0271,330,SCPAY-SC-226,501,1,2500000,confirmed,unsettled,IASS
+SC-0272,331,SCPAY-SC-229,501,1,4900000,confirmed,unsettled,IASS
+SC-0280,339,SCPAY-SC-233,501,1,200000,confirmed,unsettled,Otban
+SC-0281,340,SCPAY-SC-232,501,1,100000,confirmed,unsettled,KSA
+SC-0310,370,SCPAY-SC-260,521,1,120000,confirmed,unsettled,adi
+SC-0311,371,SCPAY-SC-261,521,1,30000,confirmed,unsettled,Fandi
+SC-0312,372,SCPAY-SC-262,521,1,60000,confirmed,unsettled,Fajar
+SC-0314,374,SCPAY-SC-264,521,1,800000,confirmed,unsettled,beacukai
+SC-0315,375,SCPAY-SC-265,521,1,800000,confirmed,unsettled,beacukai
+SC-0316,376,SCPAY-SC-282,521;525,2,400000,confirmed,unsettled,Edberd
+SC-0317,377,SCPAY-SC-271,525,1,800000,confirmed,unsettled,KSA
+SC-0320,380,SCPAY-SC-274,546,1,100000,confirmed,unsettled,KSA
+SC-0321,381,SCPAY-SC-275,525,1,1400000,confirmed,unsettled,Imigrasbasket
+SC-0322,382,SCPAY-SC-276,525,1,400000,confirmed,unsettled,Palmerah
+SC-0323,383,SCPAY-SC-277,525,1,700000,confirmed,unsettled,Georgy
+SC-0332,392,SCPAY-SC-287,546,1,200000,confirmed,unsettled,sarah
+SC-0345,405,SCPAY-SC-288,552,1,30000,confirmed,unsettled,rama GSO
+SC-0346,406,SCPAY-SC-290,552,1,150000,confirmed,unsettled,Citilink Indonesia fc
+SC-0351,411,SCPAY-SC-294,552,1,700000,confirmed,unsettled,Imigrasbasket
+SC-0374,434,SCPAY-SC-291,552,1,30000,confirmed,unsettled,Yulia
+SC-0375,435,SCPAY-SC-292,592,1,30000,confirmed,unsettled,Khofifah
+SC-0376,436,SCPAY-SC-293,552,1,30000,confirmed,unsettled,Shinta
+SC-0377,437,SCPAY-SC-299,555,1,350000,confirmed,unsettled,Beacukai
+SC-0378,438,SCPAY-SC-300,555,1,200000,confirmed,unsettled,Beacukai
+SC-0379,439,SCPAY-SC-296,552,1,30000,confirmed,unsettled,bily
+SC-0380,440,SCPAY-SC-297,555,1,30000,confirmed,unsettled,lantas
+SC-0385,445,SCPAY-SC-301,555,1,30000,confirmed,unsettled,Shinta
+SC-0386,446,SCPAY-SC-302,555,1,30000,confirmed,unsettled,Ana
+SC-0391,451,SCPAY-SC-308,555,1,200000,confirmed,unsettled,Kathleen
+SC-0392,452,SCPAY-SC-324,560,1,640000,confirmed,unsettled,Diana Apindo
+SC-0395,455,SCPAY-SC-325,560,1,160000,confirmed,unsettled,Diana Apindo
+SC-0398,458,SCPAY-SC-315,560,1,700000,confirmed,unsettled,Adam
+SC-0399,459,SCPAY-SC-314,560,1,400000,confirmed,unsettled,Ibal Ias
+SC-0400,460,SCPAY-SC-320,560,1,700000,confirmed,unsettled,Georgy
+SC-0403,463,SCPAY-SC-323,560,1,120000,confirmed,unsettled,taufan
+SC-0405,465,SCPAY-SC-329,583,1,200000,confirmed,unsettled,Ridlo
+SC-0408,468,SCPAY-SC-331,587,1,200000,confirmed,unsettled,Otban
+SC-0414,474,SCPAY-SC-338,574,1,30000,confirmed,unsettled,Adii
+SC-0415,475,SCPAY-SC-339,574,1,60000,confirmed,unsettled,Abdilah Angga
+SC-0416,476,SCPAY-SC-341,574,1,30000,confirmed,unsettled,Shinta
+SC-0417,477,SCPAY-SC-342,574,1,30000,confirmed,unsettled,Anggi
+SC-0418,478,SCPAY-SC-343,574,1,30000,confirmed,unsettled,Adi
+SC-0419,479,SCPAY-SC-344,574,1,30000,confirmed,unsettled,Ana
+SC-0421,481,SCPAY-SC-346,560,1,800000,confirmed,unsettled,kilen
+SC-0429,489,SCPAY-SC-351,574,1,100000,confirmed,unsettled,erfin garuda
+SC-0431,491,SCPAY-SC-361,583,1,300000,confirmed,unsettled,Palmerah
+SC-0432,492,SCPAY-SC-354,583,1,60000,confirmed,unsettled,rasyad
+SC-0436,496,SCPAY-SC-362,587,1,60000,confirmed,unsettled,abdilah
+SC-0437,497,SCPAY-SC-376,587,1,100000,confirmed,unsettled,Vania
+SC-0438,498,SCPAY-SC-367,592,1,30000,confirmed,unsettled,Fandy
+SC-0442,502,SCPAY-SC-368,592,1,640000,confirmed,unsettled,verda
+SC-0449,509,SCPAY-SC-372,592,1,700000,confirmed,unsettled,Imigrasbasket
+SC-0452,512,SCPAY-SC-373,592,1,30000,confirmed,unsettled,rama GSO
+SC-0453,513,SCPAY-SC-374,592,1,30000,confirmed,unsettled,abdilah
+SC-0454,514,SCPAY-SC-381,592,1,30000,confirmed,unsettled,Reza
+SC-0455,515,SCPAY-SC-380,592,1,30000,confirmed,unsettled,rasyad
+SC-0456,516,SCPAY-SC-379,592,1,60000,confirmed,unsettled,Fatih
+SC-0476,536,SCPAY-SC-403,592,1,30000,confirmed,unsettled,alif
+SC-0600,656,SCPAY-SC-456,592,1,300000,confirmed,unsettled,Angga
+SC-0632,688,SCPAY-SC-475,555,1,300000,confirmed,unsettled,filsi
+SC-0634,690,SCPAY-SC-478,521,1,1200000,confirmed,unsettled,eko
+SC-0635,691,SCPAY-SC-479,525,1,600000,confirmed,unsettled,Aldi
+SC-0636,692,SCPAY-SC-480,525,1,600000,confirmed,unsettled,paul juni
+SC-0643,699,SCPAY-SC-485,447,1,300000,confirmed,unsettled,Porles
+SC-0644,700,SCPAY-SC-484,447,1,300000,confirmed,unsettled,Oce July
+SC-0645,701,SCPAY-SC-486,447,1,30000,confirmed,unsettled,Reviansyah
+SC-0646,702,SCPAY-SC-487,449,1,300000,confirmed,unsettled,Diki July
+SC-0651,707,SCPAY-SC-491,399,1,30000,confirmed,unsettled,fauzan
+SC-0652,708,SCPAY-SC-492,415,1,30000,confirmed,unsettled,Sena
+SC-0653,709,SCPAY-SC-493,415,1,100000,confirmed,unsettled,iqbal
+SC-0666,722,SCPAY-SC-500,560,1,300000,confirmed,unsettled,rey
+SC-0676,732,SCPAY-SC-510,546,1,300000,confirmed,unsettled,Oce July
+SC-0677,733,SCPAY-SC-512,546,1,300000,confirmed,unsettled,bayu
+SC-0678,734,SCPAY-SC-511,546,1,300000,confirmed,unsettled,rey Agustus
+SC-0679,735,SCPAY-SC-513,546,1,300000,confirmed,unsettled,zain
+SC-0680,736,SCPAY-SC-514,546,1,300000,confirmed,unsettled,alex thomas
+SC-0683,739,SCPAY-SC-515,499,1,300000,confirmed,unsettled,Vizri
+SC-0684,740,SCPAY-SC-516,499,1,300000,confirmed,unsettled,Dinda
+SC-0685,741,SCPAY-SC-517,499,1,300000,confirmed,unsettled,Zeta
+SC-0689,745,SCPAY-SC-518,499,1,30000,confirmed,unsettled,arman jl
+SC-0692,748,SCPAY-SC-520,583,1,300000,confirmed,unsettled,Palmerah
+SC-0697,753,SCPAY-SC-525,348,1,300000,confirmed,unsettled,Dinda
+SC-0698,754,SCPAY-SC-527,348,1,300000,confirmed,unsettled,diki agustus
+SC-0699,755,SCPAY-SC-526,348,1,300000,confirmed,unsettled,oce juni
+SC-0701,757,SCPAY-SC-528,348,1,30000,confirmed,unsettled,untung
+SC-0707,763,SCPAY-SC-532,428,1,300000,confirmed,unsettled,Vizri
+SC-0708,764,SCPAY-SC-533,428,1,300000,confirmed,unsettled,filsi
+SC-0709,765,SCPAY-SC-534,428,1,300000,confirmed,unsettled,zain
+SC-0725,781,SCPAY-SC-536,410,1,90000,confirmed,unsettled,aji
+SC-0743,800,SCPAY-SC-544,479,1,100000,confirmed,unsettled,Gita
+SC-0745,802,SCPAY-SC-547,360,1,300000,confirmed,unsettled,tommy Juni
+SC-0747,804,SCPAY-SC-548,360,1,200000,confirmed,unsettled,Karantina
+SC-0752,809,SCPAY-SC-550,467,1,350000,confirmed,unsettled,anjas
+SC-0756,813,SCPAY-SC-555,398,1,300000,confirmed,unsettled,iqbal
+SC-0758,815,SCPAY-SC-557,592,1,700000,confirmed,unsettled,Maulana
+SC-0759,816,SCPAY-SC-559,467,1,700000,confirmed,unsettled,Obcc
+SC-0760,817,SCPAY-SC-560,467,1,300000,confirmed,unsettled,ramdani
+SC-0761,818,SCPAY-SC-561,467,1,350000,confirmed,unsettled,ramdani
+SC-0762,819,SCPAY-SC-562,467,1,30000,confirmed,unsettled,geo
+SC-0769,826,SCPAY-SC-564,348,1,30000,confirmed,unsettled,siti
+SC-0770,827,SCPAY-SC-565,348,1,200000,confirmed,unsettled,irta
+SC-0771,828,SCPAY-SC-566,358,1,120000,confirmed,unsettled,Baweng
+SC-0774,831,SCPAY-SC-569,379,1,300000,confirmed,unsettled,omwisnu
+SC-0775,832,SCPAY-SC-570,378,1,90000,confirmed,unsettled,hani
+SC-0776,833,SCPAY-SC-572,378,1,300000,confirmed,unsettled,ida
+SC-0784,841,SCPAY-SC-571,378,1,300000,confirmed,unsettled,citylink
+SC-0785,842,SCPAY-SC-574,479,1,60000,confirmed,unsettled,aji
+SC-0788,845,SCPAY-SC-575,479,1,100000,confirmed,unsettled,Tio Rangga
+SC-0789,846,SCPAY-SC-576,479,1,200000,confirmed,unsettled,Tio Rangga
+SC-0791,848,SCPAY-SC-578,592,1,100000,confirmed,unsettled,Tio Rangga
+SC-0793,850,SCPAY-SC-580,398,1,300000,confirmed,unsettled,ramdani
+SC-0794,851,SCPAY-SC-581,592,1,120000,confirmed,unsettled,Dinda
+SC-0795,852,SCPAY-SC-582,592,1,400000,confirmed,unsettled,ida
+SC-0796,853,SCPAY-SC-583,521,1,2800000,confirmed,unsettled,Karantina
+SC-0797,854,SCPAY-SC-584,521,1,360000,confirmed,unsettled,iqbal
+SC-0798,855,SCPAY-SC-585,489,1,700000,confirmed,unsettled,Migrasi basket
+SC-0799,856,SCPAY-SC-586,489,1,800000,confirmed,unsettled,alif 
+SC-0803,860,SCPAY-SC-587,489,1,300000,confirmed,unsettled,Joni badminton
+SC-0810,867,SCPAY-SC-592,467,1,700000,confirmed,unsettled,Migrasi basket
+SC-0811,868,SCPAY-SC-593,467,1,350000,confirmed,unsettled,ramdani
+SC-0812,869,SCPAY-SC-594,467,1,120000,confirmed,unsettled,Oyi
+SC-0819,876,SCPAY-SC-596,377,1,1000000,confirmed,unsettled,fraha seno
+SC-0820,877,SCPAY-SC-597,377,1,800000,confirmed,unsettled,ida
+SC-0821,878,SCPAY-SC-598,377,1,1400000,confirmed,unsettled,migrasi
+SC-0823,880,SCPAY-SC-600;SCPAY-SC-601,377,1,600000,confirmed,unsettled,irta
+SC-0824,881,SCPAY-SC-602,377,1,120000,confirmed,unsettled,aji
+SC-0853,898,SCPAY-SC-612,521,1,360000,confirmed,unsettled,ramdani
+SC-0854,899,SCPAY-SC-613,521,1,2800000,confirmed,unsettled,geo
