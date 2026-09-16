@@ -191,34 +191,17 @@ async function loadUpstreamOrigin(): Promise<URL> {
     ? "BIZPORTAL_API_ORIGIN_PROD"
     : "BIZPORTAL_API_ORIGIN_DEV";
   const explicitOrigin = process.env[environmentOriginKey]?.trim();
-  if (explicitOrigin) return validateConfiguredOrigin(explicitOrigin, environmentOriginKey);
-
-  const legacyOrigin = process.env.BIZPORTAL_API_ORIGIN?.trim();
-  if (legacyOrigin) {
+  if (!explicitOrigin) {
     throw new Error(
-      `BIZPORTAL_API_ORIGIN is no longer accepted; configure ${environmentOriginKey} so development and production remain separate`,
+      `${environmentOriginKey} is not configured; ${isProduction ? "production" : "development"} cannot fall back to another environment`,
     );
   }
 
-  const secretName =
-    isProduction
-      ? process.env.GCP_BIZPORTAL_API_SECRET_PROD ?? DEFAULT_PROD_SECRET_NAME
-      : process.env.GCP_BIZPORTAL_API_SECRET_DEV ?? DEFAULT_DEV_SECRET_NAME;
-
-  if (process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON) {
-    const origin = extractBackendOrigin(await readSecret(secretName), secretName);
-    if (origin) return validateConfiguredOrigin(origin, `GCP secret ${secretName}`);
-    if (isProduction) return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
-    throw new Error(
-      `GCP secret ${secretName} has no backend API origin; configure ${environmentOriginKey} with a separate development backend`,
-    );
+  const configuredOrigin = validateConfiguredOrigin(explicitOrigin, environmentOriginKey);
+  if (isProduction && configuredOrigin.hostname.endsWith(".replit.dev")) {
+    throw new Error("BIZPORTAL_API_ORIGIN_PROD cannot use an ephemeral Replit development host");
   }
-
-  // Preserve the existing local setup when GCP Secret Manager is not configured.
-  if (isProduction) return validateUpstreamBaseUrl(DEFAULT_UPSTREAM_ORIGIN);
-  throw new Error(
-    `${environmentOriginKey} is not configured; development must use a separate backend and cannot fall back to production`,
-  );
+  return configuredOrigin;
 }
 
 export function getConfiguredUpstreamOrigin(): Promise<URL> {

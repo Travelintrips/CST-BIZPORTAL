@@ -55,6 +55,15 @@ async function establishDevelopmentUpstreamSession(
         upstreamResponse.resume();
         upstreamResponse.on("end", () => {
           if (statusCode < 200 || statusCode >= 300) {
+            // The local development session is independently authenticated by
+            // DEV_LOGIN_EMAILS and SESSION_SECRET. Keep local Accounting and
+            // Finance routes usable when the optional upstream dev bridge is
+            // unavailable; proxied requests still use the signed development
+            // identity headers from buildUpstreamHeaders.
+            if (statusCode === 404 || statusCode >= 500) {
+              resolve();
+              return;
+            }
             reject(new Error(`Development upstream login failed (${statusCode})`));
             return;
           }

@@ -33,20 +33,48 @@ describe("configured BizPortal API origin", () => {
     );
   });
 
-  it("rejects an ephemeral development origin without exposing the secret value", async () => {
+  it("uses the explicit development origin without consulting another environment", async () => {
     process.env.APP_ENV = "development";
     delete process.env.NODE_ENV;
-    const secretOrigin = "https://temporary-api-secret-123.replit.dev";
-    process.env.BIZPORTAL_API_ORIGIN_DEV = secretOrigin;
+    const developmentOrigin = "https://temporary-api-secret-123.replit.dev";
+    process.env.BIZPORTAL_API_ORIGIN_DEV = developmentOrigin;
 
     const { getConfiguredUpstreamOrigin } = await import("./gcp-secrets");
 
-    const error = await getConfiguredUpstreamOrigin().catch((cause: unknown) => cause);
+    await expect(getConfiguredUpstreamOrigin()).resolves.toEqual(new URL(developmentOrigin));
+  });
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "BIZPORTAL_API_ORIGIN_DEV API origin failed validation",
+  it("does not use the GCP payload or a production origin for development", async () => {
+    process.env.APP_ENV = "development";
+    delete process.env.NODE_ENV;
+    delete process.env.BIZPORTAL_API_ORIGIN_DEV;
+    process.env.BIZPORTAL_API_ORIGIN_PROD = "https://production.example.test";
+    process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON = "{\"project_id\":\"redacted\"}";
+
+    const { getConfiguredUpstreamOrigin } = await import("./gcp-secrets");
+
+    await expect(getConfiguredUpstreamOrigin()).rejects.toThrow(
+      "BIZPORTAL_API_ORIGIN_DEV is not configured",
     );
-    expect((error as Error).message).not.toContain(secretOrigin);
+  });
+
+  it("requires the production origin and rejects a Replit development host", async () => {
+    process.env.APP_ENV = "production";
+    delete process.env.NODE_ENV;
+    delete process.env.BIZPORTAL_API_ORIGIN_PROD;
+    process.env.BIZPORTAL_API_ORIGIN_DEV = "https://development.example.test";
+
+    const { getConfiguredUpstreamOrigin } = await import("./gcp-secrets");
+
+    await expect(getConfiguredUpstreamOrigin()).rejects.toThrow(
+      "BIZPORTAL_API_ORIGIN_PROD is not configured",
+    );
+
+    vi.resetModules();
+    process.env.BIZPORTAL_API_ORIGIN_PROD = "https://temporary-api-secret-123.replit.dev";
+    const productionModule = await import("./gcp-secrets");
+    await expect(productionModule.getConfiguredUpstreamOrigin()).rejects.toThrow(
+      "BIZPORTAL_API_ORIGIN_PROD cannot use an ephemeral Replit development host",
+    );
   });
 });

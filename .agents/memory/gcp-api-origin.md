@@ -26,3 +26,9 @@ The stable `bizportal.cstlogistic.co.id` host currently serves the API health en
 **Why:** Host migration can remove the temporary backend's development-only login route while leaving health and regular API routing available.
 
 **How to apply:** Verify the upstream authentication contract separately before treating a host migration as a complete login migration.
+
+When the optional development upstream login bridge returns 404 or 5xx, local Dev Login may still issue its separately signed development session so API-owned Finance and Accounting routes remain usable. Keep 401/403 and origin-configuration failures blocking; proxied routes must continue using signed development identity headers.
+
+**Why:** The development database-backed Finance and Accounting endpoints are owned by this API, while the temporary upstream can be unavailable during host migration. Treating that outage as a local-auth bypass would be unsafe.
+
+**How to apply:** Preserve the allowlisted-email and session-secret checks, namespace upstream cookies when the bridge succeeds, and never enable this behavior in production.

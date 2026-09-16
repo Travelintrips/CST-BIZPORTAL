@@ -384,6 +384,82 @@ router.get("/accounting/reports/cash-flow", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/accounting/entries", async (req, res): Promise<void> => {
+  try {
+    const values: QueryValue[] = [];
+    let filters = companyFilter(req, values) + dateFilter(req, values);
+    const status = first(req.query.status);
+    if (status && status !== "all") {
+      values.push(status);
+      filters += ` and gl.status::text = $${values.length}`;
+    }
+
+    const limit = Math.min(100, Math.max(1, Number(first(req.query.limit) ?? 25) || 25));
+    const offset = Math.max(0, Number(first(req.query.offset) ?? 0) || 0);
+    values.push(limit, offset);
+    const result = await pool.query<{
+      entry_id: number;
+      entry_number: string;
+      date: Date;
+      description: string | null;
+      total_debit: string;
+      total_credit: string;
+      status: string;
+    }>(`
+      select gl.entry_id, max(gl.entry_number) entry_number, min(gl.date) date,
+             coalesce(max(nullif(gl.entry_description, '')),
+                      max(nullif(gl.line_description, ''))) description,
+             coalesce(sum(gl.debit), 0)::text total_debit,
+             coalesce(sum(gl.credit), 0)::text total_credit,
+             max(gl.status::text) status
+      from public.accounting_general_ledger_v gl
+      where true ${filters}
+      group by gl.entry_id
+      order by min(gl.date) desc, gl.entry_id desc
+      limit $${values.length - 1} offset $${values.length}
+    `, values);
+
+    res.json(result.rows.map((row) => ({
+      id: row.entry_id,
+      number: row.entry_number,
+      date: row.date,
+      description: row.description,
+      status: row.status,
+      totalDebit: numberValue(row.total_debit),
+      totalCredit: numberValue(row.total_credit),
+    })));
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
+router.get("/accounting/dashboard/monthly-cash", async (req, res): Promise<void> => {
+  try {
+    const values: QueryValue[] = [];
+    const filters = companyFilter(req, values) + dateFilter(req, values);
+    const result = await pool.query<{ month_key: string; net_change: string }>(`
+      select to_char(date_trunc('month', gl.date), 'YYYY-MM') month_key,
+             coalesce(sum(gl.debit - gl.credit), 0)::text net_change
+      from public.accounting_general_ledger_v gl
+      where gl.status::text = 'posted'
+        and gl.account_type::text = 'asset'
+        and gl.account_name ~* '(kas|bank)' ${filters}
+      group by date_trunc('month', gl.date)
+      order by date_trunc('month', gl.date)
+    `, values);
+
+    let saldo = 0;
+    res.json({
+      months: result.rows.map((row) => {
+        saldo += numberValue(row.net_change);
+        return { month: row.month_key, label: row.month_key, saldo };
+      }),
+    });
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
 router.get("/accounting/reports/balance-sheet", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];
