@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "postgresql-16"]
+modules = ["nodejs-24"]
 
 [deployment]
 router = "application"
@@ -17,7 +17,7 @@ expertMode = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
-timeoutMs = 120000
+timeoutMs = 20000
 
 [userenv]
 
@@ -25,16 +25,16 @@ timeoutMs = 120000
 
 [userenv.development]
 APP_ENV = "development"
-DEV_LOGIN_EMAILS = "admcst001@gmail.com"
-DEV_LOGIN_ROLE = "admin"
-BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
-VITE_API_SERVER_URL_DEV = "https://1c591a26-1875-444f-9a51-2733d23fd756-00-3bxi1sstpdetn.pike.replit.dev/bizportal/"
+# Path-based Replit routing: the API workflow is served from the current
+# development origin under /api; do not pin an ephemeral *.replit.dev host.
+VITE_API_SERVER_URL_DEV = "/api"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
 
 [userenv.production]
 APP_ENV = "production"
 MKT_DUAL_WRITE_RETRY_ENABLED = "false"
+BIZPORTAL_API_ORIGIN_PROD = "https://cstlogistic.co.id"
 
 [nix]
 channel = "stable-25_05"
