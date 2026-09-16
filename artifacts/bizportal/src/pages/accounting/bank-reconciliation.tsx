@@ -7964,8 +7964,7 @@ export default function BankReconciliationPage() {
   const qrisPaymentAmountDelta = qrisAmountTarget && Number.isFinite(Number(qrisPaymentAmount))
     ? Number(qrisPaymentAmount) - qrisAmountTarget.currentAmount
     : null;
-  const [qrisBulkResetDate, setQrisBulkResetDate] = useState("");
-  const [qrisBulkResetPending, setQrisBulkResetPending] = useState(false);
+  const [qrisBulkResetPendingDate, setQrisBulkResetPendingDate] = useState<string | null>(null);
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = [
@@ -8442,19 +8441,19 @@ export default function BankReconciliationPage() {
   const qrisResettableDates = Array.from(
     new Set(qrisResettablePayments.map((payment) => payment.settlementDate)),
   ).sort();
-  const selectedQrisBulkResetPayments = qrisResettablePayments.filter(
-    (payment) => payment.settlementDate === qrisBulkResetDate,
-  );
+  const getQrisBulkResetPaymentsForDate = (settlementDate: string) =>
+    qrisResettablePayments.filter((payment) => payment.settlementDate === settlementDate);
 
-  const handleBulkQrisSettlementReset = async () => {
-    if (!qrisBulkResetDate || selectedQrisBulkResetPayments.length === 0 || qrisBulkResetPending) {
+  const handleBulkQrisSettlementReset = async (settlementDate: string) => {
+    const payments = getQrisBulkResetPaymentsForDate(settlementDate);
+    if (!settlementDate || payments.length === 0 || qrisBulkResetPendingDate != null) {
       return;
     }
 
-    setQrisBulkResetPending(true);
+    setQrisBulkResetPendingDate(settlementDate);
     let succeeded = 0;
     let failed = 0;
-    for (const payment of selectedQrisBulkResetPayments) {
+    for (const payment of payments) {
       try {
         await qrisSettlementStatusMut.mutateAsync({ paymentId: payment.paymentId, silent: true });
         succeeded += 1;
@@ -8462,7 +8461,7 @@ export default function BankReconciliationPage() {
         failed += 1;
       }
     }
-    setQrisBulkResetPending(false);
+    setQrisBulkResetPendingDate(null);
     await Promise.all([refetchQrisAudit(), refetch()]);
     qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
@@ -8470,7 +8469,7 @@ export default function BankReconciliationPage() {
       title: `${succeeded} payment berhasil di-reset`,
       description: failed > 0
         ? `${failed} payment gagal di-reset karena statusnya berubah atau masih terhubung ke batch aktif.`
-        : `Semua payment QRIS pada tanggal ${fmtDate(qrisBulkResetDate)} kembali menjadi belum settle.`,
+        : `Semua payment QRIS pada tanggal ${fmtDate(settlementDate)} kembali menjadi belum settle.`,
       variant: failed > 0 ? "destructive" : "default",
     });
   };
@@ -10606,55 +10605,46 @@ export default function BankReconciliationPage() {
           )}
           {qrisResettableDates.length > 0 && (
             <Card className="mb-3 border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/30">
-              <CardContent className="flex flex-wrap items-end justify-between gap-3 p-3">
-                <div className="min-w-[220px] flex-1">
+              <CardContent className="space-y-3 p-3">
+                <div>
                   <p className="text-xs font-semibold text-amber-950 dark:text-amber-100">
                     Reset settlement QRIS massal
                   </p>
                   <p className="mt-1 text-[11px] text-amber-900/80 dark:text-amber-200/80">
-                    Pilih tanggal rekonsiliasi QR untuk mengembalikan semua payment yang eligible menjadi belum settle.
-                    Payment yang masih ada di batch posted/reconciled tetap dilindungi.
+                    Setiap tanggal rekonsiliasi QR memiliki tombol reset sendiri. Payment yang masih ada
+                    di batch posted/reconciled tetap dilindungi.
                   </p>
                 </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <div className="space-y-1">
-                    <Label htmlFor="qris-bulk-reset-date" className="text-[11px] text-amber-950 dark:text-amber-100">
-                      Tanggal rekonsiliasi QR
-                    </Label>
-                    <Select
-                      value={qrisBulkResetDate || "none"}
-                      onValueChange={(value) => setQrisBulkResetDate(value === "none" ? "" : value)}
-                      disabled={qrisBulkResetPending}
-                    >
-                      <SelectTrigger id="qris-bulk-reset-date" className="h-8 w-[190px] bg-background text-xs">
-                        <SelectValue placeholder="Pilih tanggal" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Pilih tanggal</SelectItem>
-                        {qrisResettableDates.map((date) => (
-                          <SelectItem key={date} value={date}>
-                            {fmtDate(date)} · {qrisResettablePayments.filter((payment) => payment.settlementDate === date).length} payment
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-8 gap-1.5 bg-amber-600 text-xs text-white hover:bg-amber-700"
-                    disabled={!qrisBulkResetDate || selectedQrisBulkResetPayments.length === 0 || qrisBulkResetPending}
-                    onClick={() => void handleBulkQrisSettlementReset()}
-                  >
-                    {qrisBulkResetPending
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : <RotateCcw className="h-3.5 w-3.5" />}
-                    {qrisBulkResetPending
-                      ? "Mereset..."
-                      : selectedQrisBulkResetPayments.length > 0
-                        ? `Reset ${selectedQrisBulkResetPayments.length} payment`
-                        : "Pilih tanggal"}
-                  </Button>
+                <div className="divide-y rounded-md border border-amber-200 bg-background/70 dark:border-amber-800">
+                  {qrisResettableDates.map((date) => {
+                    const paymentsForDate = getQrisBulkResetPaymentsForDate(date);
+                    const isResettingDate = qrisBulkResetPendingDate === date;
+                    return (
+                      <div key={date} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                        <div className="min-w-[180px]">
+                          <p className="text-xs font-semibold text-foreground">
+                            {fmtDate(date)}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {paymentsForDate.length} payment eligible untuk di-reset
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 gap-1.5 bg-amber-600 text-xs text-white hover:bg-amber-700"
+                          disabled={qrisBulkResetPendingDate != null}
+                          onClick={() => void handleBulkQrisSettlementReset(date)}
+                          aria-label={`Reset settlement QRIS untuk ${fmtDate(date)}`}
+                        >
+                          {isResettingDate
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <RotateCcw className="h-3.5 w-3.5" />}
+                          {isResettingDate ? "Mereset..." : `Reset ${paymentsForDate.length} payment`}
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
