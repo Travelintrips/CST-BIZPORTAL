@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
+import { pool } from "@workspace/db";
 
 export interface DevAuthUser {
   id: string;
@@ -15,12 +16,26 @@ interface DevSession extends DevAuthUser {
   expiresAt: number;
 }
 
+interface ProductionSession {
+  id: string;
+  email: string;
+  issuedAt: number;
+  expiresAt: number;
+}
+
 export type DevLoginHook = (
   user: DevAuthUser,
   response: Response,
 ) => Promise<void>;
 
+export type ProductionLoginHook = (
+  accessToken: string,
+  user: DevAuthUser,
+  response: Response,
+) => Promise<void>;
+
 const DEV_SESSION_COOKIE = "bizportal_dev_session";
+const PRODUCTION_SESSION_COOKIE = "bizportal_supabase_session";
 const DEV_SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 export function isDevelopmentEnvironment(): boolean {
@@ -122,11 +137,50 @@ function setSessionCookie(response: Response, session: DevSession): void {
   );
 }
 
+function setProductionSessionCookie(response: Response, session: ProductionSession): void {
+  const secret = getSessionSecret();
+  if (!secret) throw new Error("SESSION_SECRET is unavailable");
+
+  const payload = encode(JSON.stringify(session));
+  const value = `${payload}.${sign(payload, secret)}`;
+  const maxAge = Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000));
+  response.append(
+    "Set-Cookie",
+    `${PRODUCTION_SESSION_COOKIE}=${value}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+}
+
 function clearSessionCookie(response: Response): void {
   response.setHeader(
     "Set-Cookie",
     `${DEV_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
   );
+}
+
+function clearProductionSessionCookie(response: Response): void {
+  response.setHeader(
+    "Set-Cookie",
+    `${PRODUCTION_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+}
+
+function decodeSignedCookie<T>(request: Request, cookieName: string): T | null {
+  const secret = getSessionSecret();
+  const raw = getCookie(request, cookieName);
+  if (!secret || !raw) return null;
+
+  const separator = raw.lastIndexOf(".");
+  if (separator <= 0) return null;
+
+  const payload = raw.slice(0, separator);
+  const signature = raw.slice(separator + 1);
+  if (!safeEqual(sign(payload, secret), signature)) return null;
+
+  try {
+    return JSON.parse(decode(payload)) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function getDevSession(request: Request): DevAuthUser | null {
@@ -161,6 +215,113 @@ export function getDevSession(request: Request): DevAuthUser | null {
   }
 }
 
+export function getProductionSession(request: Request): ProductionSession | null {
+  if (isDevelopmentEnvironment()) return null;
+
+  const session = decodeSignedCookie<ProductionSession>(request, PRODUCTION_SESSION_COOKIE);
+  if (
+    !session ||
+    typeof session.id !== "string" ||
+    typeof session.email !== "string" ||
+    typeof session.expiresAt !== "number" ||
+    session.expiresAt <= Date.now()
+  ) {
+    return null;
+  }
+
+  return {
+    ...session,
+    email: session.email.trim().toLowerCase(),
+  };
+}
+
+function getSupabaseConfig(): { url: string; anonKey: string } | null {
+  const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) return null;
+  return { url: url.replace(/\/+$/, ""), anonKey };
+}
+
+async function verifySupabaseAccessToken(accessToken: string): Promise<{
+  id: string;
+  email: string;
+  expiresAt: number;
+} | null> {
+  const config = getSupabaseConfig();
+  if (!config) throw new Error("Supabase Auth configuration is unavailable");
+
+  const response = await fetch(`${config.url}/auth/v1/user`, {
+    headers: {
+      apikey: config.anonKey,
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) return null;
+
+  const user = await response.json() as {
+    id?: unknown;
+    email?: unknown;
+  };
+  if (typeof user.id !== "string" || typeof user.email !== "string") return null;
+
+  const tokenParts = accessToken.split(".");
+  let expiresAt = 0;
+  let usedOtp = false;
+  try {
+    const claims = JSON.parse(decode(tokenParts[1] ?? "")) as {
+      exp?: unknown;
+      amr?: unknown;
+    };
+    if (typeof claims.exp === "number") expiresAt = claims.exp * 1000;
+    usedOtp = Array.isArray(claims.amr) && claims.amr.some((entry) => (
+      typeof entry === "object"
+      && entry !== null
+      && "method" in entry
+      && (entry as { method?: unknown }).method === "otp"
+    ));
+  } catch {
+    return null;
+  }
+  if (!usedOtp || expiresAt <= Date.now()) return null;
+
+  return {
+    id: user.id,
+    email: user.email.trim().toLowerCase(),
+    expiresAt,
+  };
+}
+
+async function getProductionUser(session: ProductionSession): Promise<DevAuthUser | null> {
+  const result = await pool.query<{ user_data: Record<string, unknown> }>(
+    `select to_jsonb(u) user_data
+     from public.users u
+     where lower(coalesce(to_jsonb(u)->>'email', '')) = $1
+     limit 1`,
+    [session.email],
+  );
+  const userData = result.rows[0]?.user_data;
+  if (!userData) return null;
+
+  const email = typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
+  const role = typeof userData.role === "string" ? userData.role.trim().toLowerCase() : "";
+  if (email !== session.email || !role) return null;
+
+  const rawCompanyId = userData.company_id ?? userData.companyId;
+  const parsedCompanyId = rawCompanyId === null || rawCompanyId === undefined
+    ? null
+    : Number(rawCompanyId);
+  return {
+    id: session.id,
+    email,
+    firstName: typeof userData.first_name === "string" ? userData.first_name : null,
+    lastName: typeof userData.last_name === "string" ? userData.last_name : null,
+    role,
+    companyId: parsedCompanyId !== null && Number.isInteger(parsedCompanyId) && parsedCompanyId > 0
+      ? parsedCompanyId
+      : null,
+  };
+}
+
 function getSafeRedirect(value: unknown): string {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
     return "/";
@@ -168,8 +329,63 @@ function getSafeRedirect(value: unknown): string {
   return value;
 }
 
-export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): Router {
+export function createDevAuthRouter(options: {
+  onLogin?: DevLoginHook;
+  onProductionLogin?: ProductionLoginHook;
+} = {}): Router {
   const router = Router();
+
+  router.post("/auth/supabase-exchange", async (request, response): Promise<void> => {
+    if (isDevelopmentEnvironment()) {
+      response.status(404).json({ error: "Not found" });
+      return;
+    }
+
+    const accessToken =
+      typeof request.body?.access_token === "string"
+        ? request.body.access_token.trim()
+        : "";
+    if (!accessToken) {
+      response.status(401).json({ error: "Session Supabase tidak tersedia." });
+      return;
+    }
+    if (!getSessionSecret()) {
+      response.status(503).json({ error: "Konfigurasi session server belum tersedia." });
+      return;
+    }
+
+    try {
+      const verified = await verifySupabaseAccessToken(accessToken);
+      if (!verified) {
+        response.status(401).json({ error: "Session Supabase tidak valid atau sudah berakhir." });
+        return;
+      }
+
+      const now = Date.now();
+      const productionSession = {
+        id: verified.id,
+        email: verified.email,
+        issuedAt: now,
+        expiresAt: verified.expiresAt,
+      };
+      const user = await getProductionUser(productionSession);
+      if (!user) {
+        response.status(403).json({ error: "User tidak terdaftar di BizPortal." });
+        return;
+      }
+      if (user.role !== "admin") {
+        response.status(403).json({ error: "Akses hanya tersedia untuk admin." });
+        return;
+      }
+
+      await options.onProductionLogin?.(accessToken, user, response);
+      setProductionSessionCookie(response, productionSession);
+      response.json({ user });
+    } catch (error) {
+      request.log.error({ error }, "Supabase access token verification failed");
+      response.status(503).json({ error: "Verifikasi session Supabase tidak tersedia." });
+    }
+  });
 
   router.get("/auth/dev-users", (_request, response) => {
     if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
@@ -224,12 +440,33 @@ export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): R
     return response.json({ user });
   });
 
-  router.get("/auth/user", (request, response, next) => {
-    if (!isDevelopmentEnvironment()) return next();
+  router.get("/auth/user", async (request, response, next): Promise<void> => {
+    if (!isDevelopmentEnvironment()) {
+      const session = getProductionSession(request);
+      if (!session) {
+        response.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      try {
+        const user = await getProductionUser(session);
+        if (!user) {
+          response.status(403).json({ error: "Forbidden" });
+          return;
+        }
+        response.json({ user });
+      } catch (error) {
+        request.log.error({ error }, "Failed to load production auth user");
+        response.status(503).json({ error: "Authorization service unavailable" });
+      }
+      return;
+    }
 
     const user = getDevSession(request);
-    if (user) return response.json({ user });
-    return next();
+    if (user) {
+      response.json({ user });
+      return;
+    }
+    next();
   });
 
   router.get("/users/me", (request, response, next) => {
@@ -247,7 +484,12 @@ export function createDevAuthRouter(options: { onLogin?: DevLoginHook } = {}): R
   });
 
   router.get("/logout", (request, response, next) => {
-    if (!isDevelopmentEnvironment() || !getDevSession(request)) return next();
+    if (!isDevelopmentEnvironment()) {
+      clearProductionSessionCookie(response);
+      response.redirect(getSafeRedirect(request.query.redirect));
+      return;
+    }
+    if (!getDevSession(request)) return next();
 
     clearSessionCookie(response);
     return response.redirect(getSafeRedirect(request.query.redirect));

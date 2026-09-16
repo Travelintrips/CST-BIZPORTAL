@@ -83,7 +83,56 @@ async function establishDevelopmentUpstreamSession(
   });
 }
 
-router.use(createDevAuthRouter({ onLogin: establishDevelopmentUpstreamSession }));
+async function establishProductionUpstreamSession(
+  accessToken: string,
+  _user: DevAuthUser,
+  response: Response,
+): Promise<void> {
+  const upstreamOrigin = await getConfiguredUpstreamOrigin();
+  const exchangeUrl = buildUpstreamUrl("/api/auth/supabase-exchange", upstreamOrigin);
+  const body = JSON.stringify({ access_token: accessToken });
+
+  return new Promise((resolve, reject) => {
+    const upstream = https.request(
+      exchangeUrl,
+      {
+        method: "POST",
+        headers: {
+          host: exchangeUrl.host,
+          origin: exchangeUrl.origin,
+          referer: `${exchangeUrl.origin}/`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      },
+      (upstreamResponse) => {
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        const cookies = rewriteSetCookies(upstreamResponse.headers["set-cookie"]) ?? [];
+        upstreamResponse.resume();
+        upstreamResponse.on("end", () => {
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`Production upstream session exchange failed (${statusCode})`));
+            return;
+          }
+          if (cookies.length === 0) {
+            reject(new Error("Production upstream session exchange returned no cookie"));
+            return;
+          }
+          for (const cookie of cookies) response.append("Set-Cookie", cookie);
+          resolve();
+        });
+      },
+    );
+
+    upstream.on("error", reject);
+    upstream.end(body);
+  });
+}
+
+router.use(createDevAuthRouter({
+  onLogin: establishDevelopmentUpstreamSession,
+  onProductionLogin: establishProductionUpstreamSession,
+}));
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);

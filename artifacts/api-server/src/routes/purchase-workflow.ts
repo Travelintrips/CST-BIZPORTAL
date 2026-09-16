@@ -1,35 +1,82 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
+import { getDevSession, getProductionSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 const router: IRouter = Router();
 
-function getLocalApiUser(req: Request): DevAuthUser | null {
-  const devUser = getDevSession(req);
-  if (devUser) return devUser;
-  if (isDevelopmentEnvironment()) return null;
+type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
 
-  // Production currently runs the BizPortal UI in its intentional shared
-  // admin/no-login mode. Keep local Supabase purchase actions consistent with
-  // that mode while still applying the route's role and company checks.
-  return {
-    id: "production-no-login",
-    email: "production-no-login@bizportal.local",
-    firstName: "CST",
-    lastName: "Admin",
-    role: "admin",
-    companyId: null,
-  };
-}
+async function authenticatePurchaseUser(
+  req: PurchaseRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (isDevelopmentEnvironment()) {
+    const user = getDevSession(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (user.role.toLowerCase() !== "admin") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    req.purchaseUser = user;
+    next();
+    return;
+  }
 
-router.use((req, res, next) => {
-  const user = getLocalApiUser(req);
-  if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
+  const session = getProductionSession(req);
+  if (!session) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  next();
-});
+
+  try {
+    const result = await pool.query<{
+      user_data: Record<string, unknown>;
+    }>(
+      `select to_jsonb(u) user_data
+       from public.users u
+       where lower(coalesce(to_jsonb(u)->>'email', '')) = $1
+       limit 1`,
+      [session.email],
+    );
+    const userData = result.rows[0]?.user_data;
+    if (!userData) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const email = typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
+    const role = typeof userData.role === "string" ? userData.role.trim().toLowerCase() : "";
+    if (email !== session.email || role !== "admin") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const rawCompanyId = userData.company_id ?? userData.companyId;
+    const parsedCompanyId = rawCompanyId === null || rawCompanyId === undefined
+      ? null
+      : Number(rawCompanyId);
+    req.purchaseUser = {
+      id: session.id,
+      email,
+      firstName: typeof userData.first_name === "string" ? userData.first_name : null,
+      lastName: typeof userData.last_name === "string" ? userData.last_name : null,
+      role,
+      companyId: parsedCompanyId !== null && Number.isInteger(parsedCompanyId) && parsedCompanyId > 0
+        ? parsedCompanyId
+        : null,
+    };
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Failed to authorize purchase user");
+    res.status(503).json({ error: "Authorization service unavailable" });
+  }
+}
+
+router.use("/purchase-workflow", authenticatePurchaseUser);
 
 function first(value: unknown): string | undefined {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : undefined;
@@ -84,9 +131,9 @@ function parseInvoiceId(req: Request): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-function parseCompanyId(req: Request): number | null {
+function parseCompanyId(req: PurchaseRequest): number | null {
   const raw = first(req.query.company) ?? first(req.query.companyId) ?? first(req.query.company_id);
-  const sessionCompanyId = getLocalApiUser(req)?.companyId ?? null;
+  const sessionCompanyId = req.purchaseUser?.companyId ?? null;
   if (!raw || raw === "all") return sessionCompanyId;
   const companyId = Number(raw);
   if (!Number.isInteger(companyId) || companyId <= 0) return null;
@@ -382,7 +429,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, now(), $9, $10)`,
       [
         null,
-        getLocalApiUser(req)?.email ?? "local-admin",
+        (req as PurchaseRequest).purchaseUser?.email ?? "unknown-admin",
         "reset_payment",
         "vendor_invoice",
         String(invoiceId),

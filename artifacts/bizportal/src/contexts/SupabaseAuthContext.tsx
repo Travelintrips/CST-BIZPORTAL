@@ -31,14 +31,6 @@ const READINESS_POLL_INTERVAL_MS = 2_000;
 const LIVENESS_REQUEST_TIMEOUT_MS = 5_000;
 const READINESS_REQUEST_TIMEOUT_MS = 5_000;
 
-function readCache(): AuthUser | null {
-  try {
-    const v = sessionStorage.getItem(CACHE_KEY);
-    const cached = v ? (JSON.parse(v) as AuthUser) : null;
-    return cached?.id === "production-no-login" ? null : cached;
-  } catch { return null; }
-}
-
 function writeCache(u: AuthUser | null) {
   try {
     if (u) sessionStorage.setItem(CACHE_KEY, JSON.stringify(u));
@@ -55,9 +47,8 @@ function getOrigin(): string {
 }
 
 export function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
-  const cached = readCache();
-  const [user, setUser] = useState<AuthUser | null>(cached);
-  const [isLoading, setIsLoading] = useState(!cached);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isApiAvailable, setIsApiAvailable] = useState(!IS_DEV);
   const [isApiReady, setIsApiReady] = useState(!IS_DEV);
   const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
@@ -248,7 +239,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     } catch {
       return { error: "Koneksi ke server gagal." };
     }
-  }, [fetchUser]);
+  }, []);
 
   const signInWithGoogle = useCallback(() => {
     const origin = getOrigin();
