@@ -17,7 +17,7 @@ expertMode = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
-timeoutMs = 20000
+timeoutMs = 120000
 
 [userenv]
 
@@ -25,6 +25,9 @@ timeoutMs = 20000
 
 [userenv.development]
 APP_ENV = "development"
+DEV_LOGIN_EMAILS = "admcst001@gmail.com"
+DEV_LOGIN_ROLE = "admin"
+BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
 VITE_API_SERVER_URL_DEV = "https://1c591a26-1875-444f-9a51-2733d23fd756-00-3bxi1sstpdetn.pike.replit.dev/bizportal/"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
