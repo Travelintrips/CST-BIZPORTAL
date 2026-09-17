@@ -10,8 +10,10 @@ import {
   getDevSession,
   getProductionSession,
   getProductionUser,
+  isDevelopmentEnvironment,
   type DevAuthUser,
 } from "./dev-auth";
+import { pool } from "@workspace/db";
 import {
   buildUpstreamUrl,
   buildUpstreamHeaders,
@@ -178,6 +180,71 @@ router.use(bankReconciliationRouter);
 router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
 
+router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> => {
+  const rawId = req.params.id;
+  const paymentId = Number(rawId);
+  if (!/^[1-9]\d*$/.test(rawId ?? "") || !Number.isSafeInteger(paymentId)) {
+    res.status(400).json({ error: "ID pembayaran tidak valid." });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (reason.length < 10) {
+    res.status(400).json({ error: "Alasan void/reversal minimal 10 karakter." });
+    return;
+  }
+
+  let actor: string | null = null;
+  try {
+    if (isDevelopmentEnvironment()) {
+      actor = getDevSession(req)?.email ?? null;
+    } else {
+      const session = getProductionSession(req);
+      if (session) {
+        const user = await getProductionUser(session);
+        actor = user?.email ?? null;
+      }
+    }
+  } catch (error) {
+    req.log.error({ error, paymentId }, "Sport Center payment authorization failed");
+    res.status(503).json({ error: "Authorization service unavailable." });
+    return;
+  }
+
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT sport_center.void_payment_for_recurring_replacement($1, $2, $3) AS audit",
+      [paymentId, actor, reason],
+    );
+    res.json(result.rows[0]?.audit ?? null);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("PAYMENT_NOT_FOUND")) {
+      res.status(404).json({ error: "Pembayaran tidak ditemukan." });
+      return;
+    }
+    if (message.includes("DUPLICATE_RECURRING_PAYMENT")) {
+      res.status(409).json({
+        error: "Recurring series ini sudah memiliki pembayaran aktif.",
+        code: "DUPLICATE_RECURRING_PAYMENT",
+      });
+      return;
+    }
+    if (code === "23505") {
+      res.status(409).json({ error: "Pembayaran recurring bentrok dengan transaksi aktif lain." });
+      return;
+    }
+    req.log.error({ error, paymentId }, "Sport Center payment void failed");
+    res.status(503).json({ error: "Void/reversal pembayaran belum tersedia." });
+  }
+});
+
 router.use(async (req, res) => {
   let upstreamOrigin: URL;
   try {
@@ -212,8 +279,38 @@ router.use(async (req, res) => {
       } else {
         delete responseHeaders["set-cookie"];
       }
-      res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
-      upstreamResponse.pipe(res);
+      const requestPath = new URL(req.originalUrl, "http://local-request").pathname;
+      const isRecurringPaymentCreate =
+        req.method === "POST" && requestPath === "/api/sport-center/payments";
+      if (!isRecurringPaymentCreate) {
+        res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+        upstreamResponse.pipe(res);
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      upstreamResponse.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      upstreamResponse.on("end", () => {
+        const body = Buffer.concat(chunks);
+        const bodyText = body.toString("utf8");
+        const hasRecurringConflictMarker =
+          bodyText.includes("DUPLICATE_RECURRING_PAYMENT")
+          || bodyText.includes("sport_payments_recurring_series_active_unique");
+        if (hasRecurringConflictMarker && (upstreamResponse.statusCode ?? 502) >= 400) {
+          res.status(409).json({
+            error: "Recurring series ini sudah memiliki pembayaran aktif.",
+            code: "DUPLICATE_RECURRING_PAYMENT",
+          });
+          return;
+        }
+
+        delete responseHeaders["transfer-encoding"];
+        responseHeaders["content-length"] = String(body.byteLength);
+        res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+        res.end(body);
+      });
     },
   );
 

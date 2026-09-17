@@ -19,4 +19,5 @@
 - [Optional vendor withholding](optional-vendor-withholding.md) — zero PPh and empty withholding records are valid read states; do not load PPh accounts or mutate records on GET.
 - [Bank reconciliation matcher ownership](bank-reconciliation-matcher-ownership.md) — candidate generation and server auto-post policy live upstream; proxy/UI changes cannot create missing candidates.
 - [PPh reset scope](pph-reset-scope.md) — clearing only withholding records leaves denormalized invoice breakdown values that can make PPh reappear.
+- [Recurring payment source guard](recurring-payment-source-guard.md) — canonical Sport Center payment_status has only four values; rejected is the inactive replacement state.
 

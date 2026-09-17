@@ -195,6 +195,27 @@ export default function SportCenterPayments() {
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  const voidMutation = useMutation({
+    mutationFn: async ({ id, reason }: { id: number; reason: string }) => {
+      const r = await fetch(`/api/sport-center/payments/${id}/void`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(payload.error ?? "Gagal melakukan void/reversal");
+      return payload;
+    },
+    onSuccess: () => {
+      toast({ title: "Pembayaran di-void dan jurnal reversal dibuat" });
+      setDetailPayment(null);
+      qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
+      qc.invalidateQueries({ queryKey: ["sport-center-bookings"] });
+    },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+
   const totalRevenue = data?.totalRevenue ?? 0;
 
   const hasDateFilter = dateFrom || dateTo;
@@ -728,6 +749,11 @@ export default function SportCenterPayments() {
                   <div>
                     <p className="text-xs text-muted-foreground">No. Booking</p>
                     <p className="font-mono">{detailPayment.booking_number ?? "—"}</p>
+                    {(detailPayment.related_booking_numbers?.length ?? 0) > 0 && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Terkait: {detailPayment.related_booking_numbers!.join(", ")}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Pelanggan</p>
@@ -859,6 +885,39 @@ export default function SportCenterPayments() {
                     </Button>
                   </div>
                 )}
+                  {detailPayment.recurring_series_id != null
+                    && ["paid", "confirmed", "pending"].includes(detailPayment.status)
+                    && (
+                    <div className="pt-2 border-t border-border/30">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-1 text-xs text-red-300 border-red-700 hover:bg-red-900/30"
+                        disabled={voidMutation.isPending}
+                        onClick={() => {
+                          const reason = window.prompt(
+                            "Alasan void/reversal (minimal 10 karakter):",
+                            "Koreksi duplikasi pembayaran recurring",
+                          )?.trim() ?? "";
+                          if (reason.length < 10) {
+                            toast({
+                              title: "Alasan void/reversal minimal 10 karakter.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          voidMutation.mutate({
+                            id: detailPayment.id,
+                            reason,
+                          });
+                        }}
+                      >
+                        {voidMutation.isPending
+                          ? <RefreshCw className="h-4 w-4 animate-spin" />
+                          : "Void & Siapkan Pembayaran Pengganti"}
+                      </Button>
+                    </div>
+                  )}
               </div>
             )}
           </DialogContent>
