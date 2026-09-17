@@ -17,4 +17,5 @@
 - [General ledger filter test harness](general-ledger-filter-test-harness.md) — isolate Radix Select focus management when testing ledger filter behavior in jsdom.
 
 - [Optional vendor withholding](optional-vendor-withholding.md) — zero PPh and empty withholding records are valid read states; do not load PPh accounts or mutate records on GET.
+- [Bank reconciliation matcher ownership](bank-reconciliation-matcher-ownership.md) — candidate generation and server auto-post policy live upstream; proxy/UI changes cannot create missing candidates.
 

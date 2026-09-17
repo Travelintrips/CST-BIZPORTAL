@@ -66,6 +66,12 @@ describe("Rule AI required-candidate approval UI", () => {
     expect(componentSource).toContain("matchingCandidates.filter(isRealTransactionCandidate)");
     expect(componentSource).toContain("candidateSelectionEnabled && candidateIsSelectable");
     expect(componentSource).toContain("onApproveCandidate && canApprove(m) && candidateIsSelectable");
+    expect(componentSource).toContain("candidate.amount_match");
+    expect(componentSource).toContain("candidate.date_match");
+    expect(componentSource).toContain("candidate.name_match");
+    expect(componentSource).toContain(
+      "|| candidate.date_match",
+    );
     expect(componentSource).toContain(
       "Approve baru tersedia setelah ditemukan",
     );

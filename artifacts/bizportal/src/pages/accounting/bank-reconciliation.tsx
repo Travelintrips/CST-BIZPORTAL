@@ -1594,10 +1594,15 @@ function hasUnresolvedVariance(m: BankMutation): boolean {
 function isExactMatch(m: BankMutation): boolean {
   const candidate = visibleCandidates(m)[0];
   if (!candidate || m.status !== "matched" || hasUnresolvedVariance(m)) return false;
-  // A same-day, same-amount bank transfer is selectable for reviewer
-  // confirmation even when it has no reference/proof bonus. The backend still
-  // validates the selected match and COA mapping inside its transaction.
-  return Boolean(candidate.amount_match && candidate.date_match);
+  // Same-day and same-amount candidates remain selectable for reviewer
+  // confirmation even when the payer name differs. Auto-post is stricter:
+  // the candidate must also carry a positive name match. The backend remains
+  // the final authority for the approval transaction and journal mapping.
+  return Boolean(
+    candidate.amount_match
+      && candidate.date_match
+      && candidate.name_match,
+  );
 }
 
 const REAL_TRANSACTION_CANDIDATE_TYPES = new Set([
@@ -1853,9 +1858,10 @@ function candidateBusinessPriority(candidate: Candidate): number {
 
 /** Candidates shown to reviewers and used for approval.
  *
- * QRIS is the only flow whose candidate visibility is gated by settlement
- * date. For non-QRIS/manual-rule candidates, amount and date are evidence
- * shown to the reviewer, not hard requirements that hide the candidate.
+ * QRIS uses its settlement-date contract. Ordinary transaction candidates
+ * remain visible when their payment date matches the bank date, even when
+ * the payer name differs, so an admin can choose them during review.
+ * Manual-rule candidates stay visible as accounting evidence. A
  * `sport_payment` is not automatically QRIS: its payment method decides
  * which contract applies.
  */
@@ -1882,11 +1888,15 @@ function visibleCandidates(m: BankMutation): Candidate[] {
     .filter(candidate => {
       const requiresQrisEvidence = isQrisCandidate(candidate, m);
       const candidateDate = candidate.details?.settlementDate ?? candidate.details?.date;
-      // Only QRIS keeps the settlement-date visibility gate. Generic bank
-      // transfers and manual-rule candidates remain reviewable even when
-      // amount/date flags are false.
-      const dateEligible = !requiresQrisEvidence
-        || isSameCalendarDate(m.transaction_date, candidateDate);
+      // A same-day candidate must remain visible for an admin to select even
+      // when the payer name does not match. QRIS still uses its settlement
+      // date contract; ordinary bank-transfer candidates use the payment date
+      // returned in candidate details (or the backend date_match flag).
+      const dateEligible = requiresQrisEvidence
+        ? isSameCalendarDate(m.transaction_date, candidateDate)
+        : !isRealTransactionCandidate(candidate)
+          || candidate.date_match
+          || isSameCalendarDate(m.transaction_date, candidateDate);
       const identity = [
         candidate.candidate_type,
         candidate.candidate_id,
@@ -5306,9 +5316,10 @@ function MutationCard({
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const best   = cands[0];
   const evidence = reconciliationEvidence(m);
-  // Amount/date are hard visibility requirements only for QRIS. For other
-  // candidates (including manual recon rules), they remain reviewer evidence
-  // and must not prevent the candidate from being selected.
+  // QRIS keeps its own settlement evidence contract. For ordinary bank
+  // transfers, visible same-date candidates remain reviewer evidence even
+  // when the payer name does not match; the admin can select the candidate
+  // instead of losing it during matching.
   const matchingCandidates = cands.filter(candidate =>
     isQrisCandidate(candidate, m)
       ? candidate.amount_match && candidate.date_match
