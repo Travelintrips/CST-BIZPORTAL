@@ -49,6 +49,7 @@ import {
 import {
   ensureVendorWithholdingRecords,
   recalculateVendorInvoicePaymentStatus,
+  vendorWithholdingTaxPlans,
 } from "../lib/vendorInvoicePaymentStatus.js";
 import { getInCodeTemplate, resolveTemplate, type ProductTemplateOverride } from "@workspace/product-templates";
 
@@ -1081,7 +1082,13 @@ router.post("/vendor-invoices", async (req, res) => {
       `);
       const sequenceRow = (sequence as { rows?: Array<{ seq?: unknown }> }).rows?.[0];
       const invoiceNumber = `VI/${year}/${String(Number(sequenceRow?.seq ?? 0) + 1).padStart(5, "0")}`;
-      const withholdingTaxAmount = finiteNumber(body.withholdingTaxAmount) ?? 0;
+      const withholdingPlans = vendorWithholdingTaxPlans(
+        body.invoiceBreakdown,
+        String(body.supplierName ?? ""),
+      );
+      const withholdingTaxAmount = withholdingPlans.length > 0
+        ? withholdingPlans.reduce((sum, plan) => sum + plan.amount, 0)
+        : finiteNumber(body.withholdingTaxAmount) ?? 0;
       const taxReviewRequired = Boolean(body.taxReviewRequired);
 
       const [vi] = await tx.insert(vendorInvoicesTable).values({
@@ -1111,8 +1118,9 @@ router.post("/vendor-invoices", async (req, res) => {
         createdBy: body.createdBy ? String(body.createdBy) : undefined,
         ...(poCategoryKey ? { categoryKey: poCategoryKey, templateId: poTemplateId, templateVersion: poTemplateVersion, templateSnapshot: poTemplateSnapshot } : {}),
       }).returning();
+      let insertedLines: Array<{ id: number }> = [];
       if (lines.length > 0) {
-        await tx.insert(vendorInvoiceLinesTable).values(
+        insertedLines = await tx.insert(vendorInvoiceLinesTable).values(
           lines.map((l) => ({
             invoiceId: vi!.id,
             productId: l.productId ? Number(l.productId) : undefined,
@@ -1128,6 +1136,23 @@ router.post("/vendor-invoices", async (req, res) => {
             coaMappingKey: normalizeVendorLineMappingKey(l.mappingKey ?? l.name),
             notes: l.notes ? String(l.notes) : undefined,
           }))
+        ).returning({ id: vendorInvoiceLinesTable.id });
+      }
+      if (withholdingPlans.length > 0) {
+        if (insertedLines.length === 0) {
+          throw new Error("Invoice dengan rincian PPh harus memiliki minimal satu line invoice.");
+        }
+        await tx.insert(vendorInvoiceLineTaxesTable).values(
+          withholdingPlans.map((plan) => ({
+            invoiceLineId: insertedLines[plan.componentIndex]?.id ?? insertedLines[0]!.id,
+            companyId,
+            taxType: plan.type,
+            taxObject: plan.object,
+            baseAmount: String(plan.base),
+            taxAmount: String(plan.amount),
+            resolutionStatus: "tax_review",
+            reviewReason: "COA liabilitas PPh perlu dikonfirmasi sebelum pembayaran",
+          })),
         );
       }
       return { kind: "created" as const, vi };
@@ -1249,6 +1274,23 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
           ));
       if (accounts.length !== accountIds.length) {
         return { kind: "error" as const, error: "ACCOUNT_NOT_FOUND" as const };
+      }
+      const liabilityAccountIds = [...new Set(reviewTaxes.map((tax) => tax.liabilityAccountId))];
+      const liabilityAccounts = liabilityAccountIds.length === 0
+        ? []
+        : await tx
+          .select({ id: chartOfAccountsTable.id })
+          .from(chartOfAccountsTable)
+          .where(and(
+            eq(chartOfAccountsTable.companyId, companyId),
+            eq(chartOfAccountsTable.type, "liability"),
+            eq(chartOfAccountsTable.isActive, true),
+            eq(chartOfAccountsTable.isPostable, true),
+            eq(chartOfAccountsTable.status, "ACTIVE"),
+            inArray(chartOfAccountsTable.id, liabilityAccountIds),
+          ));
+      if (liabilityAccounts.length !== liabilityAccountIds.length) {
+        return { kind: "error" as const, error: "LIABILITY_ACCOUNT_NOT_FOUND" as const };
       }
 
       const actor = String((req as { user?: { id?: unknown } }).user?.id ?? "ADMIN");
@@ -1425,6 +1467,7 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
          NOT_REVIEWABLE: [409, "Vendor Invoice tidak berada pada status yang dapat direview."],
         LINE_NOT_FOUND: [400, "Satu atau lebih line tidak berasal dari Vendor Invoice ini."],
         ACCOUNT_NOT_FOUND: [400, "Satu atau lebih COA tidak ditemukan."],
+        LIABILITY_ACCOUNT_NOT_FOUND: [400, "Satu atau lebih COA Hutang PPh tidak valid untuk company aktif."],
       } as const;
       const [status, error] = responses[result.error];
       return res.status(status).json({ error });

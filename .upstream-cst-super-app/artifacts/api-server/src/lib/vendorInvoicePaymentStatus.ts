@@ -21,6 +21,59 @@ function money(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+export interface VendorWithholdingTaxPlan {
+  componentIndex: number;
+  type: string;
+  object: string;
+  base: number;
+  amount: number;
+  liabilityAccountId: number | null;
+}
+
+export function vendorWithholdingTaxPlans(
+  invoiceBreakdown: unknown,
+  vendorName = "",
+): VendorWithholdingTaxPlan[] {
+  const recalculated = recalculateVendorInvoiceBreakdown(invoiceBreakdown, vendorName);
+  if (!recalculated) return [];
+
+  return recalculated.components.flatMap((component, componentIndex) => {
+    const amount = money(numberValue(component.withholding_tax_amount));
+    const type = String(component.withholding_tax_type ?? "").trim();
+    if (amount <= 0 || !type) return [];
+    const object = String(
+      component.tax_object
+        ?? component.component
+        ?? component.label
+        ?? `component_${componentIndex + 1}`,
+    ).trim() || `component_${componentIndex + 1}`;
+    const liabilityAccountId = Number(component.liability_account_id);
+    return [{
+      componentIndex,
+      type,
+      object,
+      base: money(numberValue(component.dpp ?? component.base_amount)),
+      amount,
+      liabilityAccountId: Number.isInteger(liabilityAccountId) && liabilityAccountId > 0
+        ? liabilityAccountId
+        : null,
+    }];
+  });
+}
+
+export function hasCombinedVendorWithholdingRow(
+  taxRows: Array<Record<string, unknown>>,
+  plans: VendorWithholdingTaxPlan[],
+): boolean {
+  if (taxRows.some((row) => /\s+\+\s+/.test(String(row.tax_type ?? "")))) return true;
+  if (plans.length <= 1) return false;
+  return taxRows.some((row) => !plans.some((plan) =>
+    plan.type === String(row.tax_type ?? "").trim()
+    && plan.object === String(row.tax_object ?? "").trim()
+    && Math.abs(plan.amount - numberValue(row.tax_amount)) <= 0.01
+  ));
+}
+
 export function inferVendorInvoiceGrossSettlement(input: {
   paymentAmount: number;
   outstanding: number;
@@ -35,6 +88,36 @@ export function inferVendorInvoiceGrossSettlement(input: {
       ? persisted
       : 0;
   return { grossAmount: money(input.paymentAmount + inferred), withholdingAmount: inferred };
+}
+
+export function resolveVendorInvoiceNetSettlement(input: {
+  paymentAmount: number;
+  outstanding: number;
+  taxes: Array<{ amount: number; liabilityAccountId: number | null }>;
+}): {
+  grossAmount: number;
+  withholdingAmount: number;
+  liabilityCredits: Array<{ accountId: number; amount: number }>;
+} {
+  const withholdingAmount = money(input.taxes.reduce((sum, tax) => sum + numberValue(tax.amount), 0));
+  const settlement = inferVendorInvoiceGrossSettlement({
+    paymentAmount: input.paymentAmount,
+    outstanding: input.outstanding,
+    withholdingAmount,
+  });
+  if (settlement.withholdingAmount <= 0) {
+    return { ...settlement, liabilityCredits: [] };
+  }
+  const liabilityCredits = input.taxes.map((tax) => {
+    if (!Number.isInteger(tax.liabilityAccountId) || Number(tax.liabilityAccountId) <= 0) {
+      throw Object.assign(
+        new Error("COA Hutang PPh belum terpetakan"),
+        { httpStatus: 422, code: "WITHHOLDING_LIABILITY_ACCOUNT_REQUIRED" },
+      );
+    }
+    return { accountId: Number(tax.liabilityAccountId), amount: money(tax.amount) };
+  });
+  return { ...settlement, liabilityCredits };
 }
 
 export function deriveVendorInvoicePaymentStatus(input: {
@@ -112,6 +195,10 @@ export async function ensureVendorWithholdingRecords(
   if (!invoice) return { withholdingAmount: 0, recordCount: 0 };
 
   const legacy = legacyWithholding(invoice);
+  const componentPlans = vendorWithholdingTaxPlans(
+    invoice.invoice_breakdown,
+    String(invoice.supplier_name ?? ""),
+  );
   let taxRows = rows<Record<string, unknown>>(await executor.execute(sql`
     SELECT vit.id AS line_tax_id, vit.invoice_line_id, vit.tax_type, vit.tax_object,
            vit.base_amount, vit.tax_amount, vit.liability_account_id
@@ -123,19 +210,16 @@ export async function ensureVendorWithholdingRecords(
     ORDER BY vit.id
   `));
 
-  // Older imports persisted PPh only in the invoice header/breakdown. Make a
-  // single auditable line-tax row instead of silently treating the net transfer
-  // as a partial payment.
-  if (taxRows.length === 0 && legacy.amount > 0) {
+  // Reconcile older imports against every component/type/object. This is
+  // idempotent and also completes partially materialized mixed invoices.
+  if (componentPlans.length > 0 || legacy.amount > 0) {
     let lineRows = rows<{ id: number }>(await executor.execute(sql`
       SELECT id
       FROM vendor_invoice_lines
       WHERE invoice_id = ${vendorInvoiceId}
       ORDER BY id
-      LIMIT 1
     `));
-    let invoiceLineId = Number(lineRows[0]?.id ?? 0);
-    if (!invoiceLineId) {
+    if (lineRows.length === 0) {
       lineRows = rows<{ id: number }>(await executor.execute(sql`
         INSERT INTO vendor_invoice_lines
           (invoice_id, name, quantity, unit, unit_cost, subtotal, tax_amount,
@@ -145,23 +229,91 @@ export async function ensureVendorWithholdingRecords(
            '1', 'tax', '0', '0', '0', 'confirmed', 'Synthetic legacy header withholding line')
         RETURNING id
       `));
-      invoiceLineId = Number(lineRows[0]?.id ?? 0);
     }
-    if (invoiceLineId) {
-      await executor.execute(sql`
-        INSERT INTO vendor_invoice_line_taxes
-          (invoice_line_id, company_id, tax_type, tax_object, base_amount, tax_amount,
-           resolution_status, review_reason)
-        VALUES
-          (${invoiceLineId}, ${companyId}, ${legacy.type}, ${legacy.object},
-           ${String(legacy.base)}, ${String(legacy.amount)}, 'tax_review',
-           'Created from legacy vendor invoice withholding header')
-        ON CONFLICT (invoice_line_id, tax_type, tax_object)
-        DO UPDATE SET
-          base_amount = EXCLUDED.base_amount,
-          tax_amount = EXCLUDED.tax_amount,
-          updated_at = NOW()
-      `);
+    const firstInvoiceLineId = Number(lineRows[0]?.id ?? 0);
+    if (firstInvoiceLineId) {
+      const rawPlans = (componentPlans.length > 0
+        ? componentPlans
+        : [{
+            componentIndex: 0,
+            type: legacy.type,
+            object: legacy.object,
+            base: legacy.base,
+            amount: legacy.amount,
+            liabilityAccountId: null,
+          }]).map((plan) => ({
+            ...plan,
+            invoiceLineId: Number(lineRows[plan.componentIndex]?.id ?? firstInvoiceLineId),
+          }));
+      const plans = Array.from(rawPlans.reduce((byKey, plan) => {
+        const key = `${plan.invoiceLineId}\u0000${plan.type}\u0000${plan.object}`;
+        const existing = byKey.get(key);
+        if (existing) {
+          existing.base = money(existing.base + plan.base);
+          existing.amount = money(existing.amount + plan.amount);
+        } else {
+          byKey.set(key, { ...plan });
+        }
+        return byKey;
+      }, new Map<string, typeof rawPlans[number]>()).values());
+      if (plans.some((plan) => /\s+\+\s+/.test(plan.type))) {
+        throw Object.assign(
+          new Error(
+            `Invoice ${String(invoice.invoice_number ?? vendorInvoiceId)} hanya memiliki header PPh gabungan. `
+            + "Rincian per jenis dan tax object wajib diperbaiki sebelum pembayaran.",
+          ),
+          { httpStatus: 422, code: "COMBINED_VENDOR_WITHHOLDING_ROW" },
+        );
+      }
+      const expectedKey = (value: {
+        invoiceLineId: number;
+        type: string;
+        object: string;
+        amount: number;
+      }) => `${value.invoiceLineId}\u0000${value.type}\u0000${value.object}\u0000${money(value.amount)}`;
+      const expectedKeys = new Set(plans.map(expectedKey));
+      const persistedKeys = taxRows.map((tax) => expectedKey({
+        invoiceLineId: Number(tax.invoice_line_id),
+        type: String(tax.tax_type ?? "").trim(),
+        object: String(tax.tax_object ?? "").trim(),
+        amount: numberValue(tax.tax_amount),
+      }));
+      if (
+        hasCombinedVendorWithholdingRow(taxRows, componentPlans)
+        || persistedKeys.some((key) => !expectedKeys.has(key))
+        || new Set(persistedKeys).size !== persistedKeys.length
+      ) {
+        throw Object.assign(
+          new Error(
+            `Invoice ${String(invoice.invoice_number ?? vendorInvoiceId)} memiliki baris PPh gabungan atau tidak sesuai rincian. `
+            + "Pisahkan setiap jenis dan tax object PPh serta petakan COA liabilitas sebelum pembayaran.",
+          ),
+          { httpStatus: 422, code: "COMBINED_VENDOR_WITHHOLDING_ROW" },
+        );
+      }
+      for (const plan of plans) {
+        const exists = taxRows.some((tax) =>
+          Number(tax.invoice_line_id) === plan.invoiceLineId
+          && String(tax.tax_type ?? "").trim() === plan.type
+          && String(tax.tax_object ?? "").trim() === plan.object
+        );
+        if (exists) continue;
+        await executor.execute(sql`
+          INSERT INTO vendor_invoice_line_taxes
+            (invoice_line_id, company_id, tax_type, tax_object, base_amount, tax_amount,
+             liability_account_id, resolution_status, review_reason)
+          VALUES
+            (${plan.invoiceLineId}, ${companyId}, ${plan.type}, ${plan.object},
+             ${String(plan.base)}, ${String(plan.amount)}, NULL,
+             'tax_review',
+             'Created from legacy vendor invoice withholding breakdown')
+          ON CONFLICT (invoice_line_id, tax_type, tax_object)
+          DO UPDATE SET
+            base_amount = EXCLUDED.base_amount,
+            tax_amount = EXCLUDED.tax_amount,
+            updated_at = NOW()
+        `);
+      }
       taxRows = rows<Record<string, unknown>>(await executor.execute(sql`
         SELECT vit.id AS line_tax_id, vit.invoice_line_id, vit.tax_type, vit.tax_object,
                vit.base_amount, vit.tax_amount, vit.liability_account_id
@@ -172,6 +324,24 @@ export async function ensureVendorWithholdingRecords(
           AND vit.tax_amount > 0
         ORDER BY vit.id
       `));
+      const finalKeys = taxRows.map((tax) => expectedKey({
+        invoiceLineId: Number(tax.invoice_line_id),
+        type: String(tax.tax_type ?? "").trim(),
+        object: String(tax.tax_object ?? "").trim(),
+        amount: numberValue(tax.tax_amount),
+      }));
+      if (
+        finalKeys.length !== plans.length
+        || new Set(finalKeys).size !== finalKeys.length
+        || finalKeys.some((key) => !expectedKeys.has(key))
+      ) {
+        throw Object.assign(
+          new Error(
+            `Invoice ${String(invoice.invoice_number ?? vendorInvoiceId)} belum memiliki rincian PPh yang konsisten.`,
+          ),
+          { httpStatus: 422, code: "VENDOR_WITHHOLDING_ROWS_INCOMPLETE" },
+        );
+      }
     }
   }
 

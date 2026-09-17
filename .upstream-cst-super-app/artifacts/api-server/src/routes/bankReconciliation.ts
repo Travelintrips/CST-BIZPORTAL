@@ -71,6 +71,7 @@ import { resolveVendorPayableAccountId } from "../lib/vendorPayableAccount.js";
 import {
   ensureVendorWithholdingRecords,
   recalculateVendorInvoicePaymentStatus,
+  resolveVendorInvoiceNetSettlement,
 } from "../lib/vendorInvoicePaymentStatus.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
@@ -6990,7 +6991,6 @@ router.post(
             throw Object.assign(new Error(`Invoice ${invoiceNumber} sudah lunas atau nominalnya tidak valid`), { httpStatus: 409 });
           }
           const withholdingTaxes = withholdingByInvoice.get(Number(invoice.id)) ?? [];
-          const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
           const requestedAmount = requestedAllocationByInvoice.get(Number(invoice.id));
           const amount = requestedAmount != null
             ? requestedAmount
@@ -7007,10 +7007,11 @@ router.post(
           // proves both the supplier payment and the withholding allocation.
           // Partial cash payments remain ordinary AP settlements and must not
           // recognize the entire PPh amount prematurely.
-          const settlesNetAmount =
-            withholdingTaxTotal > 0
-            && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
-          const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
+          const settlement = resolveVendorInvoiceNetSettlement({
+            paymentAmount: amount,
+            outstanding,
+            taxes: withholdingTaxes,
+          });
           return {
             invoice,
             invoiceNumber,
@@ -7018,9 +7019,10 @@ router.post(
             amountPaid,
             outstanding,
             amount,
-            grossAmount: amount + withholdingCredit,
+            grossAmount: settlement.grossAmount,
             withholdingTaxes,
-            withholdingCredit,
+            withholdingCredit: settlement.withholdingAmount,
+            withholdingLiabilityCredits: settlement.liabilityCredits,
           };
         });
         const totalAllocation = allocations.reduce((sum, item) => sum + item.amount, 0);
@@ -7106,15 +7108,11 @@ router.post(
               ...Array.from(
                 allocations.reduce((byAccount, item) => {
                   if (item.withholdingCredit <= 0) return byAccount;
-                  for (const tax of item.withholdingTaxes) {
-                    if (tax.amount <= 0 || tax.liabilityAccountId == null) {
-                      throw Object.assign(
-                        new Error(`COA Hutang PPh untuk invoice ${item.invoiceNumber} belum terpetakan`),
-                        { httpStatus: 422 },
-                      );
-                    }
-                    const accountId = Number(tax.liabilityAccountId);
-                    byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                  for (const credit of item.withholdingLiabilityCredits) {
+                    byAccount.set(
+                      credit.accountId,
+                      (byAccount.get(credit.accountId) ?? 0) + credit.amount,
+                    );
                   }
                   return byAccount;
                 }, new Map<number, number>()),
@@ -7711,11 +7709,12 @@ router.post(
           amount: Number(row.tax_amount ?? 0),
           liabilityAccountId: row.liability_account_id == null ? null : Number(row.liability_account_id),
         })).filter((tax) => Number.isFinite(tax.amount) && tax.amount > 0);
-        const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
-        const settlesNetAmount =
-          withholdingTaxTotal > 0
-          && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
-        const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
+        const settlement = resolveVendorInvoiceNetSettlement({
+          paymentAmount: amount,
+          outstanding,
+          taxes: withholdingTaxes,
+        });
+        const withholdingCredit = settlement.withholdingAmount;
         const grossAmount = invoiceAllocation + withholdingCredit;
 
         const { rows: settingsRows } = await tx.execute(sql`
@@ -7789,15 +7788,11 @@ router.post(
               ...(() => {
                 if (withholdingCredit <= 0) return [];
                 const byAccount = new Map<number, number>();
-                for (const tax of withholdingTaxes) {
-                  if (tax.liabilityAccountId == null) {
-                    throw Object.assign(
-                      new Error(`COA Hutang PPh untuk invoice ${invoiceNumber} belum terpetakan`),
-                      { httpStatus: 422 },
-                    );
-                  }
-                  const accountId = Number(tax.liabilityAccountId);
-                  byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                for (const credit of settlement.liabilityCredits) {
+                  byAccount.set(
+                    credit.accountId,
+                    (byAccount.get(credit.accountId) ?? 0) + credit.amount,
+                  );
                 }
                 return Array.from(byAccount, ([accountId, taxAmount]) => ({
                   accountId,
