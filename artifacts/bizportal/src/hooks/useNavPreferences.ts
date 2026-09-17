@@ -30,13 +30,14 @@ async function saveNavPrefs(prefs: NavPrefs): Promise<void> {
   });
 }
 
-export function useNavPreferences() {
+export function useNavPreferences({ enabled = true }: { enabled?: boolean } = {}) {
   const qc = useQueryClient();
 
   const { data = DEFAULT_PREFS } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: fetchNavPrefs,
     staleTime: 5 * 60_000,
+    enabled,
   });
 
   const mutation = useMutation({

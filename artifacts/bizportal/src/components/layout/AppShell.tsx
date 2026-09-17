@@ -107,6 +107,7 @@ import { QuickCreate } from "./QuickCreate";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
 import { preloadNavRoute } from "@/routes";
+import { canAccessTenantDashboard } from "@/lib/tenantAccess";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -193,7 +194,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       if (!response.ok) throw new Error("Portal workload unavailable");
       return response.json() as Promise<{ summary?: Array<{ pending?: number }> }>;
     },
-    enabled: ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
+    enabled: secondaryReady && ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
     retry: false,
     refetchInterval: 30_000,
   });
@@ -202,7 +203,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     0,
   );
 
-  useAlertWebSocket({ enabled: secondaryReady });
+  useAlertWebSocket({ enabled: secondaryReady && Boolean(authUser) });
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -481,15 +482,22 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   });
   const aiDraftCount = aiDrafts.length;
 
+  const tenantDashboardAccess = canAccessTenantDashboard(
+    dbUser?.role,
+    activeCompany?.id,
+    isConsolidated,
+  );
   const { data: tenantDashboardNav } = useQuery<{ invoices?: { overdue?: number } }>({
-    queryKey: ["tenant-dashboard-nav-badge"],
+    queryKey: ["tenant-dashboard-nav-badge", activeCompany?.id],
     queryFn: async () => {
-      const r = await fetch("/api/tenant/dashboard", { credentials: "include" });
+      const r = await fetch(`/api/tenant/dashboard?companyId=${activeCompany?.id}`, {
+        credentials: "include",
+      });
       if (!r.ok) return {};
       return r.json();
     },
     refetchInterval: 60_000,
-    enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
+    enabled: secondaryReady && tenantDashboardAccess,
   });
   const tenantOverdueCount = tenantDashboardNav?.invoices?.overdue ?? 0;
 
@@ -501,7 +509,9 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     return keys.some((key) => customRolePermissions.includes(key));
   };
 
-  const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences();
+  const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences({
+    enabled: secondaryReady,
+  });
   const [customizeMode, setCustomizeMode] = useState(false);
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {

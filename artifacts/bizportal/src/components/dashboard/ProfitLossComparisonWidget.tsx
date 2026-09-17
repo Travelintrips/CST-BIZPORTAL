@@ -100,25 +100,26 @@ export function ProfitLossComparisonWidget() {
   };
 
   const { data: curr, isLoading: loadingCurr } = useQuery<KPI>({
-    queryKey: ["pl-kpi-curr", activeCompanyId, curYear, curMonth],
+    queryKey: ["accounting-dashboard-kpi", activeCompanyId, curMonth, curYear],
     queryFn: async () => {
       const r = await fetch(`/api/accounting/dashboard-kpi?${makeQs(curMonth, curYear)}`, { credentials: "include" });
       if (!r.ok) throw new Error("Gagal memuat data");
       return r.json() as Promise<KPI>;
     },
     refetchInterval: 10 * 60_000,
-    retry: 1,
+    retry: false,
+    staleTime: 5 * 60_000,
   });
 
   const { data: prev, isLoading: loadingPrev } = useQuery<KPI>({
-    queryKey: ["pl-kpi-prev", activeCompanyId, prevYear, prevMonth],
+    queryKey: ["accounting-dashboard-kpi", activeCompanyId, prevMonth, prevYear],
     queryFn: async () => {
       const r = await fetch(`/api/accounting/dashboard-kpi?${makeQs(prevMonth, prevYear)}`, { credentials: "include" });
       if (!r.ok) throw new Error("Gagal memuat data");
       return r.json() as Promise<KPI>;
     },
     staleTime: 30 * 60_000,
-    retry: 1,
+    retry: false,
   });
 
   const isLoading = loadingCurr || loadingPrev;

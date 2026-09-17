@@ -17,6 +17,56 @@ vi.mock("@/contexts/CompanyContext", () => ({
   }),
 }));
 
+vi.mock("@/components/ui/select", () => {
+  const SelectContext = React.createContext<{
+    onValueChange?: (value: string) => void;
+  }>({});
+
+  function Select({
+    children,
+    onValueChange,
+  }: {
+    children: React.ReactNode;
+    onValueChange?: (value: string) => void;
+  }) {
+    return <SelectContext.Provider value={{ onValueChange }}>{children}</SelectContext.Provider>;
+  }
+
+  function SelectTrigger({
+    children,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+    return <button type="button" {...props}>{children}</button>;
+  }
+
+  function SelectContent({ children }: { children: React.ReactNode }) {
+    return <div role="listbox">{children}</div>;
+  }
+
+  function SelectItem({
+    value,
+    children,
+  }: {
+    value: string;
+    children: React.ReactNode;
+  }) {
+    const { onValueChange } = React.useContext(SelectContext);
+    return (
+      <button type="button" role="option" onClick={() => onValueChange?.(value)}>
+        {children}
+      </button>
+    );
+  }
+
+  return {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  };
+});
+
 import AccountingHubGLPage from "@/pages/accounting/hub/general-ledger";
 
 const bankPaymentRow = {
@@ -94,8 +144,10 @@ describe("Buku Besar bank payment filters", () => {
 
     fireEvent.click(screen.getByTestId("select-gl-source-module"));
     fireEvent.click(await screen.findByRole("option", { name: "Rekonsiliasi Bank" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.click(screen.getByTestId("select-gl-payment-method"));
     fireEvent.click(await screen.findByRole("option", { name: "Transfer Bank" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.click(screen.getByRole("button", { name: "Terapkan" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));

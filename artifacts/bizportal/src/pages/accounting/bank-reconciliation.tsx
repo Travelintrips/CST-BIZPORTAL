@@ -41,6 +41,13 @@ import {
   isInhouseBankTransferDescription,
   isQrisBankApprovalAllowed,
 } from "@/lib/bankMutationPaymentType";
+import {
+  getQrisResettablePayments,
+  groupQrisResetHistoryByDate,
+  groupQrisResettablePaymentsByDate,
+  parseQrisResetHistory,
+  resetQrisPaymentsSequentially,
+} from "@/lib/qrisSettlementReset";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -59,27 +66,6 @@ interface SheetConfig {
   last_synced_at: string | null;
   last_sync_status: string | null;
   last_sync_error: string | null;
-}
-
-interface CashMutationAccount {
-  id: number;
-  code: string;
-  name: string;
-  type: string;
-  subtype: string | null;
-}
-
-interface LedgerMutationRow {
-  id: number;
-  ledger_date: string;
-  source_type: string | null;
-  source_id: number | null;
-  source_ref: string | null;
-  account_code: string;
-  account_name: string;
-  debit: string | number | null;
-  credit: string | number | null;
-  description: string | null;
 }
 
 interface Company {
@@ -4292,6 +4278,7 @@ function QrisMutationCard({
     paymentId: number;
     paymentNumber: string;
     settlementStatus: string;
+    settlementDate?: string;
   }) => void;
   unsettledPaymentId?: number | null;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
@@ -4892,6 +4879,9 @@ function QrisMutationCard({
                                             paymentId: numericPaymentId,
                                             paymentNumber: payment,
                                             settlementStatus: paymentSettlementStatus,
+                                            settlementDate: expectedSettlementDate
+                                              ? String(expectedSettlementDate).slice(0, 10)
+                                              : undefined,
                                           });
                                         }
                                       }}
@@ -5280,6 +5270,7 @@ function MutationCard({
     paymentId: number;
     paymentNumber: string;
     settlementStatus: string;
+    settlementDate?: string;
   }) => void;
   unsettledPaymentId?: number | null;
   onApproveQris: (m: BankMutation) => void;
@@ -7623,199 +7614,6 @@ function SheetConfigCollapsed() {
 // Cash account mutation view
 // ─────────────────────────────────────────────────────────────────────────────
 
-function CashAccountMutationView() {
-  const { activeCompanyId, isConsolidated } = useCompany();
-  const [accountId, setAccountId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-
-  const accountsQ = useQuery({
-    queryKey: ["cash-mutation-accounts", activeCompanyId],
-    queryFn: async () => {
-      const response = await fetch(
-        "/api/accounting/bank-disbursements/meta/accounts?subtype=cash_bank",
-        { credentials: "include" },
-      );
-      if (!response.ok) throw new Error(await response.text());
-      return response.json() as Promise<CashMutationAccount[]>;
-    },
-    enabled: !isConsolidated && Number(activeCompanyId) > 0,
-  });
-
-  const accounts = (accountsQ.data ?? [])
-    .filter((account) => /kas besar|kas kecil/i.test(account.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  useEffect(() => {
-    if (!accounts.some((account) => String(account.id) === accountId)) {
-      setAccountId("");
-    }
-  }, [accounts, accountId]);
-
-  const ledgerQ = useQuery({
-    queryKey: ["cash-account-mutations", activeCompanyId, accountId, from, to],
-    queryFn: async () => {
-      const params = new URLSearchParams({
-        company_id: String(activeCompanyId),
-        account_id: accountId,
-        limit: "500",
-      });
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
-      const response = await fetch(`/api/accounting/ledger?${params}`, { credentials: "include" });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json() as Promise<LedgerMutationRow[]>;
-    },
-    enabled: !isConsolidated && Number(activeCompanyId) > 0 && !!accountId,
-  });
-
-  const rows = ledgerQ.data ?? [];
-  const totalIn = rows.reduce((sum, row) => sum + Number(row.debit ?? 0), 0);
-  const totalOut = rows.reduce((sum, row) => sum + Number(row.credit ?? 0), 0);
-  const net = totalIn - totalOut;
-  const selectedAccount = accounts.find((account) => String(account.id) === accountId);
-
-  const formatAmount = (amount: number) =>
-    new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.abs(amount));
-  const formatDate = (value: string) => {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("id-ID");
-  };
-
-  return (
-    <Card className="border-emerald-200 dark:border-emerald-900">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ArrowUpRight className="h-4 w-4 text-emerald-600" />
-          Mutasi Kas Besar / Kas Kecil
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Pilih akun untuk melihat seluruh transaksi masuk dan keluar dari ledger akun tersebut.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {isConsolidated ? (
-          <Alert>
-            <AlertDescription className="text-sm">
-              Pilih satu perusahaan untuk melihat mutasi Kas Besar atau Kas Kecil.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-[230px] flex-1 space-y-1.5">
-                <Label htmlFor="cash-mutation-account">Akun mutasi</Label>
-                <Select value={accountId} onValueChange={setAccountId}>
-                  <SelectTrigger id="cash-mutation-account">
-                    <SelectValue placeholder={accountsQ.isLoading ? "Memuat akun..." : "Pilih Kas Besar atau Kas Kecil"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accounts.map((account) => (
-                      <SelectItem key={account.id} value={String(account.id)}>
-                        {account.name} ({account.code})
-                      </SelectItem>
-                    ))}
-                    {!accountsQ.isLoading && accounts.length === 0 && (
-                      <SelectItem value="__none__" disabled>
-                        COA Kas Besar/Kas Kecil belum tersedia
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="cash-mutation-from">Dari</Label>
-                <Input id="cash-mutation-from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="cash-mutation-to">Sampai</Label>
-                <Input id="cash-mutation-to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-              </div>
-            </div>
-
-            {!accountId ? (
-              <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                Pilih Kas Besar atau Kas Kecil untuk menampilkan mutasinya.
-              </div>
-            ) : ledgerQ.isLoading ? (
-              <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Memuat mutasi akun...
-              </div>
-            ) : ledgerQ.isError ? (
-              <Alert variant="destructive">
-                <AlertDescription>Mutasi akun gagal dimuat. Silakan coba lagi.</AlertDescription>
-              </Alert>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
-                    <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
-                      <ArrowDownLeft className="h-3.5 w-3.5" /> Total Masuk
-                    </div>
-                    <div className="mt-1 text-lg font-semibold text-emerald-800 dark:text-emerald-200">Rp {formatAmount(totalIn)}</div>
-                  </div>
-                  <div className="rounded-md border border-red-200 bg-red-50/60 p-3 dark:border-red-900 dark:bg-red-950/30">
-                    <div className="flex items-center gap-1.5 text-xs text-red-700 dark:text-red-300">
-                      <ArrowUpRight className="h-3.5 w-3.5" /> Total Keluar
-                    </div>
-                    <div className="mt-1 text-lg font-semibold text-red-800 dark:text-red-200">Rp {formatAmount(totalOut)}</div>
-                  </div>
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <div className="text-xs text-muted-foreground">Selisih mutasi</div>
-                    <div className={`mt-1 text-lg font-semibold ${net >= 0 ? "text-emerald-700" : "text-red-700"}`}>
-                      {net < 0 ? "-" : ""}Rp {formatAmount(net)}
-                    </div>
-                  </div>
-                </div>
-
-                {rows.length === 0 ? (
-                  <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    Belum ada jurnal posted untuk {selectedAccount?.name ?? "akun ini"} pada periode tersebut.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted/30">
-                          <TableHead>Tanggal</TableHead>
-                          <TableHead>Keterangan</TableHead>
-                          <TableHead>Sumber</TableHead>
-                          <TableHead className="text-right">Masuk</TableHead>
-                          <TableHead className="text-right">Keluar</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {rows.map((row) => (
-                          <TableRow key={row.id}>
-                            <TableCell className="whitespace-nowrap text-xs">{formatDate(row.ledger_date)}</TableCell>
-                            <TableCell className="min-w-[240px] text-sm">{row.description || "—"}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {row.source_type || "—"}{row.source_id != null ? ` #${row.source_id}` : ""}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-xs text-emerald-700">
-                              {Number(row.debit ?? 0) > 0 ? `Rp ${formatAmount(Number(row.debit))}` : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-xs text-red-700">
-                              {Number(row.credit ?? 0) > 0 ? `Rp ${formatAmount(Number(row.credit))}` : "—"}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Tampilan ini memakai ledger immutable dan hanya menampilkan jurnal yang sudah diposting. Transfer yang masih berstatus draft akan muncul setelah proses <strong>Post ke Accounting</strong>.
-                </p>
-              </>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Onboarding Modal
 // ─────────────────────────────────────────────────────────────────────────────
@@ -8066,6 +7864,32 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
+  const {
+    data: qrisResetHistoryData,
+    isLoading: qrisResetHistoryLoading,
+    error: qrisResetHistoryError,
+    refetch: refetchQrisResetHistory,
+  } = useQuery({
+    queryKey: ["qris-settlement-reset-history", qrisCompanyId],
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const params = new URLSearchParams({
+        from: "2020-01-01",
+        to: today,
+        limit: "500",
+        offset: "0",
+      });
+      const response = await fetch(`/api/audit-logs?${params}`, { credentials: "include" });
+      if (!response.ok) throw new Error(await response.text());
+      const body = await response.json() as { rows?: unknown[] };
+      return groupQrisResetHistoryByDate(
+        parseQrisResetHistory((body.rows ?? []) as Parameters<typeof parseQrisResetHistory>[0]),
+      );
+    },
+    enabled: qrisCompanyId != null,
+    refetchInterval: 30_000,
+  });
+
   const qrisDryRunMut = useMutation({
     mutationFn: async (mutationId?: number) => {
       if (qrisCompanyId == null) {
@@ -8229,8 +8053,10 @@ export default function BankReconciliationPage() {
   const qrisSettlementStatusMut = useMutation({
     mutationFn: async ({
       paymentId,
+      settlementDate,
     }: {
       paymentId: number;
+      settlementDate?: string;
       silent?: boolean;
     }) => {
       const response = await fetch(
@@ -8245,6 +8071,7 @@ export default function BankReconciliationPage() {
             // needs to type a reason for this controlled reset action.
             reason: "Reset status settlement QRIS melalui aksi langsung.",
             companyId: qrisCompanyId,
+            ...(settlementDate ? { settlementDate } : {}),
           }),
         },
       );
@@ -8265,6 +8092,7 @@ export default function BankReconciliationPage() {
           description: result.message ?? "Status payment sudah diperbarui.",
         });
         await Promise.all([refetchQrisAudit(), refetch()]);
+        void refetchQrisResetHistory();
         qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
         qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
       }
@@ -8394,53 +8222,9 @@ export default function BankReconciliationPage() {
       String(candidate.status ?? "").toLowerCase(),
     ),
   );
-  const qrisResettablePayments = Array.from(
-    (qrisAuditData?.candidates ?? []).reduce((payments, candidate) => {
-      const blockedPaymentIds = new Set(
-        (
-          candidate.active_settlement_payment_ids
-          ?? candidate.settled_payment_ids
-          ?? []
-        ).map(Number),
-      );
-      for (const item of candidate.payment_items ?? []) {
-        const paymentId = Number(item.paymentId ?? item.payment_id);
-        const settlementStatus = String(
-          item.settlementStatus
-          ?? item.settlement_status
-          ?? "unsettled",
-        ).toLowerCase();
-        const settlementDate = String(
-          candidate.estimated_settlement_date
-          ?? item.expectedSettlementDate
-          ?? item.expected_settlement_date
-          ?? "",
-        ).slice(0, 10);
-        if (
-          Number.isSafeInteger(paymentId)
-          && paymentId > 0
-          && settlementDate
-          && settlementStatus !== "unsettled"
-          && !blockedPaymentIds.has(paymentId)
-          && !payments.has(paymentId)
-        ) {
-          payments.set(paymentId, {
-            paymentId,
-            paymentNumber: item.payment_number ?? item.paymentNumber ?? `SCPAY-SC-${paymentId}`,
-            settlementDate,
-          });
-        }
-      }
-      return payments;
-    }, new Map<number, {
-      paymentId: number;
-      paymentNumber: string;
-      settlementDate: string;
-    }>()),
-  ).map(([, payment]) => payment);
-  const qrisResettableDates = Array.from(
-    new Set(qrisResettablePayments.map((payment) => payment.settlementDate)),
-  ).sort();
+  const qrisResettablePayments = getQrisResettablePayments(qrisAuditData?.candidates ?? []);
+  const qrisResettableGroups = groupQrisResettablePaymentsByDate(qrisResettablePayments);
+  const qrisResettableDates = qrisResettableGroups.map((group) => group.settlementDate);
   const getQrisBulkResetPaymentsForDate = (settlementDate: string) =>
     qrisResettablePayments.filter((payment) => payment.settlementDate === settlementDate);
 
@@ -8451,18 +8235,18 @@ export default function BankReconciliationPage() {
     }
 
     setQrisBulkResetPendingDate(settlementDate);
-    let succeeded = 0;
-    let failed = 0;
-    for (const payment of payments) {
-      try {
-        await qrisSettlementStatusMut.mutateAsync({ paymentId: payment.paymentId, silent: true });
-        succeeded += 1;
-      } catch {
-        failed += 1;
-      }
-    }
+    const result = await resetQrisPaymentsSequentially(
+      payments,
+      (paymentId) => qrisSettlementStatusMut.mutateAsync({
+        paymentId,
+        settlementDate,
+        silent: true,
+      }),
+    );
+    const succeeded = result.succeededPaymentIds.length;
+    const failed = result.failedPaymentIds.length;
     setQrisBulkResetPendingDate(null);
-    await Promise.all([refetchQrisAudit(), refetch()]);
+    await Promise.all([refetchQrisAudit(), refetch(), refetchQrisResetHistory()]);
     qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     toast({
@@ -9848,8 +9632,6 @@ export default function BankReconciliationPage() {
           </div>
         </div>
 
-        <CashAccountMutationView />
-
         {/* ── Step Progress ─────────────────────────────────── */}
         <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
 
@@ -10397,7 +10179,12 @@ export default function BankReconciliationPage() {
                                                    onClick={(event) => {
                                                      event.stopPropagation();
                                                      if (canRequestUnsettle) {
-                                                       qrisSettlementStatusMut.mutate({ paymentId: numericPaymentId });
+                                                        qrisSettlementStatusMut.mutate({
+                                                          paymentId: numericPaymentId,
+                                                          settlementDate: candidate.estimated_settlement_date
+                                                            ? String(candidate.estimated_settlement_date).slice(0, 10)
+                                                            : undefined,
+                                                        });
                                                      }
                                                    }}
                                                  >
@@ -10650,6 +10437,80 @@ export default function BankReconciliationPage() {
             </Card>
           )}
 
+          <Card className="mb-3 border-slate-200 dark:border-slate-800">
+            <CardHeader className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="flex items-center gap-1.5 text-xs">
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                    Riwayat reset settlement QRIS
+                  </CardTitle>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Riwayat dibaca dari audit log server dan dikelompokkan berdasarkan tanggal settlement.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 text-[11px]"
+                  onClick={() => void refetchQrisResetHistory()}
+                  disabled={qrisResetHistoryLoading}
+                >
+                  <RefreshCw className={`h-3 w-3 ${qrisResetHistoryLoading ? "animate-spin" : ""}`} />
+                  Muat ulang
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="px-3 pb-3 pt-0">
+              {qrisResetHistoryLoading ? (
+                <p className="py-3 text-center text-xs text-muted-foreground">Memuat riwayat...</p>
+              ) : qrisResetHistoryError ? (
+                <div className="flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <span>Riwayat audit tidak dapat dimuat dari server.</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 border-red-300 text-[11px] text-red-700"
+                    onClick={() => void refetchQrisResetHistory()}
+                  >
+                    Coba lagi
+                  </Button>
+                </div>
+              ) : qrisResetHistoryData && qrisResetHistoryData.length > 0 ? (
+                <div className="divide-y rounded-md border">
+                  {qrisResetHistoryData.map((group) => (
+                    <div
+                      key={group.settlementDate ?? "unknown"}
+                      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                    >
+                      <div>
+                        <p className="text-xs font-semibold">
+                          {group.settlementDate ? fmtDate(group.settlementDate) : "Tanggal settlement tidak tercatat"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {group.paymentCount} payment di-reset · {group.entries.length} aktivitas audit
+                        </p>
+                      </div>
+                      <div className="text-right text-[10px] text-muted-foreground">
+                        {group.entries[0]?.createdAt
+                          ? new Date(group.entries[0].createdAt).toLocaleString("id-ID")
+                          : "Waktu tidak tercatat"}
+                        <br />
+                        oleh {group.entries[0]?.userEmail ?? "Operator tidak tercatat"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="py-3 text-center text-xs text-muted-foreground">
+                  Belum ada riwayat reset settlement QRIS.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           {isLoading ? (
             <div className="space-y-3">
               {[1, 2, 3].map(i => (
@@ -10714,7 +10575,10 @@ export default function BankReconciliationPage() {
                     setQrisPaymentDate(target.paymentDate);
                   }}
                    onRequestUnsettlePayment={(target) => {
-                     qrisSettlementStatusMut.mutate({ paymentId: target.paymentId });
+                     qrisSettlementStatusMut.mutate({
+                       paymentId: target.paymentId,
+                       settlementDate: target.settlementDate,
+                     });
                    }}
                    unsettledPaymentId={
                      qrisSettlementStatusMut.isPending

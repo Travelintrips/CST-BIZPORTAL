@@ -1,8 +1,9 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
+import { getDevSession, getProductionSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 const router: IRouter = Router();
+
 
 interface VendorInvoiceListRow {
   id: number;
@@ -92,26 +93,88 @@ function getLocalApiUser(req: Request): DevAuthUser | null {
   if (devUser) return devUser;
   if (isDevelopmentEnvironment()) return null;
 
-  // Production currently runs the BizPortal UI in its intentional shared
-  // admin/no-login mode. Keep local Supabase purchase actions consistent with
-  // that mode while still applying the route's role and company checks.
-  return {
-    id: "production-no-login",
-    email: "production-no-login@bizportal.local",
-    firstName: "CST",
-    lastName: "Admin",
-    role: "admin",
-    companyId: null,
-  };
-}
+type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
 
-router.use((req, res, next) => {
-  const user = getLocalApiUser(req);
-  if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
+
+async function authenticatePurchaseUser(
+  req: PurchaseRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (isDevelopmentEnvironment()) {
+    const user = getDevSession(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (user.role.toLowerCase() !== "admin") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    req.purchaseUser = user;
+    next();
+    return;
+  }
+
+  const session = getProductionSession(req);
+  if (!session) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  next();
+
+  try {
+    const result = await pool.query<{
+      user_data: Record<string, unknown>;
+    }>(
+      `select to_jsonb(u) user_data
+       from public.users u
+       where lower(coalesce(to_jsonb(u)->>'email', '')) = $1
+       limit 1`,
+      [session.email],
+    );
+    const userData = result.rows[0]?.user_data;
+    if (!userData) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const email = typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
+    const role = typeof userData.role === "string" ? userData.role.trim().toLowerCase() : "";
+    if (email !== session.email || role !== "admin") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    const rawCompanyId = userData.company_id ?? userData.companyId;
+    const parsedCompanyId = rawCompanyId === null || rawCompanyId === undefined
+      ? null
+      : Number(rawCompanyId);
+    req.purchaseUser = {
+      id: session.id,
+      email,
+      firstName: typeof userData.first_name === "string" ? userData.first_name : null,
+      lastName: typeof userData.last_name === "string" ? userData.last_name : null,
+      role,
+      companyId: parsedCompanyId !== null && Number.isInteger(parsedCompanyId) && parsedCompanyId > 0
+        ? parsedCompanyId
+        : null,
+    };
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Failed to authorize purchase user");
+    res.status(503).json({ error: "Authorization service unavailable" });
+  }
+}
+
+router.use("/purchase-workflow", authenticatePurchaseUser);
+
+// Purchase Workflow owns the vendor-invoice schema and withholding lifecycle.
+// The proxy workspace must authenticate these requests, then let the parent
+// router forward them to the upstream service instead of querying its unrelated
+// local database. In particular, GET/read/refresh requests must never create
+// withholding records as a local fallback.
+router.use("/purchase-workflow/vendor-invoices", (_req, _res, next) => {
+  next("router");
 });
 
 function first(value: unknown): string | undefined {
@@ -128,38 +191,53 @@ function sendError(res: Response, status: number, error: string, code: string, d
  * source of truth for the AP screen. A vendor invoice is paid only by active
  * allocations owned by a final Bank Reconciliation settlement.
  *
- * The allocation table has had more than one amount-column name across the
- * upstream schema revisions. Reading the JSON representation keeps this
- * projection compatible without changing the schema or mutating any data.
+ * Keep the compatibility reads for upstream schema revisions, but aggregate
+ * them once per request instead of running a correlated subquery for every
+ * invoice row.
  */
-const CANONICAL_VENDOR_INVOICE_PAID_SQL = `
-  coalesce((
-    select sum(
+const RECONCILED_PAYMENT_CTE = `
+  with reconciled_vendor_invoice_payments as (
+    select
       coalesce(
-        nullif(to_jsonb(pa)->>'amount', '')::numeric,
-        nullif(to_jsonb(pa)->>'allocated_amount', '')::numeric,
-        nullif(to_jsonb(pa)->>'allocation_amount', '')::numeric,
-        0
-      )
-    )
+        nullif(to_jsonb(pa)->>'vendor_invoice_id', ''),
+        nullif(to_jsonb(pa)->>'invoice_id', '')
+      )::bigint as invoice_id,
+      nullif(to_jsonb(pa)->>'company_id', '')::bigint as company_id,
+      sum(
+        coalesce(
+          nullif(to_jsonb(pa)->>'amount', '')::numeric,
+          nullif(to_jsonb(pa)->>'allocated_amount', '')::numeric,
+          nullif(to_jsonb(pa)->>'allocation_amount', '')::numeric,
+          0
+        )
+      ) as paid_amount
     from public.payment_allocations pa
     left join public.payment_matching_groups pmg
       on pmg.id = nullif(to_jsonb(pa)->>'group_id', '')::bigint
     left join public.bank_mutations bm
       on bm.id = nullif(to_jsonb(pa)->>'mutation_id', '')::bigint
-    where coalesce(
-            nullif(to_jsonb(pa)->>'vendor_invoice_id', ''),
-            nullif(to_jsonb(pa)->>'invoice_id', '')
-          ) = vi.id::text
-      and nullif(to_jsonb(pa)->>'company_id', '') = vi.company_id::text
+    where nullif(to_jsonb(pa)->>'company_id', '')::bigint = $1
       and lower(coalesce(to_jsonb(pa)->>'is_active', 'true')) in ('true', 't', '1')
       and (
         lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
         or lower(coalesce(to_jsonb(pa)->>'status', '')) in ('final', 'posted', 'reconciled')
         or lower(coalesce(to_jsonb(bm)->>'status', '')) in ('final', 'posted')
       )
-  ), 0)
+    group by 1, 2
+  )
 `;
+
+const RECONCILED_PAYMENT_JOIN = `
+  left join reconciled_vendor_invoice_payments rvip
+    on rvip.invoice_id = vi.id
+   and rvip.company_id = vi.company_id
+`;
+
+function parsePositiveQueryInt(value: unknown, fallback: number, maximum: number): number {
+  const parsed = Number(first(value));
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+}
 
 function parseInvoiceId(req: Request): number | null {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -167,9 +245,9 @@ function parseInvoiceId(req: Request): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-function parseCompanyId(req: Request): number | null {
+function parseCompanyId(req: PurchaseRequest): number | null {
   const raw = first(req.query.company) ?? first(req.query.companyId) ?? first(req.query.company_id);
-  const sessionCompanyId = getLocalApiUser(req)?.companyId ?? null;
+  const sessionCompanyId = req.purchaseUser?.companyId ?? null;
   if (!raw || raw === "all") return sessionCompanyId;
   const companyId = Number(raw);
   if (!Number.isInteger(companyId) || companyId <= 0) return null;
@@ -205,32 +283,53 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
     sendError(res, 400, "Perusahaan invoice tidak valid", "INVALID_COMPANY");
     return;
   }
+  const pageSize = parsePositiveQueryInt(req.query.pageSize ?? req.query.limit, 50, 100);
+  const page = parsePositiveQueryInt(req.query.page, 1, 10_000);
+  const offset = (page - 1) * pageSize;
   try {
+
     const result = await pool.query<VendorInvoiceListRow>(`
        select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
               vi.status::text status, vi.grand_total,
              ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
+
+    const result = await pool.query(`
+      ${RECONCILED_PAYMENT_CTE}
+      select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
+             vi.status::text status, vi.grand_total,
+             coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
+
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
-             vi.journal_entry_id, ae.status::text journal_status
-      from public.vendor_invoices vi
-      left join public.accounting_entries ae on ae.id = vi.journal_entry_id
-      where vi.company_id = $1
-      order by vi.created_at desc, vi.id desc
-    `, [companyId]);
-    res.json(result.rows.map((row) => ({
-      id: row.id,
-      invoiceNumber: row.invoice_number,
-      vendorInvoiceRef: row.vendor_invoice_ref,
-      supplierName: row.supplier_name,
-      status: row.status,
-      grandTotal: Number(row.grand_total),
-      reconciledAmountPaid: Number(row.reconciled_amount_paid),
-      amountPaid: Number(row.reconciled_amount_paid),
-      threeWayMatchStatus: row.three_way_match_status,
-      companyId: row.company_id,
-      invoiceDate: row.invoice_date,
-      journalStatus: row.journal_status,
-    })));
+             vi.journal_entry_id, ae.status::text journal_status,
+             count(*) over()::int total_count
+        from public.vendor_invoices vi
+        left join public.accounting_entries ae on ae.id = vi.journal_entry_id
+        ${RECONCILED_PAYMENT_JOIN}
+       where vi.company_id = $1
+       order by vi.created_at desc nulls last, vi.id desc
+       limit $2 offset $3
+    `, [companyId, pageSize, offset]);
+    const total = result.rows[0]?.total_count ?? 0;
+    res.json({
+      data: result.rows.map((row) => ({
+        id: row.id,
+        invoiceNumber: row.invoice_number,
+        vendorInvoiceRef: row.vendor_invoice_ref,
+        supplierName: row.supplier_name,
+        status: row.status,
+        grandTotal: Number(row.grand_total),
+        reconciledAmountPaid: Number(row.reconciled_amount_paid),
+        amountPaid: Number(row.reconciled_amount_paid),
+        threeWayMatchStatus: row.three_way_match_status,
+        companyId: row.company_id,
+        invoiceDate: row.invoice_date,
+        journalStatus: row.journal_status,
+      })),
+      page,
+      pageSize,
+      total,
+      hasMore: offset + result.rows.length < total,
+    });
   } catch (error) {
     req.log.error({ error }, "Failed to load vendor invoices from Supabase");
     sendError(res, 503, "Data vendor invoice tidak dapat dimuat", "VENDOR_INVOICE_LOAD_FAILED");
@@ -271,14 +370,20 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
     return;
   }
   try {
+
     const invoiceResult = await pool.query<VendorInvoiceDetailRow>(`
+
+    const invoiceResult = await pool.query(`
+      ${RECONCILED_PAYMENT_CTE}
+
       select vi.*, vi.status::text status,
-             ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
+              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
              ae.status::text journal_status, ae.entry_number journal_entry_number
       from public.vendor_invoices vi
       left join public.accounting_entries ae on ae.id = vi.journal_entry_id
-      where vi.id = $1 and vi.company_id = $2
-    `, [invoiceId, companyId]);
+       ${RECONCILED_PAYMENT_JOIN}
+       where vi.id = $2 and vi.company_id = $1
+    `, [companyId, invoiceId]);
     const row = invoiceResult.rows[0];
     if (!row) {
       sendError(res, 404, "Invoice tidak ditemukan", "INVOICE_NOT_FOUND");
@@ -465,7 +570,7 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, now(), $9, $10)`,
       [
         null,
-        getLocalApiUser(req)?.email ?? "local-admin",
+        (req as PurchaseRequest).purchaseUser?.email ?? "unknown-admin",
         "reset_payment",
         "vendor_invoice",
         String(invoiceId),

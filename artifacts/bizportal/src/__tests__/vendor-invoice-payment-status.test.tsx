@@ -49,9 +49,20 @@ const postedFullyPaidInvoice = {
   amountPaid: "26852296",
   journalStatus: "posted",
   threeWayMatchStatus: "unmatched",
-  lines: [],
+  lines: [{
+    id: 6401,
+    name: "Jasa tanpa PPh",
+    quantity: "1",
+    unit: "lot",
+    unitCost: "26852296",
+    subtotal: "26852296",
+    taxAmount: "0",
+    notes: "",
+    withholdingAmount: "0",
+  }],
   lineTaxes: [],
   withholdingRecords: [],
+  withholdingTaxAmount: "0",
 };
 
 function response(body: unknown, status = 200): Response {
@@ -152,6 +163,25 @@ describe("vendor invoice payment status", () => {
     });
     await waitFor(() => expect(screen.getByText("paid")).toBeTruthy());
     expect(detailReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not load PPh liability accounts when the invoice has no withholding", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <VendorInvoiceEditorPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("PPh dipotong saat bayar")).toBeTruthy();
+    expect(screen.getByText("Tidak ada PPh")).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/vendor-invoices/liability-accounts"))).toBe(false);
   });
 
   it("resets an orphan payment and refreshes the invoice status", async () => {

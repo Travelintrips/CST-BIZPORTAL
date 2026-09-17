@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./connection": "./src/connection.ts",
+    "./gcp-database-secret": "./src/gcp-database-secret.ts"
   },
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
