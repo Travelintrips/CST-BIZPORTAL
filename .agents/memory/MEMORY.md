@@ -17,4 +17,5 @@
 - [General ledger filter test harness](general-ledger-filter-test-harness.md) — isolate Radix Select focus management when testing ledger filter behavior in jsdom.
 
 - [Optional vendor withholding](optional-vendor-withholding.md) — zero PPh and empty withholding records are valid read states; do not load PPh accounts or mutate records on GET.
+- [PPh reset scope](pph-reset-scope.md) — clearing only withholding records leaves denormalized invoice breakdown values that can make PPh reappear.
 
