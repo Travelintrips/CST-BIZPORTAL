@@ -14,6 +14,8 @@ import {
 import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 
 const router: IRouter = Router();
+const UPSTREAM_REQUEST_TIMEOUT_MS = 15_000;
+const UPSTREAM_STREAM_TIMEOUT_MS = 120_000;
 
 router.use(healthRouter);
 
@@ -73,6 +75,9 @@ async function establishDevelopmentUpstreamSession(
       },
     );
 
+    upstream.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      upstream.destroy(new Error("Development upstream login timed out"));
+    });
     upstream.on("error", () => {
       // The upstream bridge is optional in development. The local signed
       // session remains sufficient for API-owned routes when the temporary
@@ -83,7 +88,59 @@ async function establishDevelopmentUpstreamSession(
   });
 }
 
-router.use(createDevAuthRouter({ onLogin: establishDevelopmentUpstreamSession }));
+async function establishProductionUpstreamSession(
+  accessToken: string,
+  _user: DevAuthUser,
+  response: Response,
+): Promise<void> {
+  const upstreamOrigin = await getConfiguredUpstreamOrigin();
+  const exchangeUrl = buildUpstreamUrl("/api/auth/supabase-exchange", upstreamOrigin);
+  const body = JSON.stringify({ access_token: accessToken });
+
+  return new Promise((resolve, reject) => {
+    const upstream = https.request(
+      exchangeUrl,
+      {
+        method: "POST",
+        headers: {
+          host: exchangeUrl.host,
+          origin: exchangeUrl.origin,
+          referer: `${exchangeUrl.origin}/`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      },
+      (upstreamResponse) => {
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        const cookies = rewriteSetCookies(upstreamResponse.headers["set-cookie"]) ?? [];
+        upstreamResponse.resume();
+        upstreamResponse.on("end", () => {
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(new Error(`Production upstream session exchange failed (${statusCode})`));
+            return;
+          }
+          if (cookies.length === 0) {
+            reject(new Error("Production upstream session exchange returned no cookie"));
+            return;
+          }
+          for (const cookie of cookies) response.append("Set-Cookie", cookie);
+          resolve();
+        });
+      },
+    );
+
+    upstream.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      upstream.destroy(new Error("Production upstream session exchange timed out"));
+    });
+    upstream.on("error", reject);
+    upstream.end(body);
+  });
+}
+
+router.use(createDevAuthRouter({
+  onLogin: establishDevelopmentUpstreamSession,
+  onProductionLogin: establishProductionUpstreamSession,
+}));
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);
@@ -127,6 +184,18 @@ router.use(async (req, res) => {
     },
   );
 
+  const isStream = req.originalUrl.endsWith("/alerts/stream")
+    || req.originalUrl.endsWith("/drivers/events");
+  upstream.setTimeout(
+    isStream ? UPSTREAM_STREAM_TIMEOUT_MS : UPSTREAM_REQUEST_TIMEOUT_MS,
+    () => {
+      upstream.destroy(new Error("BizPortal upstream request timed out"));
+    },
+  );
+  req.on("aborted", () => upstream.destroy(new Error("Client request aborted")));
+  res.on("close", () => {
+    if (!res.writableFinished) upstream.destroy(new Error("Client response closed"));
+  });
   upstream.on("error", (error) => {
     req.log.error({ error, upstream: upstreamUrl.origin }, "BizPortal API proxy failed");
     if (!res.headersSent) {

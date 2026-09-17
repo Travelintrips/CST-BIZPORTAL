@@ -52,9 +52,10 @@ const CompanyContext = createContext<CompanyContextValue>({
 
 const STORAGE_KEY = "biz_active_company_id";
 const CONSOLIDATED_STORAGE_VALUE = "all";
+const COMPANY_REQUEST_TIMEOUT_MS = 10_000;
 
 export function CompanyProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isApiAvailable } = useSupabaseAuth();
+  const { isAuthenticated, isApiAvailable, signOut } = useSupabaseAuth();
   const [companies, setCompanies] = useState<Company[]>([]);
 
   const [activeCompanyId, setActiveCompanyIdState] = useState<CompanyScope>(() => {
@@ -71,10 +72,23 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
   const fetchedRef = useRef(false);
 
   const fetchCompanies = useCallback(async () => {
-    if (!isApiAvailable) return;
+    if (!isApiAvailable) {
+      setIsLoading(false);
+      return;
+    }
 
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), COMPANY_REQUEST_TIMEOUT_MS);
+    setIsLoading(true);
     try {
-      const res = await fetch("/api/companies", { credentials: "include" });
+      const res = await fetch("/api/companies", {
+        credentials: "include",
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
       if (!res.ok) return;
       const data = (await res.json()) as Company[];
       setCompanies(data);
@@ -91,9 +105,10 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // silently ignore
     } finally {
+      window.clearTimeout(timeout);
       setIsLoading(false);
     }
-  }, [activeCompanyId, isApiAvailable]);
+  }, [activeCompanyId, isApiAvailable, signOut]);
 
   useEffect(() => {
     if (isAuthenticated) { fetchedRef.current = false; }

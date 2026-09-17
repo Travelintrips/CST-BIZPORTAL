@@ -813,12 +813,29 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
     const page = Math.max(Number(first(req.query.page) ?? 1), 1);
     if (!Number.isFinite(limit) || !Number.isFinite(page)) throw new Error("INVALID_FILTER");
     const sortBy = first(req.query.sort_by) ?? "date";
-    const sortDirection = first(req.query.sort_dir) === "asc" ? 1 : -1;
+    const sortDirection = first(req.query.sort_dir) === "asc" ? "asc" : "desc";
     const sortable = new Set([
       "date", "month", "entry_number", "source_module", "account_code",
       "account_type", "partner_name", "ref", "debit", "credit", "status", "payment_method",
     ]);
     if (!sortable.has(sortBy)) throw new Error("INVALID_FILTER");
+    const sortColumn: Record<string, string> = {
+      date: "date",
+      month: "date",
+      entry_number: "entry_number",
+      source_module: "source_module",
+      account_code: "account_code",
+      account_type: "account_type",
+      partner_name: "partner_name",
+      ref: "ref",
+      debit: "debit",
+      credit: "credit",
+      status: "status",
+      payment_method: "payment_method",
+    };
+    const orderBy = sortColumn[sortBy];
+    const orderExpression = sortBy === "month" ? "date_trunc('month', date)" : orderBy;
+    const mainValues = [...values, limit, (page - 1) * limit];
     const result = await pool.query<{
       line_id: number; entry_id: number; entry_number: string; company_id: number; branch_id: number | null;
       division_id: number | null; date: Date; source_module: string | null; source_schema: string | null;
@@ -826,21 +843,38 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
       line_description: string | null; status: string; journal_name: string; journal_type: string;
       account_id: number; account_code: string; account_name: string; account_type: string;
       normal_balance: string; debit: string; credit: string; created_at: Date; posted_at: Date | null;
-      payment_method: string | null; partner_name: string | null;
+      payment_method: string | null; partner_name: string | null; running_balance: string;
+      total_count: number; filtered_debit: string; filtered_credit: string;
     }>(`
-      select gl.*, coalesce(a.normal_balance::text, 'DEBIT') normal_balance, e.payment_method,
-        max(p.partner_name) partner_name
-      from public.accounting_general_ledger_v gl
-      left join public.chart_of_accounts a on a.id = gl.account_id
-      left join public.accounting_entries e on e.id = gl.entry_id
-      left join public.accounting_payments p on p.entry_id = gl.entry_id
-      where gl.status::text = 'posted' ${filters}
-      group by gl.line_id, gl.entry_id, gl.entry_number, gl.company_id, gl.branch_id, gl.division_id,
-        gl.date, gl.source, gl.source_module, gl.source_schema, gl.source_table, gl.source_id,
-        gl.ref, gl.entry_description, gl.line_description, gl.status, gl.journal_name, gl.journal_type,
-        gl.account_id, gl.account_code, gl.account_name, gl.account_type, gl.debit, gl.credit,
-        gl.created_at, gl.posted_at, gl.voided_at, a.normal_balance, e.payment_method
-    `, values);
+      with base as (
+        select gl.*, coalesce(a.normal_balance::text, 'DEBIT') normal_balance, e.payment_method,
+          max(p.partner_name) partner_name
+        from public.accounting_general_ledger_v gl
+        left join public.chart_of_accounts a on a.id = gl.account_id
+        left join public.accounting_entries e on e.id = gl.entry_id
+        left join public.accounting_payments p on p.entry_id = gl.entry_id
+        where gl.status::text = 'posted' ${filters}
+        group by gl.line_id, gl.entry_id, gl.entry_number, gl.company_id, gl.branch_id, gl.division_id,
+          gl.date, gl.source, gl.source_module, gl.source_schema, gl.source_table, gl.source_id,
+          gl.ref, gl.entry_description, gl.line_description, gl.status, gl.journal_name, gl.journal_type,
+          gl.account_id, gl.account_code, gl.account_name, gl.account_type, gl.debit, gl.credit,
+          gl.created_at, gl.posted_at, gl.voided_at, a.normal_balance, e.payment_method
+      ), enriched as (
+        select base.*,
+          sum(base.debit - base.credit) over (
+            partition by base.account_id, base.company_id, base.branch_id, base.division_id
+            order by base.date, base.entry_id, base.line_id
+            rows between unbounded preceding and current row
+          )::text running_balance,
+          sum(base.debit) over()::text filtered_debit,
+          sum(base.credit) over()::text filtered_credit
+        from base
+      )
+      select enriched.*, count(*) over()::int total_count
+      from enriched
+      order by ${orderExpression} ${sortDirection}, line_id ${sortDirection}
+      limit $${mainValues.length - 1} offset $${mainValues.length}
+    `, mainValues);
     const from = first(req.query.date_from) ?? first(req.query.from);
     const contextKey = (row: { account_id: number; company_id: number; branch_id: number | null; division_id: number | null }) =>
       `${row.account_id}:${row.company_id}:${row.branch_id ?? "all"}:${row.division_id ?? "all"}`;
@@ -874,41 +908,16 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
       `, openingValues);
       for (const row of opening.rows) openingByContext.set(contextKey(row), Number(row.balance));
     }
-    const runningByLine = new Map<number, number>();
-    const runningByContext = new Map(openingByContext);
-    for (const row of [...result.rows].sort((a, b) =>
-      new Date(a.date).getTime() - new Date(b.date).getTime() || a.entry_id - b.entry_id || a.line_id - b.line_id)) {
-      const key = contextKey(row);
-      const balance = (runningByContext.get(key) ?? 0) + Number(row.debit) - Number(row.credit);
-      runningByContext.set(key, balance);
-      runningByLine.set(row.line_id, balance);
-    }
-    const valueForSort = (row: typeof result.rows[number]): string | number => {
-      if (sortBy === "month") return new Date(row.date).toISOString().slice(0, 7);
-      if (sortBy === "payment_method") return row.payment_method ?? "";
-      if (sortBy === "partner_name") return row.partner_name ?? "";
-      const value = row[sortBy as keyof typeof row];
-      if (sortBy === "date") return new Date(row.date).getTime();
-      if (sortBy === "debit" || sortBy === "credit") return Number(value);
-      return String(value ?? "");
-    };
-    const sorted = [...result.rows].sort((a, b) => {
-      const left = valueForSort(a);
-      const right = valueForSort(b);
-      const compared = typeof left === "number" && typeof right === "number"
-        ? left - right : String(left).localeCompare(String(right));
-      return compared * sortDirection || (a.line_id - b.line_id) * sortDirection;
-    });
-    const paged = sorted.slice((page - 1) * limit, page * limit);
-    const data = paged.map((row) => ({
+    const data = result.rows.map((row) => ({
       ...row, source_doc_number: null,
-      running_balance: String(runningByLine.get(row.line_id) ?? 0),
+      running_balance: String(Number(row.running_balance) + (openingByContext.get(contextKey(row)) ?? 0)),
       account_opening_balance: String(openingByContext.get(contextKey(row)) ?? 0),
     }));
-    const totalDebit = result.rows.reduce((s, r) => s + Number(r.debit), 0);
-    const totalCredit = result.rows.reduce((s, r) => s + Number(r.credit), 0);
+    const total = result.rows[0]?.total_count ?? 0;
+    const totalDebit = Number(result.rows[0]?.filtered_debit ?? 0);
+    const totalCredit = Number(result.rows[0]?.filtered_credit ?? 0);
     const openingBalance = [...openingByContext.values()].reduce((sum, value) => sum + value, 0);
-    res.json({ data, total: result.rows.length, totalDebit, totalCredit,
+    res.json({ data, total, totalDebit, totalCredit,
       openingBalance, closingBalance: openingBalance + totalDebit - totalCredit });
   } catch (error) {
     reportError(req, res, error);

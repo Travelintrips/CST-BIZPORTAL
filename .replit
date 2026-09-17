@@ -26,5 +26,10 @@ BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
 
+
+[userenv.production]
+BIZPORTAL_API_ORIGIN_PROD = "https://cstlogistic.co.id"
+
+
 [nix]
 channel = "stable-25_05"
