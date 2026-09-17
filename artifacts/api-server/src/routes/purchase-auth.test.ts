@@ -163,12 +163,50 @@ describe("production purchase authentication", () => {
     expect(response.status).toBe(403);
   });
 
-  it("passes vendor-invoice reads to the upstream parent router after auth", async () => {
-    mockUser("admin");
-    const response = await request(server, "/purchase-workflow/vendor-invoices/9?company=1", {
+  it("serves vendor-invoice detail locally after auth", async () => {
+    queryMock
+      .mockResolvedValueOnce({
+        rows: [{
+          user_data: {
+            email: "admin@example.com",
+            role: "admin",
+            company_id: 1,
+          },
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 12,
+          company_id: 1,
+          invoice_number: "VI/2026/00004",
+          status: "posted",
+          grand_total: "26852296",
+          reconciled_amount_paid: "0",
+          withholding_tax_amount: "0",
+          withholding_tax_type: null,
+          invoice_breakdown: {
+            totals: { gross: 26852296, payable_amount: 26852296 },
+            components: [],
+          },
+          updated_at: new Date("2026-09-17T00:00:00.000Z"),
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(server, "/purchase-workflow/vendor-invoices/12?company=1", {
       cookie: makeProductionCookie("admin@example.com"),
     });
-    expect(response.status).toBe(204);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: 12,
+      status: "posted",
+      withholdingTaxAmount: "0",
+      lineTaxes: [],
+      withholdingRecords: [],
+    });
+    expect(queryMock).toHaveBeenCalledTimes(5);
   });
 
   it("rejects a non-OTP token without issuing a cookie", async () => {

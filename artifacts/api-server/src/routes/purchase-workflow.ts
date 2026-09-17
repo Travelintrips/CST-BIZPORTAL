@@ -168,12 +168,21 @@ async function authenticatePurchaseUser(
 
 router.use("/purchase-workflow", authenticatePurchaseUser);
 
-// Purchase Workflow owns the vendor-invoice schema and withholding lifecycle.
-// The proxy workspace must authenticate these requests, then let the parent
-// router forward them to the upstream service instead of querying its unrelated
-// local database. In particular, GET/read/refresh requests must never create
-// withholding records as a local fallback.
-router.use("/purchase-workflow/vendor-invoices", (_req, _res, next) => {
+// Purchase Workflow owns vendor-invoice writes and non-local endpoints. Keep
+// canonical invoice reads in this service so opening an invoice cannot trigger
+// the upstream legacy withholding-repair path.
+router.use("/purchase-workflow/vendor-invoices", (req, _res, next) => {
+  const path = new URL(req.originalUrl, "http://local-request").pathname;
+  const isLocalRead = req.method === "GET" && (
+    path === "/purchase-workflow/vendor-invoices"
+    || path === "/purchase-workflow/vendor-invoices/"
+    || path === "/purchase-workflow/vendor-invoices/liability-accounts"
+    || /^\/purchase-workflow\/vendor-invoices\/\d+$/.test(path)
+  );
+  if (isLocalRead) {
+    next();
+    return;
+  }
   next("router");
 });
 
