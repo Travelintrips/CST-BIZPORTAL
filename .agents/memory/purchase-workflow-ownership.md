@@ -14,3 +14,9 @@ Vendor-invoice paths must remain an authentication boundary only and then fall t
 **Why:** Direct local handlers produced PostgreSQL `42P01` relation-not-found failures for invoice detail and liability-account reads, while the valid invoice data belongs to the upstream Purchase Workflow service.
 
 **How to apply:** When adding or changing `/purchase-workflow/vendor-invoices/*`, preserve `next("router")` after auth and test invoice detail plus liability-account reads for no local DB calls or write statements.
+
+The production upstream can still recreate a legacy withholding line and record when an invoice detail is opened, even after the Supabase invoice fields and breakdown have been cleared. A local proxy change cannot prevent that upstream write.
+
+**Why:** The proxy forwards vendor-invoice detail requests to the upstream Purchase Workflow service, whose legacy-repair path is outside this workspace.
+
+**How to apply:** Disable or guard the upstream legacy withholding regeneration first, then remove any regenerated line-tax and withholding-record rows; a browser refresh alone will not fix it.
