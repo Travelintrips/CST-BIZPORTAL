@@ -78,6 +78,15 @@ async function authenticatePurchaseUser(
 
 router.use("/purchase-workflow", authenticatePurchaseUser);
 
+// Purchase Workflow owns the vendor-invoice schema and withholding lifecycle.
+// The proxy workspace must authenticate these requests, then let the parent
+// router forward them to the upstream service instead of querying its unrelated
+// local database. In particular, GET/read/refresh requests must never create
+// withholding records as a local fallback.
+router.use("/purchase-workflow/vendor-invoices", (_req, _res, next) => {
+  next("router");
+});
+
 function first(value: unknown): string | undefined {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : undefined;
   return typeof value === "string" ? value : undefined;

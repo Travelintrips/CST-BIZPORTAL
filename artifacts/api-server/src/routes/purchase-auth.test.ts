@@ -163,6 +163,14 @@ describe("production purchase authentication", () => {
     expect(response.status).toBe(403);
   });
 
+  it("passes vendor-invoice reads to the upstream parent router after auth", async () => {
+    mockUser("admin");
+    const response = await request(server, "/purchase-workflow/vendor-invoices/9?company=1", {
+      cookie: makeProductionCookie("admin@example.com"),
+    });
+    expect(response.status).toBe(204);
+  });
+
   it("rejects a non-OTP token without issuing a cookie", async () => {
     const response = await request(server, "/auth/supabase-exchange", {
       method: "POST",

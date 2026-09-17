@@ -61,35 +61,6 @@ function makeDevelopmentCookie(): string {
   return `bizportal_dev_session=${payload}.${signature}`;
 }
 
-function mockInvoice(id: number) {
-  return {
-    id,
-    invoice_number: `VI/2026/${String(id).padStart(5, "0")}`,
-    vendor_invoice_ref: `REF-${id}`,
-    company_id: 1,
-    supplier_id: 10,
-    supplier_name: "PT Test Supplier",
-    status: "posted",
-    invoice_date: "2026-09-01",
-    due_date: "2026-10-01",
-    payment_term_days: 30,
-    total_amount: "1000000",
-    tax_amount: "110000",
-    grand_total: "1110000",
-    withholding_tax_amount: "0",
-    withholding_tax_type: null,
-    invoice_breakdown: null,
-    reconciled_amount_paid: "0",
-    three_way_match_status: "matched",
-    match_notes: null,
-    po_id: null,
-    gr_id: null,
-    journal_entry_id: 100 + id,
-    journal_status: "posted",
-    journal_entry_number: `JE-${id}`,
-  };
-}
-
 describe("vendor invoice detail read path", () => {
   let purchaseWorkflowRouter: typeof import("./purchase-workflow").default;
   let server: http.Server;
@@ -105,6 +76,18 @@ describe("vendor invoice detail read path", () => {
     app = express();
     app.use(express.json());
     app.use(purchaseWorkflowRouter);
+    app.get("/purchase-workflow/vendor-invoices/liability-accounts", (_req, res) => {
+      res.json([{ id: 501, code: "2-1000", name: "Utang PPh" }]);
+    });
+    app.get("/purchase-workflow/vendor-invoices/:id", (req, res) => {
+      res.json({
+        id: Number(req.params.id),
+        status: "posted",
+        withholdingTaxAmount: "0",
+        lineTaxes: [],
+        withholdingRecords: [],
+      });
+    });
     server = await new Promise<http.Server>((resolve) => {
       const listeningServer = app.listen(0, "127.0.0.1", () => resolve(listeningServer));
     });
@@ -112,22 +95,6 @@ describe("vendor invoice detail read path", () => {
 
   beforeEach(() => {
     queryMock.mockReset();
-    queryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes("select vi.*")) {
-        const id = sql.includes("where vi.id = $2") ? Number(queryMock.mock.calls.at(-1)?.[1]?.[1]) : 0;
-        return { rows: [mockInvoice(id)] };
-      }
-      if (sql.includes("from public.vendor_invoice_lines")) {
-        return { rows: [] };
-      }
-      if (sql.includes("from public.vendor_invoice_line_taxes")) {
-        return { rows: [] };
-      }
-      if (sql.includes("from public.vendor_withholding_records")) {
-        return { rows: [] };
-      }
-      throw new Error(`Unexpected read query: ${sql}`);
-    });
   });
 
   afterAll(async () => {
@@ -152,7 +119,18 @@ describe("vendor invoice detail read path", () => {
       });
     }
 
-    const sql = queryMock.mock.calls.map(([query]) => String(query));
-    expect(sql.some((query) => /\b(insert|update|delete|begin|commit|rollback)\b/i.test(query))).toBe(false);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("passes liability-account reads upstream without querying the local database", async () => {
+    const response = await request(
+      server,
+      "/purchase-workflow/vendor-invoices/liability-accounts?company=1",
+      makeDevelopmentCookie(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ id: 501, code: "2-1000", name: "Utang PPh" }]);
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });
