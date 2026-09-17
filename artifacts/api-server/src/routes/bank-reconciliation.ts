@@ -315,6 +315,48 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
       [mutationId, companyId],
     );
 
+    const invoiceIds = result.rows.map((row) => row.id);
+    const withholdingResult = invoiceIds.length === 0
+      ? { rows: [] }
+      : await pool.query<{
+          invoice_id: number;
+          line_tax_id: number;
+          invoice_line_id: number;
+          tax_type: string;
+          tax_object: string;
+          tax_amount: string;
+          base_amount: string;
+          liability_account_id: number | null;
+          resolution_status: string | null;
+          coa_code: string | null;
+          coa_name: string | null;
+        }>(
+          `select vil.invoice_id,
+                  vit.id line_tax_id,
+                  vit.invoice_line_id,
+                  vit.tax_type,
+                  vit.tax_object,
+                  vit.tax_amount,
+                  vil.subtotal base_amount,
+                  vit.liability_account_id,
+                  vit.resolution_status,
+                  coa.code coa_code,
+                  coa.name coa_name
+             from public.vendor_invoice_line_taxes vit
+             join public.vendor_invoice_lines vil on vil.id = vit.invoice_line_id
+             left join public.chart_of_accounts coa on coa.id = vit.liability_account_id
+            where vil.invoice_id = any($1::bigint[])
+              and coalesce(vit.tax_amount, 0) > 0
+            order by vil.invoice_id, vit.id`,
+          [invoiceIds],
+        );
+    const withholdingByInvoice = new Map<number, typeof withholdingResult.rows>();
+    for (const row of withholdingResult.rows) {
+      const rows = withholdingByInvoice.get(row.invoice_id) ?? [];
+      rows.push(row);
+      withholdingByInvoice.set(row.invoice_id, rows);
+    }
+
     res.json({
       invoices: result.rows.map((row) => ({
         id: row.id,
@@ -330,6 +372,18 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         withholdingTaxAmount: row.withholding_tax_amount == null ? undefined : Number(row.withholding_tax_amount),
         invoiceBreakdown: row.invoice_breakdown,
         taxReviewStatus: row.tax_review_status,
+        withholdingLines: (withholdingByInvoice.get(row.id) ?? []).map((tax) => ({
+          lineTaxId: tax.line_tax_id,
+          invoiceLineId: tax.invoice_line_id,
+          taxType: tax.tax_type,
+          taxObject: tax.tax_object,
+          amount: Number(tax.tax_amount),
+          baseAmount: Number(tax.base_amount),
+          liabilityAccountId: tax.liability_account_id,
+          resolutionStatus: tax.resolution_status,
+          coaCode: tax.coa_code,
+          coaName: tax.coa_name,
+        })),
         source: "vendor_invoice",
         settlementStatus: Number(row.canonical_paid) > 0 ? "partially_settled" : "outstanding",
       })),

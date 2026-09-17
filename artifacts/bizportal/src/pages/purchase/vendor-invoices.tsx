@@ -514,11 +514,12 @@ export function VendorInvoiceEditorPage() {
       const next = current.map((line) => {
         if (line.liabilityAccountId || Number(line.withholdingAmount ?? 0) <= 0) return line;
         const taxType = `${line.taxType ?? ""} ${line.taxObject ?? ""}`.toLowerCase();
+        const taxNumber = taxType.match(/pph\s*(?:pasal\s*)?(\d+)/i)?.[1];
         const exactName = taxType.includes("4(2)") || taxType.includes("4 ayat 2")
           ? /hutang pph final pasal 4 ayat 2/i
           : taxType.includes("pph 15")
             ? /hutang pph final pasal 15/i
-            : new RegExp(`hutang pph pasal ${taxType.match(/pph\\s*(\\d+)/i)?.[1] ?? "___"}`, "i");
+            : new RegExp(`hutang pph(?: pasal)? ${taxNumber ?? "___"}`, "i");
         const suggested = taxType.includes("pph 15")
           ? liabilityAccounts.find(
               (account) =>

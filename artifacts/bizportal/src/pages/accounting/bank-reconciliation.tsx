@@ -789,9 +789,11 @@ interface OutstandingVendorInvoice {
   }>;
   withholdingLines?: Array<{
     lineTaxId: number;
+    invoiceLineId: number;
     taxType: string;
     taxObject: string;
     amount: number;
+    baseAmount: number;
     liabilityAccountId?: number | null;
     coaCode?: string | null;
     coaName?: string | null;
@@ -3161,11 +3163,57 @@ function VendorInvoicePaymentDialog({
       && Number(invoice.outstanding) > 0.01,
   );
   const selectedInvoices = invoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const liabilityAccountsQuery = useQuery<Array<{ id: number; code: string; name: string }>>({
+    queryKey: ["vendor-invoice-liability-accounts", companyId],
+    enabled: open
+      && Number.isInteger(companyId)
+      && Number(companyId) > 0
+      && selectedInvoices.some((invoice) => (invoice.withholdingLines ?? []).some((tax) => Number(tax.amount) > 0)),
+    queryFn: async () => {
+      const response = await fetch(`/api/purchase-workflow/vendor-invoices/liability-accounts?company=${companyId}`, {
+        credentials: "include",
+      });
+      const body = await response.json().catch(() => []);
+      if (!response.ok || !Array.isArray(body)) {
+        throw new Error("Gagal memuat akun liabilitas PPh.");
+      }
+      return body as Array<{ id: number; code: string; name: string }>;
+    },
+    staleTime: 5 * 60_000,
+  });
+  const liabilityAccounts = liabilityAccountsQuery.data ?? [];
+  const resolveLiabilityAccount = (
+    tax: NonNullable<OutstandingVendorInvoice["withholdingLines"]>[number],
+  ) => {
+    const taxType = `${tax.taxType ?? ""} ${tax.taxObject ?? ""}`.toLowerCase();
+    const taxNumber = taxType.match(/pph\s*(?:pasal\s*)?(\d+)/i)?.[1];
+    const exactName = taxType.includes("4(2)") || taxType.includes("4 ayat 2")
+      ? /hutang pph final pasal 4 ayat 2/i
+      : taxType.includes("pph 15")
+        ? /hutang pph final pasal 15/i
+        : new RegExp(`hutang pph(?: pasal)? ${taxNumber ?? "___"}`, "i");
+    return taxType.includes("pph 15")
+      ? liabilityAccounts.find(
+          (account) =>
+            account.code.startsWith("2-1102-")
+            || /hutang pph final pasal 15/i.test(account.name),
+        )
+      : liabilityAccounts.find((account) => exactName.test(account.name));
+  };
   const withholdingForInvoice = (invoice: OutstandingVendorInvoice) =>
     Math.max(
       0,
       Number(invoice.withholdingTaxAmount ?? invoice.invoiceBreakdown?.totals?.withholding_tax_amount ?? 0),
+      (invoice.withholdingLines ?? []).reduce((sum, tax) => sum + Math.max(0, Number(tax.amount)), 0),
     );
+  const invoicesWithIncompleteWithholding = selectedInvoices.filter((invoice) => {
+    const withholdingLines = invoice.withholdingLines ?? [];
+    return withholdingForInvoice(invoice) > 0
+      && (
+        withholdingLines.length === 0
+        || withholdingLines.some((tax) => Number(tax.amount) > 0 && !tax.liabilityAccountId)
+      );
+  });
   const defaultAllocationForInvoice = (invoice: OutstandingVendorInvoice, selectedWithoutInvoice: number[]) => {
     const allocatedElsewhere = invoices
       .filter((candidate) => selectedWithoutInvoice.includes(candidate.id))
@@ -3244,6 +3292,64 @@ function VendorInvoicePaymentDialog({
     }
     setSaving(true);
     try {
+      if (invoicesWithIncompleteWithholding.length > 0) {
+        if (liabilityAccountsQuery.isLoading) {
+          throw new Error("Akun liabilitas PPh masih dimuat. Coba lagi sebentar.");
+        }
+        if (liabilityAccountsQuery.isError) {
+          throw new Error(
+            liabilityAccountsQuery.error instanceof Error
+              ? liabilityAccountsQuery.error.message
+              : "Akun liabilitas PPh gagal dimuat.",
+          );
+        }
+
+        for (const invoice of invoicesWithIncompleteWithholding) {
+          const taxes = (invoice.withholdingLines ?? []).filter((tax) => Number(tax.amount) > 0);
+          if (taxes.length === 0) {
+            throw new Error(
+              `Detail baris PPh untuk invoice ${invoice.billNumber ?? invoice.docNumber} belum tersedia. Buka invoice dan lengkapi Finance Review terlebih dahulu.`,
+            );
+          }
+          const mappedTaxes = taxes.map((tax) => {
+            const account = tax.liabilityAccountId
+              ? liabilityAccounts.find((candidate) => candidate.id === tax.liabilityAccountId)
+              : resolveLiabilityAccount(tax);
+            if (!account) {
+              throw new Error(
+                `COA Hutang PPh untuk invoice ${invoice.billNumber ?? invoice.docNumber} (${tax.taxType}) belum terpetakan. Buka invoice dan pilih akun liabilitas PPh.`,
+              );
+            }
+            return {
+              invoiceLineId: tax.invoiceLineId,
+              taxType: tax.taxType,
+              taxObject: tax.taxObject,
+              baseAmount: tax.baseAmount,
+              taxAmount: tax.amount,
+              liabilityAccountId: account.id,
+            };
+          });
+          const reviewResponse = await fetch(
+            `/api/purchase-workflow/vendor-invoices/${invoice.id}/finance-review?company=${companyId}`,
+            {
+              method: "PUT",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ lines: [], taxes: mappedTaxes }),
+            },
+          );
+          const reviewBody = await reviewResponse.json().catch(() => ({}));
+          if (!reviewResponse.ok) {
+            throw new Error(
+              String(
+                reviewBody?.error
+                ?? reviewBody?.message
+                ?? `Finance Review invoice ${invoice.billNumber ?? invoice.docNumber} gagal disimpan.`,
+              ),
+            );
+          }
+        }
+      }
       const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment-batch`, {
         method: "POST",
         credentials: "include",
@@ -3488,6 +3594,15 @@ function VendorInvoicePaymentDialog({
                   Kelebihan {idr(wrongTransferAmount)} akan masuk ke COA 2-1011-CST — Salah Transfer.
                 </div>
               )}
+              {invoicesWithIncompleteWithholding.length > 0 && (
+                <div className="mt-1 text-xs">
+                  {liabilityAccountsQuery.isLoading
+                    ? "Memuat COA Hutang PPh untuk melengkapi Finance Review sebelum pembayaran."
+                    : liabilityAccountsQuery.isError
+                      ? "COA Hutang PPh gagal dimuat. Buka invoice dan lengkapi mapping PPh secara manual."
+                      : "Mapping COA Hutang PPh yang kosong akan dilengkapi otomatis sebelum pembayaran jika akun standar tersedia."}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -3496,7 +3611,13 @@ function VendorInvoicePaymentDialog({
           <Button
             className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             onClick={save}
-            disabled={saving || selectedInvoices.length === 0 || !selectionFitsMutation}
+            disabled={
+              saving
+              || selectedInvoices.length === 0
+              || !selectionFitsMutation
+              || liabilityAccountsQuery.isLoading
+              || liabilityAccountsQuery.isError
+            }
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {saving ? "Memproses…" : "Match & Bayar Invoice"}
