@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
+import { canAccessTenantDashboard } from "@/lib/tenantAccess";
 import { useLocation } from "wouter";
 import {
   Store, Users, FileText, DollarSign, Clock, ArrowRight,
@@ -46,7 +48,13 @@ type Summary = {
 
 export default function TenantDashboard() {
   const { activeCompanyId } = useCompany();
+  const { user: authUser } = useSupabaseAuth();
   const [, navigate] = useLocation();
+  const tenantDashboardAccess = canAccessTenantDashboard(
+    authUser?.role,
+    typeof activeCompanyId === "number" ? activeCompanyId : null,
+    activeCompanyId === 0,
+  );
 
   const { data, isLoading } = useQuery<Summary>({
     queryKey: ["tenant-dashboard", activeCompanyId],
@@ -56,6 +64,7 @@ export default function TenantDashboard() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     },
+    enabled: tenantDashboardAccess,
     staleTime: 60_000,
     refetchInterval: 120_000,
     refetchOnWindowFocus: false,
