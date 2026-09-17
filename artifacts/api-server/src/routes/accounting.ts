@@ -19,6 +19,49 @@ router.use((req, res, next) => {
 
 type QueryValue = string | number;
 
+interface PostingErrorRow {
+  id: number;
+  company_id: number | null;
+  branch_id: number | null;
+  source_module: string | null;
+  source_table: string | null;
+  source_id: number | null;
+  source_ref: string | null;
+  error_code: string | null;
+  error_message: string;
+  payload: unknown;
+  resolved_at: Date | null;
+  resolved_by: string | null;
+  resolve_note: string | null;
+  created_at: Date;
+}
+
+interface PostingErrorUpdateRow {
+  id: number;
+  resolved_at: Date;
+  resolved_by: string | null;
+  resolve_note: string | null;
+}
+
+interface TrialBalanceRow {
+  account_id: number;
+  code: string;
+  name: string;
+  type: string;
+  parent_id: number | null;
+  is_header: boolean;
+  is_postable: boolean;
+  company_id: number;
+  branch_id: number | null;
+  division_id: number | null;
+  company_name: string | null;
+  company_code: string | null;
+  total_debit: string;
+  total_credit: string;
+  balance: string;
+  counterparty_companies: string | null;
+}
+
 function first(value: unknown): string | undefined {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : undefined;
   return typeof value === "string" ? value : undefined;
@@ -612,7 +655,7 @@ router.get("/accounting/hub/posting-errors", async (req, res): Promise<void> => 
       values,
     );
     values.push(limit, offset);
-    const rows = await pool.query(
+    const rows = await pool.query<PostingErrorRow>(
       `select pe.id, pe.company_id, pe.branch_id, pe.source_module, pe.source_table,
               pe.source_id, pe.source_ref, pe.error_code, pe.error_message, pe.payload,
               pe.resolved_at, pe.resolved_by, pe.resolve_note, pe.created_at
@@ -653,7 +696,7 @@ router.patch("/accounting/hub/posting-errors/:id/resolve", async (req, res): Pro
       companySql = ` and company_id = $${values.length}`;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<PostingErrorUpdateRow>(
       `update public.accounting_posting_errors
        set resolved_at = now(), resolved_by = $2, resolve_note = $1
        where id = $3 and resolved_at is null ${companySql}
@@ -674,7 +717,7 @@ router.get("/accounting/hub/trial-balance", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];
     const filters = companyFilter(req, values) + dateFilter(req, values);
-    const result = await pool.query(`
+    const result = await pool.query<TrialBalanceRow>(`
       with recursive direct as (
         select gl.account_id, gl.company_id, gl.branch_id, gl.division_id,
           sum(gl.debit) total_debit, sum(gl.credit) total_credit
