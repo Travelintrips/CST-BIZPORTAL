@@ -18,6 +18,7 @@ interface VendorInvoiceListRow {
   invoice_date: string | Date | null;
   journal_entry_id: number | null;
   journal_status: string | null;
+  total_count: number;
 }
 
 interface LiabilityAccountRow {
@@ -87,11 +88,6 @@ interface VendorWithholdingRecordRow {
   liability_account_id: number | null;
   status: string | null;
 }
-
-function getLocalApiUser(req: Request): DevAuthUser | null {
-  const devUser = getDevSession(req);
-  if (devUser) return devUser;
-  if (isDevelopmentEnvironment()) return null;
 
 type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
 
@@ -296,13 +292,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   const page = parsePositiveQueryInt(req.query.page, 1, 10_000);
   const offset = (page - 1) * pageSize;
   try {
-
     const result = await pool.query<VendorInvoiceListRow>(`
-       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
-              vi.status::text status, vi.grand_total,
-             ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
-
-    const result = await pool.query(`
       ${RECONCILED_PAYMENT_CTE}
       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
              vi.status::text status, vi.grand_total,
@@ -379,18 +369,14 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
     return;
   }
   try {
-
     const invoiceResult = await pool.query<VendorInvoiceDetailRow>(`
-
-    const invoiceResult = await pool.query(`
       ${RECONCILED_PAYMENT_CTE}
-
       select vi.*, vi.status::text status,
-              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
+             coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
              ae.status::text journal_status, ae.entry_number journal_entry_number
-      from public.vendor_invoices vi
-      left join public.accounting_entries ae on ae.id = vi.journal_entry_id
-       ${RECONCILED_PAYMENT_JOIN}
+        from public.vendor_invoices vi
+        left join public.accounting_entries ae on ae.id = vi.journal_entry_id
+        ${RECONCILED_PAYMENT_JOIN}
        where vi.id = $2 and vi.company_id = $1
     `, [companyId, invoiceId]);
     const row = invoiceResult.rows[0];
