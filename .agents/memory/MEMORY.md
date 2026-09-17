@@ -11,3 +11,4 @@
 - [Sport Center draft idempotency](sport-center-draft-idempotency.md) — reversed historical payment journals require exact reversal validation and a draft-only unique index.
 - [General ledger pagination semantics](general-ledger-pagination.md) — calculate running balances and totals over the full filtered set before applying display pagination.
 - [General ledger filter test harness](general-ledger-filter-test-harness.md) — isolate Radix Select focus management when testing ledger filter behavior in jsdom.
+- [Optional vendor withholding](optional-vendor-withholding.md) — zero PPh and empty withholding records are valid read states; do not load PPh accounts or mutate records on GET.

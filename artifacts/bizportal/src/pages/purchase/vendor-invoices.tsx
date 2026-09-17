@@ -432,6 +432,11 @@ export function VendorInvoiceEditorPage() {
     },
     enabled: !isNew && activeCompanyId != null,
   });
+  const hasActiveWithholding = vi != null && (
+    canonicalWithholdingAmount(vi) > 0
+    || (vi.lineTaxes ?? []).some((tax) => Number(tax.taxAmount) > 0)
+    || (vi.lines ?? []).some((line) => Number(line.withholdingAmount ?? 0) > 0)
+  );
   const { data: liabilityAccounts = [], isLoading: liabilityAccountsLoading } = useQuery<LiabilityAccount[]>({
     queryKey: ["/api/purchase-workflow/vendor-invoices/liability-accounts", activeCompanyId],
     queryFn: async () => {
@@ -442,7 +447,7 @@ export function VendorInvoiceEditorPage() {
       }
       return payload as LiabilityAccount[];
     },
-    enabled: !isNew && activeCompanyId != null,
+    enabled: !isNew && activeCompanyId != null && hasActiveWithholding,
   });
   const refreshInvoiceDetail = async (): Promise<VI> => {
     const response = await apiFetch(
