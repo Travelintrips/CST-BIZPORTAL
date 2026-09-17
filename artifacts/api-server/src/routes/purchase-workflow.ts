@@ -18,6 +18,7 @@ interface VendorInvoiceListRow {
   invoice_date: string | Date | null;
   journal_entry_id: number | null;
   journal_status: string | null;
+  total_count: number;
 }
 
 interface LiabilityAccountRow {
@@ -92,6 +93,8 @@ function getLocalApiUser(req: Request): DevAuthUser | null {
   const devUser = getDevSession(req);
   if (devUser) return devUser;
   if (isDevelopmentEnvironment()) return null;
+  return null;
+}
 
 type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
 
@@ -298,11 +301,6 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   try {
 
     const result = await pool.query<VendorInvoiceListRow>(`
-       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
-              vi.status::text status, vi.grand_total,
-             ${CANONICAL_VENDOR_INVOICE_PAID_SQL} reconciled_amount_paid,
-
-    const result = await pool.query(`
       ${RECONCILED_PAYMENT_CTE}
       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
              vi.status::text status, vi.grand_total,
@@ -381,8 +379,6 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
   try {
 
     const invoiceResult = await pool.query<VendorInvoiceDetailRow>(`
-
-    const invoiceResult = await pool.query(`
       ${RECONCILED_PAYMENT_CTE}
 
       select vi.*, vi.status::text status,
