@@ -1,11 +1,17 @@
-import { Router, type IRouter, type Response } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
-import { createDevAuthRouter, getDevSession, type DevAuthUser } from "./dev-auth";
+import {
+  createDevAuthRouter,
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  type DevAuthUser,
+} from "./dev-auth";
 import {
   buildUpstreamUrl,
   buildUpstreamHeaders,
@@ -137,6 +143,32 @@ async function establishProductionUpstreamSession(
   });
 }
 
+async function addTenantDashboardCompanyScope(req: Request, upstreamUrl: URL): Promise<void> {
+  const requestUrl = new URL(req.originalUrl, "http://local-request");
+  if (requestUrl.pathname !== "/api/tenant/dashboard") return;
+
+  const hasCompanyScope = ["companyId", "company", "company_id"].some((key) => {
+    const value = requestUrl.searchParams.get(key)?.trim() ?? "";
+    return /^[1-9]\d*$/.test(value);
+  });
+  if (hasCompanyScope) return;
+
+  const session = getProductionSession(req);
+  if (!session) return;
+
+  try {
+    const user = await getProductionUser(session);
+    if (user?.companyId && user.companyId > 0) {
+      upstreamUrl.searchParams.set("companyId", String(user.companyId));
+    }
+  } catch (error) {
+    // Preserve the upstream response when the local identity lookup is
+    // temporarily unavailable; this compatibility step must not turn a
+    // proxied request into a misleading success response.
+    req.log.warn({ error }, "Unable to derive tenant dashboard company scope");
+  }
+}
+
 router.use(createDevAuthRouter({
   onLogin: establishDevelopmentUpstreamSession,
   onProductionLogin: establishProductionUpstreamSession,
@@ -163,6 +195,7 @@ router.use(async (req, res) => {
   }
 
   const upstreamUrl = buildUpstreamUrl(req.originalUrl, upstreamOrigin);
+  await addTenantDashboardCompanyScope(req, upstreamUrl);
   const headers = buildUpstreamHeaders(req.headers, upstreamOrigin, getDevSession(req));
 
   const upstream = https.request(

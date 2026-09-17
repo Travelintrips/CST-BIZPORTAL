@@ -291,7 +291,7 @@ async function verifySupabaseAccessToken(accessToken: string): Promise<{
   };
 }
 
-async function getProductionUser(session: ProductionSession): Promise<DevAuthUser | null> {
+export async function getProductionUser(session: ProductionSession): Promise<DevAuthUser | null> {
   const result = await pool.query<{ user_data: Record<string, unknown> }>(
     `select to_jsonb(u) user_data
      from public.users u
