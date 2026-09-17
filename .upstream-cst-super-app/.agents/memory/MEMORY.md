@@ -1,0 +1,133 @@
+- [Bank statement direction semantics](bank-statement-direction-semantics.md) — bank Debit/Keluar is OUT and Credit/Masuk is IN; share this mapping across every import path.
+- [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
+- [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
+- [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
+- [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
+- [API loader dependency link](api-loader-dependency-link.md) — direct runtime proofs need the artifact workspace dependencies materialized with the frozen lockfile before invoking load-secrets.
+- [Authenticated runtime proof contract](authenticated-runtime-proof-contract.md) — bedakan row sumber Sheet vs row unik persisted; posting governance wajib company context + tanggal.
+- [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
+- [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
+- [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
+- [Accounting draft idempotency](accounting-draft-idempotency.md) — retry auto-post must resume only balanced linked drafts; returning a draft as success can hide ledger entries from posted reports.
+- [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
+- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle; maintenance wajib memakai `SUPABASE_DATABASE_URL`, bukan migration URL atau DB pane.
+- [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
+- [BizPortal GL canonical summary](bizportal-gl-canonical-summary-boundary.md) — debit/kredit/saldo/detail harus memakai scope posted canonical yang sama; voided tetap audit-only.
+- [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
+- [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
+- [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
+- [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
+- [Quality gate shared project references](quality-gate-shared-project-references.md) — build composite shared declarations before dependent typechecks; parallel large checks can cause TS6305 or Node heap exhaustion.
+- [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
+- [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
+- [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
+- [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
+- [Sport payment posted amount correction](sport-payment-amount-correction.md) — posted amount fixes need a balanced additive correction, canonical/mirror update, manual review, then candidate regeneration.
+- [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
+- [Startup readiness boundary](startup-readiness-boundary.md) — resolver can install and replay can pass while /api/health/ready remains false during a long background migration chain; do not certify runtime healthy.
+- [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
+- [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
+- [Payment accounting outbox gap](payment-accounting-outbox-gap.md) — failed payment_confirmed outbox events can leave canonical payments/journals without public mirrors or settlement cohort membership.
+- [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
+- [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
+- [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
+- [QRIS stale settlement reset](qris-stale-settlement-reset.md) — reset status stale hanya pada sumber canonical, wajib audit reason, dan fail-closed bila ada item settlement aktif.
+- [QRIS provider mirror unique key](qris-provider-rule-mirror-unique-key.md) — legacy mirror unik tanpa effective_until; repair boundary harus mendahului insert-if-missing.
+- [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
+- [Trial balance parent rollup](trial-balance-parent-rollup.md) — hierarchical reports must roll child lines to ancestors and preserve the authenticated company/period scope in proofs.
+- [Bank matching direction semantics](bank-matching-direction-semantics.md) — accept operational transfer types for bank candidates and gate Sport Center candidates on QRIS evidence.
+- [Health readiness contract](health-readiness-contract.md) — liveness must precede auth middleware; readiness may remain starting during the serial migration chain.
+- [Bank recon workflow gate](bank-recon-workflow-gate.md) — queued matching is not completion; QRIS candidate generation must be explicit and blocked while matching is active.
+- [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
+- [Portal functional recovery boundary](portal-functional-recovery-boundary.md) — SMTP health and controlled auth proof are required; public catalog publication responses must not be cached.
+- [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
+- [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
+- [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
+- [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
+- [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
+- [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
+- [Approved match read projection](approved-match-read-projection.md) — project mutation ownership separately from visible candidates so filtered history cannot offer duplicate approval.
+- [Managed workflow secret refresh](workflow-secret-refresh.md) — restart artifact workflows after secret availability changes before diagnosing loader or database failures.
+- [Production startup lock deadlock](production-startup-lock-deadlock.md) — a new deployment can stay unready when an older backend retains a per-stage advisory lock; do not bypass markers or terminate production sessions casually.
+- [Accounting seed posted-ledger safety](accounting-seed-posted-ledger.md) — COA deduplication must preserve posted journal line identities and reroute only mutable references.
+- [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
+- [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
+- [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
+- [Bank reconciliation polymorphic IDs](bank-reconciliation-polymorphic-candidate-id.md) — match candidate IDs are live text identities; normalize safely before comparing to integer/bigint source IDs.
+- [Bank reconciliation UNION types](bank-reconciliation-union-types.md) — normalize enum/text projections explicitly so PROD schema differences cannot break the full mutation list.
+- [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
+- [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
+- [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
+- [GL bank reconciliation payment semantics](gl-bank-reconciliation-payment-semantics.md) — vendor payments posted via bank reconciliation need bank-module normalization and bank-mutation payment evidence.
+- [Bank reference rule specificity](bank-reference-rule-specificity.md) — bank identifiers alone must not auto-post every transaction to an expense COA.
+- [QRIS unmatched audit visibility](qris-unmatched-audit-visibility.md) — retain unmatched bank evidence as non-approvable audit; distinguish audit rows from reviewable candidates.
+- [QRIS H-1 candidate cohort](qris-h-minus-one-candidate.md) — production candidates require exact expected settlement date = bank mutation date; legacy review windows remain isolated.
+- [QRIS partial settlement contract](qris-partial-settlement-contract.md) — selected payments may settle independently; bank mutation remains pending until full reconciliation.
+- [Historical QRIS settlement config](historical-qris-settlement-config.md) — owner-approved rules must cover legacy settlement dates with contiguous effective windows.
+- [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
+- [Atomic Rule AI approval](atomic-rule-ai-approval.md) — manual COA approval must persist Rule AI, its runtime mirror, and the draft journal in one idempotent transaction.
+- [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
+- [Vendor invoice payment correction](vendor-invoice-payment-correction.md) — net-withholding gross settlement needs approved reconciliation evidence; orphan resets require reversal first.
+- [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
+- [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
+- [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
+- [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
+- [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
+- [QRIS approval readiness gate](qris-approval-readiness-gate.md) — reviewable QRIS evidence is not approval-ready until every live payment is confirmed, QRIS, unsettled, and present.
+- [Canonical repair diagnosis refresh](canonical-repair-diagnosis-refresh.md) — after admin repair, derive diagnostic state from live canonical ownership/journal tables, not persisted error snapshots.
+- [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
+- [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
+- [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
+- [Rule AI rerun after rule change](rule-ai-rerun-after-rule-change.md) — setelah rule dibuat/diubah, mutasi Sheet dengan MATCH_CREATED perlu rematch non-final; jangan memaksa rule OUT ke mutasi IN.
+- [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
+- [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
+- [QRIS snapshot publish boundary](qris-snapshot-publish-boundary.md) — a corrected production snapshot can be superseded by an older deployed generator until the matching code is published.
+- [QRIS candidate aggregate drift](qris-candidate-aggregate-drift.md) — compare persisted totals with payment items and live source before regenerating a candidate.
+- [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
+- [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
+- [Development workflow secret loader](development-workflow-secret-loader.md) — API readiness stops before binding when the managed GCP bootstrap JSON is malformed; repair the secret, never bypass the loader.
+- [Monorepo dependency workflow refresh](monorepo-dependency-workflow-refresh.md) — after pnpm lockfile synchronization, restart affected portal workflows so stale Vite processes reload artifact symlinks.
+- [Rule AI tax classification](rule-ai-tax-classification.md) — primary Rule AI COA follows expense/income flow; tax treatment is derived from OCR/context and mapped separately.
+- [Rule AI document and tax gate](rule-ai-document-tax-gate.md) — required proof blocks posting; PPN routing follows configured company tax accounts before standard-code fallback.
+- [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.
+- [Rule AI direct bank allocation](rule-ai-direct-bank-allocation.md) — `recon_rule` classifies the bank mutation directly; it is not a business document with a source journal.
+- [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
+- [Temporary reconciliation maintenance boundary](recon-maintenance-mode.md) — PROD bypass is session-scoped and duplicate-root-only; restore the exact catalog hash and verify zero disabled protection triggers.
+- [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
+- [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
+- [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
+- [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.
+- [DEV/PROD PPh master boundary](dev-prod-pph-master-boundary.md) — PROD has withholding tax templates, but DEV-only specific PPh COA rows can make invoice account choices appear missing.
+- [QRIS journal gross mismatch](qris-journal-gross-mismatch.md) — canonical approval can reject an exact-net candidate when live payment gross and payment-journal gross diverge; surface the source mismatch first.
+- [Reversal status fail-closed](reversal-status-fail-closed.md) — reversal creation can commit while the original remains posted; verify and atomically persist void metadata before any destructive cleanup.
+- [Vendor payment runtime proof](vendor-payment-runtime-proof.md) — development loader aliases shared DB keys; wait for async idempotency persistence before asserting cached retry replay.
+- [Payroll kasbon linkage](payroll-kasbon-linkage.md) — deduction-only payroll rows without a source advance ID cannot safely settle or reduce kasbon balances.
+- [Payroll legacy journal reconciliation](payroll-legacy-journal-reconciliation.md) — match balanced period/ref accruals before linking; keep payment null without payment evidence and mark legacy/manual explicitly.
+- [Payroll kasbon settlement boundary](payroll-kasbon-settlement-boundary.md) — post deductions atomically, but never infer the remaining salary payment without deterministic bank evidence.
+- [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
+- [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
+- [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
+- [Vendor invoice reclassification net boundary](vendor-invoice-reclassification-net-boundary.md) — posted invoice COA corrections reclassify net expense/GRIR debits only; preserve separate PPN and AP lines.
+- [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
+- [Production accounting orphan audit](production-accounting-orphan-audit.md) — final status must prove a transaction entry and canonical source; master journals and legacy source tags are insufficient.
+- [Posted bank unmatch lifecycle](posted-bank-unmatch-lifecycle.md) — posted bank mutations need reversal first, then reopen while releasing approved matches back to candidates.
+- [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
+- [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
+- [Reconciliation repair diagnosis](reconciliation-repair-diagnosis.md) — emit exact SQL only for a journal-less stale approved match; posted/canonical financial states require guarded workflow or developer action.
+- [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
+- [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.
+- [Canonical correlation root parity](canonical-correlation-root-parity.md) — TS, views, routines, and list projections must reject malformed repeated `:supp:` markers consistently.
+- [Accounting journal status projection](accounting-journal-status-projection.md) — linked posted/voided journals take precedence over stale bank mutation status in list projections and action guards.
+- [Customer Portal marketplace vendor routing](customer-portal-marketplace-vendor-routing.md) — vendor onboarding and RFQ quote invitation are distinct, but product-owner routing belongs in Customer Portal.
+- [Rule AI candidate approval boundary](rule-ai-candidate-approval-boundary.md) — candidate_required is an approval invariant: recon_rule evidence never substitutes for a real transaction candidate.
+- [Customer tracking disclosure boundary](customer-tracking-disclosure-boundary.md) — public tracking is status-safe and rate-limited; financial, invoice, POD, and identity detail require canonical portal ownership.
+- [Candidate payment identity bridge](candidate-payment-identity-bridge.md) — QRIS snapshots may contain public mirror IDs; approval must resolve SCPAY-SC identity before canonical settlement.
+- [Sheet sync runtime gates](sheet-sync-runtime-gates.md) — Sheet sync needs Service Account credentials and an active account binding; zero parsed rows can falsely leave status as ok.
+- [Production candidate-only rerun](production-candidate-only-rerun.md) — no-approval reruns must use an explicit candidate-only path; never substitute the general matcher.
+- [General Ledger pool failures](general-ledger-pool-failures.md) — PROD GL checkout timeouts are transient pool contention; retry narrowly and never expose raw SQL errors to the browser.
+- [Portal blank-screen diagnosis](portal-blank-screen-diagnosis.md) — a malformed JSX tag in any eagerly scanned BizPortal module can blank the whole portal; inspect Vite transform errors before API debugging.
+- [Reconciliation unit-test DB isolation](reconciliation-unit-test-db-isolation.md) — import the matching engine in pure tests only with mocked DB/Drizzle modules and an explicit transaction fixture.
+- [Sport Center PROD audit schema](sport-center-prod-audit-schema.md) — canonical payments lack journal links; resolve posted journals separately and use public booking_number, not order_number.
+- [Production approval deployment parity](production-approval-deployment-parity.md) — do not bypass a live deployment that lacks the reviewed financial approval guard fix; publish first, then rerun the authenticated proof.
+- [Production approval idempotency timeout](production-approval-idempotency-timeout.md) — lazy idempotency DDL can fail before approval under pool contention; distinguish it from accounting guard rejection.
