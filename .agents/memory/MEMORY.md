@@ -20,4 +20,5 @@
 - [Bank reconciliation matcher ownership](bank-reconciliation-matcher-ownership.md) — candidate generation and server auto-post policy live upstream; proxy/UI changes cannot create missing candidates.
 - [PPh reset scope](pph-reset-scope.md) — clearing only withholding records leaves denormalized invoice breakdown values that can make PPh reappear.
 - [Recurring payment source guard](recurring-payment-source-guard.md) — canonical Sport Center payment_status has only four values; rejected is the inactive replacement state.
+- [Voided reconciliation journal reuse](voided-reconciliation-journal-reuse.md) — reopening a mutation must create a new journal event, never reuse its voided journal by source identity.
 
