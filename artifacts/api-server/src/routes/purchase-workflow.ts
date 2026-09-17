@@ -89,6 +89,13 @@ interface VendorWithholdingRecordRow {
   status: string | null;
 }
 
+function getLocalApiUser(req: Request): DevAuthUser | null {
+  const devUser = getDevSession(req);
+  if (devUser) return devUser;
+  if (isDevelopmentEnvironment()) return null;
+  return null;
+}
+
 type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
 
 
