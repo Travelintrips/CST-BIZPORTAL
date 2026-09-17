@@ -354,7 +354,10 @@ router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, 
       from public.chart_of_accounts
       where coalesce(is_active, true) = true
         and (company_id = $1 or company_id is null)
-        and lower(coalesce(account_type::text, type::text, '')) = 'liability'
+        and (
+          lower(coalesce(account_type::text, '')) = 'liability'
+          or lower(coalesce(type::text, '')) = 'liability'
+        )
       order by code, id
     `, [companyId]);
     res.json(result.rows);

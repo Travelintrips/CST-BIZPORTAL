@@ -147,6 +147,11 @@ describe("vendor invoice detail read path", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual([]);
     expect(queryMock).toHaveBeenCalled();
+    const liabilityAccountSql = String(
+      queryMock.mock.calls.find(([sql]) => String(sql).includes("from public.chart_of_accounts"))?.[0] ?? "",
+    );
+    expect(liabilityAccountSql).toMatch(/account_type::text[\s\S]*=\s*'liability'/i);
+    expect(liabilityAccountSql).toMatch(/or\s+lower\(coalesce\(type::text[\s\S]*=\s*'liability'/i);
     expect(queryMock.mock.calls.every(([sql]) => !String(sql).match(/\b(insert|update|delete)\b/i))).toBe(true);
   });
 });
