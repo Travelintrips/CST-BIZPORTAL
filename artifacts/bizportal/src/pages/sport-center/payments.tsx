@@ -52,6 +52,9 @@ type Payment = {
   mdr_accounting_entry_id: number | null; mdr_posting_error: string | null;
   related_payment_count?: number;
   related_booking_numbers?: string[];
+  recurring_series_id?: string | number | null;
+  group_id?: string | number | null;
+  member_id?: string | number | null;
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -73,7 +76,10 @@ export default function SportCenterPayments() {
   const [page, setPage] = useState(1);
   const [showDialog, setShowDialog] = useState(false);
   const [detailPayment, setDetailPayment] = useState<Payment | null>(null);
-  const [form, setForm] = useState({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
+  const [form, setForm] = useState({
+    booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "",
+    recurring_series_id: "", group_id: "", member_id: "",
+  });
 
   // Edit transaksi lama
   const [editPayment, setEditPayment] = useState<Payment | null>(null);
@@ -145,7 +151,7 @@ export default function SportCenterPayments() {
     onSuccess: () => {
       toast({ title: "Pembayaran dicatat" });
       setShowDialog(false);
-      setForm({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
+      setForm({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "", recurring_series_id: "", group_id: "", member_id: "" });
       qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
       qc.invalidateQueries({ queryKey: ["sport-center-dashboard"] });
     },
@@ -330,6 +336,11 @@ export default function SportCenterPayments() {
                           Recurring · {p.related_payment_count} booking
                         </div>
                       )}
+                      {p.recurring_series_id != null && (
+                        <div className="mt-0.5 font-sans text-[10px] text-sky-300">
+                          Series: {String(p.recurring_series_id)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-foreground whitespace-nowrap">{p.customer_name ?? "—"}</td>
                     <td className="py-2.5 px-3 text-muted-foreground text-xs whitespace-nowrap">{p.facility_name ?? "—"}</td>
@@ -486,6 +497,40 @@ export default function SportCenterPayments() {
                   onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
                 />
               </div>
+              <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-sky-200">Identitas Payment Recurring</p>
+                  <p className="text-xs text-muted-foreground">
+                    Gunakan <span className="font-mono">recurring_series_id</span> untuk satu payment atas beberapa sesi yang dibuat bersama.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Recurring Series ID</Label>
+                    <Input
+                      value={form.recurring_series_id}
+                      onChange={(e) => setForm((p) => ({ ...p, recurring_series_id: e.target.value }))}
+                      placeholder="Contoh: RS-2026-001"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Group ID</Label>
+                    <Input
+                      value={form.group_id}
+                      onChange={(e) => setForm((p) => ({ ...p, group_id: e.target.value }))}
+                      placeholder="Opsional"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Member ID</Label>
+                    <Input
+                      value={form.member_id}
+                      onChange={(e) => setForm((p) => ({ ...p, member_id: e.target.value }))}
+                      placeholder="Opsional"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowDialog(false)}>Batal</Button>
@@ -498,6 +543,9 @@ export default function SportCenterPayments() {
                   method: form.method,
                   notes: form.notes,
                   ...(form.bank_account_id ? { bank_account_id: Number(form.bank_account_id) } : {}),
+                   ...(form.recurring_series_id.trim() ? { recurring_series_id: form.recurring_series_id.trim() } : {}),
+                   ...(form.group_id.trim() ? { group_id: form.group_id.trim() } : {}),
+                   ...(form.member_id.trim() ? { member_id: form.member_id.trim() } : {}),
                 })}
               >
                 {createMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Catat Pembayaran"}
@@ -701,6 +749,25 @@ export default function SportCenterPayments() {
                     <p className="text-xs text-muted-foreground">Metode</p>
                     <p>{METHOD_LABEL[detailPayment.method] ?? detailPayment.method}</p>
                   </div>
+                  {(detailPayment.recurring_series_id != null || detailPayment.group_id != null || detailPayment.member_id != null) && (
+                    <div className="col-span-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-3 space-y-2">
+                      <p className="text-xs font-medium text-sky-200">Identitas Payment Recurring</p>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Series ID</p>
+                          <p className="font-mono text-xs">{detailPayment.recurring_series_id != null ? String(detailPayment.recurring_series_id) : "—"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Group ID</p>
+                          <p className="font-mono text-xs">{detailPayment.group_id != null ? String(detailPayment.group_id) : "—"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Member ID</p>
+                          <p className="font-mono text-xs">{detailPayment.member_id != null ? String(detailPayment.member_id) : "—"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {detailPayment.bank_account_id && (
                     <div>
                       <p className="text-xs text-muted-foreground">Rekening Bank</p>
