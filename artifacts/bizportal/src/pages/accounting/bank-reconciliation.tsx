@@ -1863,9 +1863,9 @@ function candidateBusinessPriority(candidate: Candidate): number {
  * QRIS uses its settlement-date contract. Ordinary transaction candidates
  * remain visible when their payment date matches the bank date, even when
  * the payer name differs, so an admin can choose them during review.
- * Manual-rule candidates stay visible as accounting evidence. A
- * `sport_payment` is not automatically QRIS: its payment method decides
- * which contract applies.
+ * Rule AI classifications are intentionally excluded from this list because
+ * they are COA hints, not source transactions. A `sport_payment` is not
+ * automatically QRIS: its payment method decides which contract applies.
  */
 function visibleCandidates(m: BankMutation): Candidate[] {
   // An approved match owns this bank mutation. Keep the mutation itself
@@ -5441,10 +5441,17 @@ function MutationCard({
   // transfers, visible same-date candidates remain reviewer evidence even
   // when the payer name does not match; the admin can select the candidate
   // instead of losing it during matching.
+  // The candidate list is reserved for source transactions that a reviewer
+  // can inspect and select. A recon_rule is only a COA classification hint;
+  // rendering it here makes it look like a payment/invoice candidate even
+  // though it cannot be approved as one.
   const matchingCandidates = cands.filter(candidate =>
-    isQrisCandidate(candidate, m)
-      ? candidate.amount_match && candidate.date_match
-      : true,
+    isRealTransactionCandidate(candidate)
+    && (
+      isQrisCandidate(candidate, m)
+        ? candidate.amount_match && candidate.date_match
+        : true
+    ),
   );
   const realCandidateRequired = requiresRealTransactionCandidate(m);
   const selectableMatchingCandidates = realCandidateRequired
