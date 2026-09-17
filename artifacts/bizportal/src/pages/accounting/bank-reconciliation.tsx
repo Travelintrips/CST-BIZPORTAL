@@ -7730,6 +7730,7 @@ export default function BankReconciliationPage() {
   const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(true);
   const [expandedCanonicalSettlementIds, setExpandedCanonicalSettlementIds] = useState<number[]>([]);
   const PAGE_SIZE = 20;
+  const STATUS_FILTER_SCAN_LIMIT = 1_000;
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
@@ -7793,7 +7794,11 @@ export default function BankReconciliationPage() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+      const hasStatusFilter = filterStatus !== "all";
+      const params = new URLSearchParams({
+        limit: String(hasStatusFilter ? STATUS_FILTER_SCAN_LIMIT : PAGE_SIZE),
+        offset: String(hasStatusFilter ? 0 : page * PAGE_SIZE),
+      });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterStatus !== "all")   params.set("status",    filterStatus);
       if (filterDir    !== "all")   params.set("direction", filterDir);
@@ -9489,8 +9494,16 @@ export default function BankReconciliationPage() {
     setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setPage(0);
   };
 
-  const mutations   = data?.mutations ?? [];
-  const total       = data?.total ?? 0;
+  const responseMutations = data?.mutations ?? [];
+  const statusFilteredMutations = filterStatus === "all"
+    ? responseMutations
+    : responseMutations.filter(mutation => mutation.status === filterStatus);
+  const mutations = filterStatus === "all"
+    ? statusFilteredMutations
+    : statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const total = filterStatus === "all"
+    ? (data?.total ?? 0)
+    : statusFilteredMutations.length;
   const totalPages  = Math.ceil(total / PAGE_SIZE);
 
   const handleOpenQrisMutation = async (candidate: QrisCandidateAudit) => {
