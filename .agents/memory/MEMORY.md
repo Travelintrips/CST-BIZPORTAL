@@ -7,3 +7,4 @@
 - [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy.
 - [Purchase workflow ownership](purchase-workflow-ownership.md) — purchase-workflow handlers and payment aggregation live in an external upstream service, not this proxy workspace.
 - [Vendor invoice candidate source](vendor-invoice-candidate-source.md) — bank reconciliation candidates must be served from local Supabase canonical allocations, not the legacy proxy
+- [QRIS reset audit history](qris-reset-audit-history.md) — read QRIS reset history from the server audit-log contract and include settlementDate in reset requests.
