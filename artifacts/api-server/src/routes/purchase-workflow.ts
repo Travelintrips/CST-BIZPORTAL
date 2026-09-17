@@ -4,7 +4,100 @@ import { getDevSession, getProductionSession, isDevelopmentEnvironment, type Dev
 
 const router: IRouter = Router();
 
+
+interface VendorInvoiceListRow {
+  id: number;
+  invoice_number: string;
+  vendor_invoice_ref: string | null;
+  supplier_name: string | null;
+  status: string;
+  grand_total: string;
+  reconciled_amount_paid: string;
+  three_way_match_status: string | null;
+  company_id: number;
+  invoice_date: string | Date | null;
+  journal_entry_id: number | null;
+  journal_status: string | null;
+  total_count: number;
+}
+
+interface LiabilityAccountRow {
+  id: number;
+  code: string;
+  name: string;
+}
+
+interface VendorInvoiceDetailRow {
+  id: number;
+  invoice_number: string;
+  vendor_invoice_ref: string | null;
+  company_id: number;
+  supplier_id: number | null;
+  supplier_name: string | null;
+  po_id: number | null;
+  gr_id: number | null;
+  status: string;
+  invoice_date: string | Date | null;
+  due_date: string | Date | null;
+  payment_term_days: number | null;
+  total_amount: string;
+  tax_amount: string;
+  grand_total: string;
+  reconciled_amount_paid: string;
+  three_way_match_status: string | null;
+  match_notes: string | null;
+  journal_entry_id: number | null;
+  journal_status: string | null;
+  journal_entry_number: string | null;
+  withholding_tax_amount: string | null;
+  withholding_tax_type: string | null;
+  invoice_breakdown: unknown;
+}
+
+interface VendorInvoiceLineRow {
+  id: number;
+  product_id: number | null;
+  name: string | null;
+  quantity: string | number;
+  unit: string | null;
+  unit_cost: string | number;
+  subtotal: string | number;
+  tax_amount: string | number;
+  notes: string | null;
+  coa_account_id: number | null;
+}
+
+interface VendorInvoiceLineTaxRow {
+  id: number;
+  invoice_line_id: number;
+  tax_type: string | null;
+  tax_object: string | null;
+  tax_amount: string | number;
+  liability_account_id: number | null;
+  resolution_status: string | null;
+}
+
+interface VendorWithholdingRecordRow {
+  id: number;
+  vendor_invoice_id: number;
+  invoice_line_id: number | null;
+  line_tax_id: number | null;
+  tax_type: string | null;
+  tax_object: string | null;
+  tax_amount: string | number;
+  liability_account_id: number | null;
+  status: string | null;
+}
+
+function getLocalApiUser(req: Request): DevAuthUser | null {
+  const devUser = getDevSession(req);
+  if (devUser) return devUser;
+  if (isDevelopmentEnvironment()) return null;
+  return null;
+}
+
 type PurchaseRequest = Request & { purchaseUser?: DevAuthUser };
+
 
 async function authenticatePurchaseUser(
   req: PurchaseRequest,
@@ -78,12 +171,21 @@ async function authenticatePurchaseUser(
 
 router.use("/purchase-workflow", authenticatePurchaseUser);
 
-// Purchase Workflow owns the vendor-invoice schema and withholding lifecycle.
-// The proxy workspace must authenticate these requests, then let the parent
-// router forward them to the upstream service instead of querying its unrelated
-// local database. In particular, GET/read/refresh requests must never create
-// withholding records as a local fallback.
-router.use("/purchase-workflow/vendor-invoices", (_req, _res, next) => {
+// Purchase Workflow owns vendor-invoice writes and non-local endpoints. Keep
+// canonical invoice reads in this service so opening an invoice cannot trigger
+// the upstream legacy withholding-repair path.
+router.use("/purchase-workflow/vendor-invoices", (req, _res, next) => {
+  const path = new URL(req.originalUrl, "http://local-request").pathname;
+  const isLocalRead = req.method === "GET" && (
+    path === "/purchase-workflow/vendor-invoices"
+    || path === "/purchase-workflow/vendor-invoices/"
+    || path === "/purchase-workflow/vendor-invoices/liability-accounts"
+    || /^\/purchase-workflow\/vendor-invoices\/\d+$/.test(path)
+  );
+  if (isLocalRead) {
+    next();
+    return;
+  }
   next("router");
 });
 
@@ -197,11 +299,12 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   const page = parsePositiveQueryInt(req.query.page, 1, 10_000);
   const offset = (page - 1) * pageSize;
   try {
-    const result = await pool.query(`
+    const result = await pool.query<VendorInvoiceListRow>(`
       ${RECONCILED_PAYMENT_CTE}
       select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
              vi.status::text status, vi.grand_total,
              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
+
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
              vi.journal_entry_id, ae.status::text journal_status,
              count(*) over()::int total_count
@@ -246,7 +349,7 @@ router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, 
     return;
   }
   try {
-    const result = await pool.query(`
+    const result = await pool.query<LiabilityAccountRow>(`
       select id, code, name
       from public.chart_of_accounts
       where coalesce(is_active, true) = true
@@ -273,14 +376,14 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
     return;
   }
   try {
-    const invoiceResult = await pool.query(`
+    const invoiceResult = await pool.query<VendorInvoiceDetailRow>(`
       ${RECONCILED_PAYMENT_CTE}
       select vi.*, vi.status::text status,
-              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
+             coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
              ae.status::text journal_status, ae.entry_number journal_entry_number
-      from public.vendor_invoices vi
-      left join public.accounting_entries ae on ae.id = vi.journal_entry_id
-       ${RECONCILED_PAYMENT_JOIN}
+        from public.vendor_invoices vi
+        left join public.accounting_entries ae on ae.id = vi.journal_entry_id
+        ${RECONCILED_PAYMENT_JOIN}
        where vi.id = $2 and vi.company_id = $1
     `, [companyId, invoiceId]);
     const row = invoiceResult.rows[0];
@@ -289,14 +392,14 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       return;
     }
     const [lines, taxes, withholding] = await Promise.all([
-      pool.query(`
+      pool.query<VendorInvoiceLineRow>(`
         select id, product_id product_id, name, quantity, unit, unit_cost unit_cost,
                subtotal, tax_amount tax_amount, notes, coa_account_id coa_account_id
         from public.vendor_invoice_lines
         where invoice_id = $1
         order by id
       `, [invoiceId]),
-      pool.query(`
+      pool.query<VendorInvoiceLineTaxRow>(`
         select id, invoice_line_id invoice_line_id, tax_type tax_type, tax_object tax_object,
                tax_amount tax_amount, liability_account_id liability_account_id,
                resolution_status resolution_status
@@ -306,7 +409,7 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
         )
         order by id
       `, [invoiceId]),
-      pool.query(`
+      pool.query<VendorWithholdingRecordRow>(`
         select id, vendor_invoice_id vendor_invoice_id, invoice_line_id invoice_line_id,
                line_tax_id line_tax_id, tax_type tax_type, tax_object tax_object,
                tax_amount tax_amount, liability_account_id liability_account_id, status

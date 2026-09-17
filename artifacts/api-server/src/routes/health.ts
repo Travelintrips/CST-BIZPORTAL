@@ -15,7 +15,7 @@ router.get("/healthz", (_req, res) => {
 
 router.get("/health/ready", async (_req, res) => {
   try {
-    await pool.query("select 1");
+    await pool.query<{ ok: number }>("select 1 as ok");
     res.json({
       status: "ok",
       ready: true,

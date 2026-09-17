@@ -12,6 +12,21 @@ interface SheetConfigInput {
   is_active?: boolean;
 }
 
+interface SheetConfigRow {
+  id: number;
+  company_id: number | null;
+  company_name: string | null;
+  label: string;
+  sheet_id: string;
+  tab_name: string;
+  bank_account_number: string | null;
+  bank_name: string | null;
+  is_active: boolean | null;
+  last_synced_at: Date | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+}
+
 const router: IRouter = Router();
 
 function parsePositiveInt(value: unknown): number | null {
@@ -71,7 +86,7 @@ router.get("/bank-reconciliation/sheet-configs", async (req, res): Promise<void>
   }
 
   try {
-    const result = await pool.query(
+    const result = await pool.query<SheetConfigRow>(
       `${selectSheetConfigs}
        ${companyId === null ? "" : "where config.company_id = $1"}
        order by config.is_active desc, config.label, config.id`,
@@ -92,7 +107,7 @@ router.post("/bank-reconciliation/sheet-configs", async (req, res): Promise<void
   }
 
   try {
-    const result = await pool.query(
+    const result = await pool.query<SheetConfigRow>(
       `insert into public.bank_sheet_configs
         (company_id, label, sheet_id, bank_account_number, bank_name, tab_name)
        values ($1, $2, $3, $4, $5, $6)
@@ -141,7 +156,7 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
 
   values.push(id);
   try {
-    const result = await pool.query(
+    const result = await pool.query<SheetConfigRow>(
       `update public.bank_sheet_configs
        set ${fields.join(", ")}, updated_at = now()
        where id = $${values.length}
@@ -167,7 +182,7 @@ router.delete("/bank-reconciliation/sheet-configs/:id", async (req, res): Promis
   }
 
   try {
-    const result = await pool.query(
+    const result = await pool.query<{ id: number }>(
       "delete from public.bank_sheet_configs where id = $1 returning id",
       [id],
     );

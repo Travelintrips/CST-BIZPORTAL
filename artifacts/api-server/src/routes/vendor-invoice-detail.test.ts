@@ -76,18 +76,6 @@ describe("vendor invoice detail read path", () => {
     app = express();
     app.use(express.json());
     app.use(purchaseWorkflowRouter);
-    app.get("/purchase-workflow/vendor-invoices/liability-accounts", (_req, res) => {
-      res.json([{ id: 501, code: "2-1000", name: "Utang PPh" }]);
-    });
-    app.get("/purchase-workflow/vendor-invoices/:id", (req, res) => {
-      res.json({
-        id: Number(req.params.id),
-        status: "posted",
-        withholdingTaxAmount: "0",
-        lineTaxes: [],
-        withholdingRecords: [],
-      });
-    });
     server = await new Promise<http.Server>((resolve) => {
       const listeningServer = app.listen(0, "127.0.0.1", () => resolve(listeningServer));
     });
@@ -95,6 +83,32 @@ describe("vendor invoice detail read path", () => {
 
   beforeEach(() => {
     queryMock.mockReset();
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("from public.vendor_invoices vi")) {
+        return {
+          rows: [{
+            id: 12,
+            company_id: 1,
+            invoice_number: "VI/2026/00004",
+            status: "posted",
+            grand_total: "26852296",
+            reconciled_amount_paid: "0",
+            withholding_tax_amount: "0",
+            withholding_tax_type: null,
+            invoice_breakdown: {
+              totals: { gross: 26852296, payable_amount: 26852296 },
+              components: [],
+            },
+            updated_at: new Date("2026-09-17T00:00:00.000Z"),
+          }],
+        };
+      }
+      if (sql.includes("from public.vendor_invoice_lines")) return { rows: [] };
+      if (sql.includes("from public.vendor_invoice_line_taxes")) return { rows: [] };
+      if (sql.includes("from public.vendor_withholding_records")) return { rows: [] };
+      if (sql.includes("from public.chart_of_accounts")) return { rows: [] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
   });
 
   afterAll(async () => {
@@ -103,15 +117,15 @@ describe("vendor invoice detail read path", () => {
     });
   });
 
-  it.each([9, 12])("returns invoice #%s with zero PPh and no withholding records on repeated reads", async (id) => {
+  it("returns the canonical local invoice without invoking the upstream fallback", async () => {
     const cookie = makeDevelopmentCookie();
-    const first = await request(server, `/purchase-workflow/vendor-invoices/${id}?company=1`, cookie);
-    const second = await request(server, `/purchase-workflow/vendor-invoices/${id}?company=1`, cookie);
+    const first = await request(server, "/purchase-workflow/vendor-invoices/12?company=1", cookie);
+    const second = await request(server, "/purchase-workflow/vendor-invoices/12?company=1", cookie);
 
     for (const response of [first, second]) {
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({
-        id,
+        id: 12,
         status: "posted",
         withholdingTaxAmount: "0",
         lineTaxes: [],
@@ -119,10 +133,11 @@ describe("vendor invoice detail read path", () => {
       });
     }
 
-    expect(queryMock).not.toHaveBeenCalled();
+    expect(queryMock).toHaveBeenCalled();
+    expect(queryMock.mock.calls.every(([sql]) => !String(sql).match(/\b(insert|update|delete)\b/i))).toBe(true);
   });
 
-  it("passes liability-account reads upstream without querying the local database", async () => {
+  it("serves liability-account reads locally without forwarding them upstream", async () => {
     const response = await request(
       server,
       "/purchase-workflow/vendor-invoices/liability-accounts?company=1",
@@ -130,7 +145,8 @@ describe("vendor invoice detail read path", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual([{ id: 501, code: "2-1000", name: "Utang PPh" }]);
-    expect(queryMock).not.toHaveBeenCalled();
+    expect(response.body).toEqual([]);
+    expect(queryMock).toHaveBeenCalled();
+    expect(queryMock.mock.calls.every(([sql]) => !String(sql).match(/\b(insert|update|delete)\b/i))).toBe(true);
   });
 });
