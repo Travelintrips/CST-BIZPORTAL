@@ -28,7 +28,7 @@ DEV_LOGIN_ROLE = "admin"
 
 
 [userenv.production]
-BIZPORTAL_API_ORIGIN_PROD = "https://cstlogistic.co.id"
+BIZPORTAL_API_ORIGIN_PROD = "https://bizportal.cstlogistic.co.id"
 
 
 [nix]

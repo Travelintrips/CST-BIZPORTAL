@@ -7,7 +7,7 @@ The development Secret Manager payload currently provides a frontend URL instead
 
 **Why:** Requests sent to the frontend URL return 404 for BizPortal API routes, while forwarding development identity to the production host is intentionally blocked.
 
-**How to apply:** Keep `BIZPORTAL_API_ORIGIN_PROD` pointed at the production API and configure `BIZPORTAL_API_ORIGIN_DEV` with the stable `bizportal.cstlogistic.co.id` backend origin. Reject ephemeral `*.replit.dev` hosts and fail clearly if the development origin is missing instead of using production.
+**How to apply:** Keep `BIZPORTAL_API_ORIGIN_PROD` pointed at the separate `bizportal.cstlogistic.co.id` backend origin while `cstlogistic.co.id` serves the Replit BizPortal deployment. Reject ephemeral `*.replit.dev` hosts and fail clearly if the development origin is missing instead of using production.
 
 Development accounting queries also require `SUPABASE_DATABASE_URL_DEV` as a valid PostgreSQL connection string; `SUPABASE_URL_DEV` is a frontend Supabase URL and cannot replace the database connection.
 
