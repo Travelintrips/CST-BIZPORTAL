@@ -19,6 +19,10 @@ import { pool } from "@workspace/db";
 
 const router: IRouter = Router();
 
+router.get("/", (_request, response) => {
+  response.json({ status: "ok", service: "cst-bizportal-api" });
+});
+
 router.use(healthRouter);
 
 router.use(createDevAuthRouter());
