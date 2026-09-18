@@ -25,3 +25,4 @@
 - [Top-level artifact routing](top-level-artifact-routing.md) — the preview gateway only publishes root artifacts from top-level `artifacts/`; upstream manifests need a validated root wrapper.
 - [Artifact production environment injection](artifact-production-env.md) — service runtime values may need to be declared in the artifact manifest, not only root userenv.
 - [Posted ledger immutability](posted-ledger-immutability.md) — posted accounting entries reject financial date edits; corrections require a reversal/new entry workflow.
+- [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.

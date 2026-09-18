@@ -1,6 +1,12 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { inspectSpreadsheet } from "../lib/google-sheets";
+import {
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  isDevelopmentEnvironment,
+} from "./dev-auth";
 
 interface SheetConfigInput {
   company_id?: number | null;
@@ -28,6 +34,561 @@ interface SheetConfigRow {
 }
 
 const router: IRouter = Router();
+
+type ApprovalClient = {
+  query: <T = Record<string, unknown>>(
+    text: string,
+    values?: any[],
+  ) => Promise<{ rows: T[]; rowCount?: number | null }>;
+};
+
+interface ApprovalBody {
+  match_id?: unknown;
+  candidate_type?: unknown;
+  candidate_id?: unknown;
+  candidate_source?: unknown;
+  note?: unknown;
+  manual_coa_code?: unknown;
+}
+
+interface ApprovalActor {
+  email: string;
+  companyId: number | null;
+}
+
+class ApprovalError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApprovalError";
+  }
+}
+
+function textValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text ? text : null;
+}
+
+function safeInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function getApprovalActor(request: Request): Promise<ApprovalActor | null> {
+  const allowedRoles = new Set(["admin", "owner", "finance", "accounting"]);
+
+  if (isDevelopmentEnvironment()) {
+    const user = getDevSession(request);
+    if (!user || !allowedRoles.has(user.role.toLowerCase())) return null;
+    return { email: user.email, companyId: user.companyId };
+  }
+
+  const session = getProductionSession(request);
+  if (!session) return null;
+  const user = await getProductionUser(session);
+  if (!user || !allowedRoles.has(user.role.toLowerCase())) return null;
+  return { email: user.email, companyId: user.companyId };
+}
+
+async function resolveApprovalContraAccount(
+  client: ApprovalClient,
+  companyId: number,
+  direction: string,
+  candidateType: string | null,
+  manualCoaCode: string | null,
+): Promise<{ id: number; code: string; name: string }> {
+  if (manualCoaCode) {
+    const manual = await client.query<{ id: number; code: string; name: string }>(
+      `select id, code, name
+         from public.chart_of_accounts
+        where code = $1
+          and (company_id = $2 or company_id is null)
+          and coalesce(is_active, true) = true
+          and coalesce(is_header, false) = false
+          and coalesce(is_postable, true) = true
+        order by case when company_id = $2 then 0 else 1 end, id
+        limit 1`,
+      [manualCoaCode, companyId],
+    );
+    const account = manual.rows[0];
+    if (!account) {
+      throw new ApprovalError(
+        `Akun COA "${manualCoaCode}" tidak ditemukan atau tidak aktif di perusahaan ini.`,
+        422,
+        "COA_NOT_FOUND",
+      );
+    }
+    return account;
+  }
+
+  const settings = await client.query<{
+    ar_account_id: number | null;
+    ap_account_id: number | null;
+    purchase_expense_account_id: number | null;
+  }>(
+    `select ar_account_id, ap_account_id, purchase_expense_account_id
+       from public.accounting_settings
+      where company_id = $1
+      limit 1`,
+    [companyId],
+  );
+  const configured = settings.rows[0];
+  const type = (candidateType ?? "").toLowerCase();
+  const isVendorPayable = type.includes("vendor") || type.includes("invoice") || type.includes("payable");
+  const configuredId = direction === "IN"
+    ? configured?.ar_account_id
+    : isVendorPayable
+      ? configured?.ap_account_id
+      : configured?.purchase_expense_account_id ?? configured?.ap_account_id;
+
+  if (configuredId != null) {
+    const configuredAccount = await client.query<{ id: number; code: string; name: string }>(
+      `select id, code, name
+         from public.chart_of_accounts
+        where id = $1
+          and (company_id = $2 or company_id is null)
+          and coalesce(is_active, true) = true
+          and coalesce(is_header, false) = false
+          and coalesce(is_postable, true) = true
+        limit 1`,
+      [configuredId, companyId],
+    );
+    const account = configuredAccount.rows[0];
+    if (account) return account;
+  }
+
+  throw new ApprovalError(
+    direction === "IN"
+      ? "Akun piutang (AR) belum dikonfigurasi di Accounting Settings. Pilih COA manual sebelum approve."
+      : "Akun lawan transaksi belum dikonfigurasi. Pilih COA manual sebelum approve.",
+    422,
+    "JOURNAL_MAPPING_REQUIRED",
+  );
+}
+
+async function resolveApprovalBankAccount(
+  client: ApprovalClient,
+  companyId: number,
+  bankAccountReference: string | null,
+): Promise<number | null> {
+  let coaId: number | null = null;
+  if (bankAccountReference) {
+    const byCompanyBank = await client.query<{ coa_id: number | null }>(
+      `select coa_id
+         from public.company_bank_accounts
+        where company_id = $1
+          and coalesce(is_active, true) = true
+          and (
+            id::text = $2
+            or account_number::text = $2
+            or regexp_replace(coalesce(account_number, ''), '[^0-9]', '', 'g') =
+               regexp_replace($2, '[^0-9]', '', 'g')
+          )
+        order by case when id::text = $2 then 0 else 1 end, id
+        limit 1`,
+      [companyId, bankAccountReference],
+    );
+    coaId = byCompanyBank.rows[0]?.coa_id ?? null;
+  }
+
+  if (coaId == null) {
+    const settings = await client.query<{ default_bank_account_id: number | null }>(
+      `select default_bank_account_id
+         from public.accounting_settings
+        where company_id = $1
+        limit 1`,
+      [companyId],
+    );
+    const defaultReference = settings.rows[0]?.default_bank_account_id;
+    if (defaultReference != null) {
+      const defaultAccount = await client.query<{ id: number }>(
+        `select resolved.id
+           from (
+             select cba.coa_id as id, 0 as priority
+               from public.company_bank_accounts cba
+              where cba.company_id = $1
+                and coalesce(cba.is_active, true) = true
+                and (cba.id = $2 or cba.coa_id = $2)
+                and cba.coa_id is not null
+             union all
+             select coa.id, 1 as priority
+               from public.chart_of_accounts coa
+              where coa.id = $2
+           ) resolved
+          join public.chart_of_accounts coa on coa.id = resolved.id
+          where coalesce(coa.is_active, true) = true
+            and coalesce(coa.is_header, false) = false
+            and coalesce(coa.is_postable, true) = true
+          order by resolved.priority
+          limit 1`,
+        [companyId, defaultReference],
+      );
+      coaId = defaultAccount.rows[0]?.id ?? null;
+    }
+  }
+
+  if (coaId == null) return null;
+  const valid = await client.query<{ id: number }>(
+    `select id
+       from public.chart_of_accounts
+      where id = $1
+        and (company_id = $2 or company_id is null)
+        and coalesce(is_active, true) = true
+        and coalesce(is_header, false) = false
+        and coalesce(is_postable, true) = true
+      limit 1`,
+    [coaId, companyId],
+  );
+  return valid.rows[0]?.id ?? null;
+}
+
+async function nextApprovalEntryNumber(
+  client: ApprovalClient,
+  companyId: number,
+  year: number,
+): Promise<string> {
+  const sequence = await client.query<{ claimed_seq: number }>(
+    `insert into public.journal_sequences (journal_prefix, company_id, year, next_seq)
+     values ('RECON', $1, $2, 2)
+     on conflict (journal_prefix, company_id, year)
+     do update set next_seq = public.journal_sequences.next_seq + 1
+     returning (next_seq - 1)::int as claimed_seq`,
+    [companyId, year],
+  );
+  const claimed = Number(sequence.rows[0]?.claimed_seq ?? 1);
+  return `RECON/${year}/${String(claimed).padStart(6, "0")}`;
+}
+
+async function approveBankMutation(
+  client: ApprovalClient,
+  mutationId: number,
+  body: ApprovalBody,
+  actor: ApprovalActor,
+  idempotencyKey: string | null,
+): Promise<Record<string, unknown>> {
+  const matchId = safeInteger(body.match_id);
+  const candidateId = safeInteger(body.candidate_id);
+  const candidateType = textValue(body.candidate_type);
+  const requestedSource = textValue(body.candidate_source);
+  const note = textValue(body.note);
+  const manualCoaCode = textValue(body.manual_coa_code);
+
+  const mutationResult = await client.query<{
+    id: number;
+    status: string;
+    amount: string;
+    direction: string;
+    transaction_date: string;
+    description: string;
+    mutation_key: string | null;
+    bank_reference: string | null;
+    canonical_key: string | null;
+    provider_order_id: string | null;
+    company_id: number | null;
+    bank_account_id: string | number | null;
+    journal_entry_id: number | null;
+  }>(
+    `select id, status, amount, direction, transaction_date, description,
+            mutation_key, bank_reference, canonical_key, provider_order_id,
+            company_id, bank_account_id, journal_entry_id
+       from public.bank_mutations
+      where id = $1
+      for update`,
+    [mutationId],
+  );
+  const mutation = mutationResult.rows[0];
+  if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan", 404, "NOT_FOUND");
+  if (mutation.company_id == null) {
+    throw new ApprovalError("Mutasi tidak memiliki company_id yang valid; approval diblokir.", 422, "COMPANY_SCOPE_REQUIRED");
+  }
+  if (actor.companyId != null && actor.companyId !== mutation.company_id) {
+    throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+  }
+
+  const amount = Number(mutation.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new ApprovalError("Nominal mutasi tidak valid.", 422, "INVALID_AMOUNT");
+  }
+  const direction = String(mutation.direction ?? "").toUpperCase() === "OUT" ? "OUT" : "IN";
+
+  if (["approved_pending_posting", "approved", "posted"].includes(mutation.status)) {
+    if (mutation.journal_entry_id == null) {
+      throw new ApprovalError("Mutasi sudah approved tetapi belum memiliki jurnal.", 409, "APPROVAL_STATE_INVALID");
+    }
+    return {
+      ok: true,
+      journal_entry_id: mutation.journal_entry_id,
+      status: mutation.status,
+      idempotent: true,
+    };
+  }
+  if (!["unmatched", "matched", "manual_review", "duplicate_need_review"].includes(mutation.status)) {
+    throw new ApprovalError(`Mutasi dengan status "${mutation.status}" tidak dapat di-approve.`, 409, "INVALID_STATUS");
+  }
+
+  let selectedCandidateType = candidateType;
+  let selectedCandidateId = candidateId;
+  let selectedCandidateSource = requestedSource;
+  if (matchId != null) {
+    const matchResult = await client.query<{
+      candidate_type: string;
+      candidate_id: number;
+      candidate_source: string | null;
+      status: string;
+    }>(
+      `select candidate_type, candidate_id, candidate_source, status
+         from public.bank_reconciliation_matches
+        where id = $1 and mutation_id = $2
+        for update`,
+      [matchId, mutationId],
+    );
+    const match = matchResult.rows[0];
+    if (!match) throw new ApprovalError("Kandidat rekonsiliasi tidak ditemukan untuk mutasi ini.", 409, "MATCH_NOT_FOUND");
+    selectedCandidateType = match.candidate_type;
+    selectedCandidateId = match.candidate_id;
+    selectedCandidateSource = requestedSource ?? match.candidate_source;
+  }
+
+  const approvedMatch = await client.query<{ id: number }>(
+    `select id
+       from public.bank_reconciliation_matches
+      where mutation_id = $1 and status = 'approved'
+      limit 1
+      for update`,
+    [mutationId],
+  );
+  if (approvedMatch.rows.length > 0 && approvedMatch.rows[0]?.id !== matchId) {
+    throw new ApprovalError("Kandidat lain sudah di-approve untuk mutasi ini.", 409, "CONFLICT");
+  }
+
+  const companyId = mutation.company_id;
+  const bankCoaId = await resolveApprovalBankAccount(
+    client,
+    companyId,
+    mutation.bank_account_id == null ? null : String(mutation.bank_account_id),
+  );
+  if (bankCoaId == null) {
+    throw new ApprovalError(
+      "Akun bank/kas tidak ditemukan. Konfigurasikan akun bank perusahaan terlebih dahulu.",
+      422,
+      "COA_NOT_FOUND",
+    );
+  }
+  const contra = await resolveApprovalContraAccount(
+    client,
+    companyId,
+    direction,
+    selectedCandidateType,
+    manualCoaCode,
+  );
+
+  const journalResult = await client.query<{ id: number; code: string }>(
+    `select id, code
+       from public.accounting_journals
+      where company_id = $1
+        and (lower(name) like '%bank%' or lower(code) like '%bank%' or type = 'bank')
+      order by id
+      limit 1`,
+    [companyId],
+  );
+  const journal = journalResult.rows[0];
+  if (!journal) {
+    throw new ApprovalError(
+      "Jurnal bank belum dikonfigurasi untuk perusahaan ini.",
+      422,
+      "JOURNAL_MAPPING_REQUIRED",
+    );
+  }
+
+  const existingEntry = await client.query<{ id: number; entry_number: string; status: string }>(
+    `select id, entry_number, status
+       from public.accounting_entries
+      where company_id = $1
+        and source = 'bank_reconciliation'
+        and source_id = $2
+      limit 1
+      for update`,
+    [companyId, mutationId],
+  );
+  let entryId: number;
+  let entryNumber: string;
+  if (existingEntry.rows[0]) {
+    entryId = existingEntry.rows[0].id;
+    entryNumber = existingEntry.rows[0].entry_number;
+  } else {
+    const txDate = String(mutation.transaction_date).split("T")[0];
+    const year = Number(txDate.slice(0, 4)) || new Date().getUTCFullYear();
+    entryNumber = await nextApprovalEntryNumber(client, companyId, year);
+    const reference = mutation.mutation_key ?? mutation.bank_reference ?? mutation.canonical_key ?? String(mutationId);
+    const description = String(mutation.description ?? "").slice(0, 200);
+    const inserted = await client.query<{ id: number; entry_number: string }>(
+      `insert into public.accounting_entries
+        (entry_number, journal_id, date, ref, description, status, source, source_id,
+         total_debit, total_credit, created_by_id, company_id)
+       values ($1, $2, $3, $4, $5, 'draft', 'bank_reconciliation', $6,
+               $7, $7, $8, $9)
+       returning id, entry_number`,
+      [entryNumber, journal.id, txDate, reference, description, mutationId, amount, actor.email, companyId],
+    );
+    const insertedEntry = inserted.rows[0];
+    if (!insertedEntry) throw new Error("Jurnal gagal dibuat.");
+    entryId = insertedEntry.id;
+    entryNumber = insertedEntry.entry_number;
+
+    const lineDescription = (note ?? description ?? `Rekon ${mutationId}`).slice(0, 200);
+    if (direction === "IN") {
+      await client.query(
+        `insert into public.accounting_entry_lines
+          (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4), ($1, $5, 0, $3, $4)`,
+        [entryId, bankCoaId, amount, lineDescription, contra.id],
+      );
+    } else {
+      await client.query(
+        `insert into public.accounting_entry_lines
+          (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4), ($1, $5, 0, $3, $4)`,
+        [entryId, contra.id, amount, lineDescription, bankCoaId],
+      );
+    }
+  }
+
+  await client.query(
+    `update public.bank_mutations
+        set status = 'approved_pending_posting',
+            reconciliation_status = 'matched',
+            journal_entry_id = $1,
+            approved_by = $2,
+            approved_at = now(),
+            updated_at = now()
+      where id = $3`,
+    [entryId, actor.email, mutationId],
+  );
+
+  if (matchId != null) {
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status = 'approved'
+        where id = $1 and mutation_id = $2`,
+      [matchId, mutationId],
+    );
+  } else if (selectedCandidateType && selectedCandidateId != null) {
+    await client.query(
+      `insert into public.bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match,
+         status, candidate_source)
+       values ($1, $2, $3, 100, 'manual approve', true, false, false, false, false,
+               'approved', $4)
+       on conflict do nothing`,
+      [mutationId, selectedCandidateType, selectedCandidateId, selectedCandidateSource],
+    );
+  }
+
+  await client.query(
+    `insert into public.bank_reconciliation_audit
+      (mutation_id, action, actor, meta)
+     values ($1, 'MATCH_APPROVED', $2, $3::jsonb)`,
+    [
+      mutationId,
+      actor.email,
+      JSON.stringify({
+        match_id: matchId,
+        candidate_type: selectedCandidateType,
+        candidate_id: selectedCandidateId,
+        candidate_source: selectedCandidateSource,
+        journal_entry_id: entryId,
+        entry_number: entryNumber,
+        bank_coa_id: bankCoaId,
+        contra_coa_id: contra.id,
+        amount,
+        direction,
+        note,
+        manual_coa_override: manualCoaCode != null,
+        idempotency_key: idempotencyKey,
+      }),
+    ],
+  );
+
+  return {
+    ok: true,
+    journal_entry_id: entryId,
+    journal_entry_number: entryNumber,
+    status: "approved_pending_posting",
+  };
+}
+
+router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) {
+    res.status(400).json({ error: "ID mutasi tidak valid", code: "INVALID_MUTATION_ID" });
+    return;
+  }
+
+  let actor: ApprovalActor | null;
+  try {
+    actor = await getApprovalActor(req);
+  } catch (error) {
+    req.log.error({ error }, "Failed to resolve approval actor");
+    res.status(503).json({ error: "Authorization service unavailable" });
+    return;
+  }
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const idempotencyKey = textValue(req.header("x-idempotency-key"));
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await approveBankMutation(
+      client,
+      mutationId,
+      (req.body ?? {}) as ApprovalBody,
+      actor,
+      idempotencyKey,
+    );
+    await client.query("commit");
+    res.json(result);
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch (rollbackError) {
+      req.log.warn({ rollbackError }, "Bank reconciliation approval rollback failed");
+    }
+
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.code === "JOURNAL_MAPPING_REQUIRED" || error.code === "COA_NOT_FOUND"
+          ? { manual_review_required: true }
+          : {}),
+      });
+      return;
+    }
+
+    if ((error as { code?: string }).code === "42P01") {
+      req.log.error({ error, mutationId }, "Bank reconciliation schema is unavailable");
+      res.status(503).json({
+        error: "Schema bank reconciliation belum tersedia pada database lokal.",
+        code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+      });
+      return;
+    }
+
+    req.log.error({ error, mutationId }, "Bank reconciliation approval failed");
+    res.status(503).json({ error: "Approval mutasi dan pembuatan draft jurnal gagal" });
+  } finally {
+    client.release();
+  }
+});
 
 function parsePositiveInt(value: unknown): number | null {
   const parsed = Number(value);

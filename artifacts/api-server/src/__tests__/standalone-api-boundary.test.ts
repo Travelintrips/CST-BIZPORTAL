@@ -21,4 +21,20 @@ describe("standalone BizPortal API boundary", () => {
     expect(routeSource).not.toContain("establishDevelopmentUpstreamSession");
     expect(routeSource).not.toContain("establishProductionUpstreamSession");
   });
+
+  it("implements local bank reconciliation approval with an atomic journal transaction", () => {
+    const bankReconciliationSource = readFileSync(
+      new URL("../routes/bank-reconciliation.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(bankReconciliationSource).toContain(
+      'router.post("/bank-reconciliation/:mutationId/approve"',
+    );
+    expect(bankReconciliationSource).toContain("await client.query(\"begin\")");
+    expect(bankReconciliationSource).toContain("await client.query(\"commit\")");
+    expect(bankReconciliationSource).toContain("source = 'bank_reconciliation'");
+    expect(bankReconciliationSource).toContain("bank_reconciliation_audit");
+    expect(bankReconciliationSource).not.toContain("requestUpstream");
+  });
 });
