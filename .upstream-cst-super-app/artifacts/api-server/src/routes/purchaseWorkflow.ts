@@ -954,6 +954,26 @@ router.get("/vendor-invoices/check-duplicate", async (req, res) => {
   });
 });
 
+router.get("/vendor-invoices/liability-accounts", async (req, res) => {
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const accounts = await db
+    .select({
+      id: chartOfAccountsTable.id,
+      code: chartOfAccountsTable.code,
+      name: chartOfAccountsTable.name,
+    })
+    .from(chartOfAccountsTable)
+    .where(and(
+      eq(chartOfAccountsTable.companyId, companyId),
+      eq(chartOfAccountsTable.type, "liability"),
+      eq(chartOfAccountsTable.isActive, true),
+      eq(chartOfAccountsTable.isPostable, true),
+      eq(chartOfAccountsTable.status, "ACTIVE"),
+    ))
+    .orderBy(chartOfAccountsTable.code);
+  return res.json(accounts);
+});
+
 router.get("/vendor-invoices/coa-mappings", async (req, res) => {
   const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   const supplierId = Number(req.query.supplierId);
@@ -972,6 +992,179 @@ router.get("/vendor-invoices/coa-mappings", async (req, res) => {
     .orderBy(desc(vendorInvoiceCoaMappingsTable.updatedAt));
 
   return res.json(mappings);
+});
+
+router.put("/vendor-invoices/:id/correct-withholding-coa", async (req, res) => {
+  const id = Number(req.params.id);
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const requestedTaxes = Array.isArray(req.body?.taxes) ? req.body.taxes : [];
+  const reason = String(req.body?.reason ?? "").trim();
+  const actor = String((req as { user?: { id?: unknown } }).user?.id ?? "ADMIN");
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "ID vendor invoice tidak valid." });
+  }
+  if (reason.length < 10) {
+    return res.status(400).json({ error: "Alasan koreksi minimal 10 karakter." });
+  }
+  const changes: Array<{
+    lineTaxId: number;
+    invoiceLineId: number;
+    liabilityAccountId: number;
+  }> = requestedTaxes.map((value: unknown) => {
+    const tax = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return {
+      lineTaxId: Number(tax.lineTaxId ?? 0),
+      invoiceLineId: Number(tax.invoiceLineId ?? 0),
+      liabilityAccountId: Number(tax.liabilityAccountId),
+    };
+  });
+  if (changes.length === 0 || changes.some((tax: typeof changes[number]) =>
+    (!Number.isInteger(tax.lineTaxId) || tax.lineTaxId <= 0)
+      && (!Number.isInteger(tax.invoiceLineId) || tax.invoiceLineId <= 0)
+      || !Number.isInteger(tax.liabilityAccountId) || tax.liabilityAccountId <= 0
+  )) {
+    return res.status(400).json({ error: "Setiap PPh harus memiliki line tax dan COA liabilitas yang valid." });
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const invoiceRows = rowsOf<Record<string, unknown>>(await tx.execute(sql`
+        SELECT id, status, amount_paid
+        FROM vendor_invoices
+        WHERE id = ${id} AND company_id = ${companyId} AND cancelled_at IS NULL
+        FOR UPDATE
+      `));
+      const invoice = invoiceRows[0];
+      if (!invoice) return { kind: "error" as const, code: "NOT_FOUND" as const };
+      if (!["posted", "matched"].includes(String(invoice.status))) {
+        return { kind: "error" as const, code: "NOT_POSTED" as const };
+      }
+      if (num(invoice.amount_paid) > 0.01) {
+        return { kind: "error" as const, code: "PAYMENT_ACTIVE" as const };
+      }
+
+      await ensureVendorWithholdingRecords(
+        tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+        companyId,
+        id,
+      );
+
+      const taxRows = rowsOf<Record<string, unknown>>(await tx.execute(sql`
+        SELECT
+          vit.id,
+          vit.invoice_line_id,
+          vit.tax_type,
+          vit.tax_object,
+          vit.liability_account_id
+        FROM vendor_invoice_line_taxes vit
+        INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+        WHERE vil.invoice_id = ${id}
+          AND vit.company_id = ${companyId}
+          AND vit.tax_amount > 0
+        ORDER BY vit.id
+        FOR UPDATE OF vit
+      `));
+      const matchedChanges = changes.map((change: typeof changes[number]) => {
+        const row = taxRows.find((tax) =>
+          (change.lineTaxId > 0 && Number(tax.id) === change.lineTaxId)
+            || (change.lineTaxId <= 0
+              && change.invoiceLineId > 0
+              && Number(tax.invoice_line_id) === change.invoiceLineId),
+        );
+        return row ? { ...change, row } : null;
+      });
+      if (matchedChanges.some((change: (typeof matchedChanges)[number]) => !change)) {
+        return { kind: "error" as const, code: "TAX_NOT_FOUND" as const };
+      }
+      const uniqueTaxIds = new Set(matchedChanges.map((change: (typeof matchedChanges)[number]) => Number(change!.row.id)));
+      if (uniqueTaxIds.size !== matchedChanges.length) {
+        return { kind: "error" as const, code: "DUPLICATE_TAX" as const };
+      }
+
+      const accountIds: number[] = [...new Set(changes.map((tax: typeof changes[number]) => tax.liabilityAccountId))];
+      const accounts = await tx
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(and(
+          eq(chartOfAccountsTable.companyId, companyId),
+          eq(chartOfAccountsTable.type, "liability"),
+          eq(chartOfAccountsTable.isActive, true),
+          eq(chartOfAccountsTable.isPostable, true),
+          eq(chartOfAccountsTable.status, "ACTIVE"),
+          inArray(chartOfAccountsTable.id, accountIds),
+        ));
+      if (accounts.length !== accountIds.length) {
+        return { kind: "error" as const, code: "LIABILITY_ACCOUNT_NOT_FOUND" as const };
+      }
+
+      const oldAccounts = matchedChanges.map((change: (typeof matchedChanges)[number]) => ({
+        lineTaxId: Number(change!.row.id),
+        invoiceLineId: Number(change!.row.invoice_line_id),
+        liabilityAccountId: change!.row.liability_account_id == null
+          ? null
+          : Number(change!.row.liability_account_id),
+      }));
+      for (const change of matchedChanges) {
+        const taxId = Number(change!.row.id);
+        await tx.execute(sql`
+          UPDATE vendor_invoice_line_taxes
+          SET liability_account_id = ${change!.liabilityAccountId},
+              resolution_status = 'confirmed',
+              reviewed_by = ${actor},
+              reviewed_at = NOW(),
+              updated_at = NOW()
+          WHERE id = ${taxId} AND company_id = ${companyId}
+        `);
+        await tx.execute(sql`
+          UPDATE vendor_withholding_records
+          SET liability_account_id = ${change!.liabilityAccountId},
+              updated_at = NOW()
+          WHERE line_tax_id = ${taxId}
+            AND vendor_invoice_id = ${id}
+            AND company_id = ${companyId}
+        `);
+      }
+
+      const newAccounts = matchedChanges.map((change: (typeof matchedChanges)[number]) => ({
+        lineTaxId: Number(change!.row.id),
+        invoiceLineId: Number(change!.row.invoice_line_id),
+        liabilityAccountId: change!.liabilityAccountId,
+      }));
+      await tx.execute(sql`
+        INSERT INTO erp_audit_logs
+          (company_id, user_id, action, module, reference_id, old_data, new_data, created_at)
+        VALUES
+          (${companyId}, ${actor}, ${"withholding_coa_correction"}, ${"vendor_invoice"},
+           ${String(id)}, ${JSON.stringify({ reason, taxes: oldAccounts })}::jsonb,
+           ${JSON.stringify({ reason, taxes: newAccounts })}::jsonb, NOW())
+      `);
+
+      const paymentStatus = await recalculateVendorInvoicePaymentStatus(
+        tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+        companyId,
+        id,
+      );
+      return { kind: "success" as const, paymentStatus, changes: newAccounts };
+    });
+
+    if (result.kind === "error") {
+      const responses = {
+        NOT_FOUND: [404, "Vendor Invoice tidak ditemukan pada company aktif."],
+        NOT_POSTED: [409, "Koreksi COA PPh hanya dapat dilakukan pada invoice posted atau matched."],
+        PAYMENT_ACTIVE: [409, "Reset atau balik pembayaran terlebih dahulu sebelum mengoreksi COA PPh."],
+        TAX_NOT_FOUND: [400, "Line PPh tidak ditemukan pada invoice ini."],
+        DUPLICATE_TAX: [400, "Line PPh tidak boleh dikirim lebih dari sekali."],
+        LIABILITY_ACCOUNT_NOT_FOUND: [400, "COA liabilitas PPh tidak valid untuk company aktif."],
+      } as const;
+      const [status, error] = responses[result.code];
+      return res.status(status).json({ error });
+    }
+    return res.json({ ok: true, invoiceId: id, changes: result.changes, paymentStatus: result.paymentStatus });
+  } catch (error) {
+    console.error("[vendor-invoices] withholding COA correction failed", { id, companyId, error });
+    return res.status(500).json({ error: "Gagal mengoreksi COA PPh." });
+  }
 });
 
 router.get("/vendor-invoices/:id", async (req, res) => {

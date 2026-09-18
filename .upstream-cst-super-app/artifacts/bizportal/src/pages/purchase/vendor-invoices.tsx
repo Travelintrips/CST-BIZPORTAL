@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 const idr = (n: number | string | null | undefined) => {
@@ -320,6 +320,7 @@ export function VendorInvoiceEditorPage() {
   const [form, setForm] = useState({ supplierName: "", vendorInvoiceRef: "", poId: sp.get("poId") ?? "", grId: sp.get("grId") ?? "", invoiceDate: new Date().toISOString().substring(0, 10), paymentTermDays: "30", notes: "" });
   const emptyLine = (): VILine => ({ name: "", quantity: "1", unit: "pcs", unitCost: "0", subtotal: "0", taxAmount: "0", coaAccountId: "", taxType: "", taxObject: "", withholdingAmount: "0", liabilityAccountId: "", notes: "" });
   const [lines, setLines] = useState<VILine[]>([emptyLine()]);
+  const [withholdingCorrectionOpen, setWithholdingCorrectionOpen] = useState(false);
 
   useEffect(() => {
     if (vi) {
@@ -516,6 +517,46 @@ export function VendorInvoiceEditorPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal mereset status pembayaran"),
   });
 
+  const withholdingCorrectionMut = useMutation({
+    mutationFn: async (reason: string) => {
+      const taxes = lines.map((line) => {
+        const tax = vi?.lineTaxes?.find((candidate) => candidate.invoiceLineId === line.id);
+        return {
+          lineTaxId: tax?.id,
+          invoiceLineId: line.id,
+          liabilityAccountId: Number(line.liabilityAccountId),
+        };
+      }).filter((tax) => tax.invoiceLineId && tax.liabilityAccountId > 0 && Number(lines.find((line) => line.id === tax.invoiceLineId)?.withholdingAmount ?? 0) > 0);
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/correct-withholding-coa?company=${activeCompanyId}`, {
+        method: "PUT",
+        body: JSON.stringify({ reason, taxes }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatPostingError(body, "Gagal mengoreksi COA PPh."));
+      return body;
+    },
+    onSuccess: async () => {
+      toast.success("COA PPh berhasil dikoreksi. Posting pembayaran berikutnya akan memakai akun baru.");
+      setWithholdingCorrectionOpen(false);
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal mengoreksi COA PPh."),
+  });
+
+  const handleWithholdingCorrection = () => {
+    if (!vi || Number(vi.amountPaid) > 0.01) {
+      toast.error("Reset atau balik pembayaran terlebih dahulu sebelum mengoreksi COA PPh.");
+      return;
+    }
+    const reason = window.prompt(
+      "Alasan koreksi COA PPh (minimal 10 karakter):",
+      "Koreksi akun liabilitas PPh sebelum posting ulang pembayaran.",
+    );
+    if (!reason?.trim()) return;
+    withholdingCorrectionMut.mutate(reason.trim());
+  };
+
   const syncPaymentStatusMut = useMutation({
     mutationFn: async () => {
       const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/recalculate-payment-status?company=${activeCompanyId}`, {
@@ -631,6 +672,32 @@ export function VendorInvoiceEditorPage() {
                 {resetPaymentMut.isPending ? "Mengoreksi..." : "Reset Pembayaran"}
               </Button>
             )}
+            {!isNew && vi && ["posted", "matched"].includes(vi.status) && summaryWithholding > 0 && (
+              <Button
+                variant="outline"
+                className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                onClick={() => {
+                  if (Number(vi.amountPaid) > 0.01) {
+                    toast.error("Reset atau balik pembayaran terlebih dahulu.");
+                    return;
+                  }
+                  setWithholdingCorrectionOpen(true);
+                }}
+                disabled={withholdingCorrectionMut.isPending}
+              >
+                <ShieldCheck className="mr-1 h-4 w-4" />
+                Koreksi COA PPh
+              </Button>
+            )}
+            {withholdingCorrectionOpen && (
+              <Button
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+                onClick={handleWithholdingCorrection}
+                disabled={withholdingCorrectionMut.isPending}
+              >
+                {withholdingCorrectionMut.isPending ? "Menyimpan..." : "Simpan COA PPh"}
+              </Button>
+            )}
             {!isNew && vi && vi.status !== "paid" && Number(vi.amountPaid) > 0 && (
               <Button
                 variant="outline"
@@ -672,6 +739,15 @@ export function VendorInvoiceEditorPage() {
             <p className="font-semibold">Finance Review PPh belum lengkap</p>
             <p className="mt-0.5 text-xs">
               Pilih akun liabilitas PPh pada {incompleteWithholdingLines.length} line sebelum invoice dapat diposting.
+            </p>
+          </div>
+        )}
+        {withholdingCorrectionOpen && (
+          <div className="rounded-lg border border-purple-300 bg-purple-50 px-4 py-3 text-sm text-purple-900">
+            <p className="font-semibold">Mode Koreksi COA PPh</p>
+            <p className="mt-0.5 text-xs">
+              Pilih akun liabilitas PPh yang benar pada setiap baris, lalu klik <strong>Simpan COA PPh</strong>.
+              Jurnal pembayaran lama tidak diubah; posting pembayaran berikutnya akan memakai akun baru.
             </p>
           </div>
         )}
@@ -770,7 +846,7 @@ export function VendorInvoiceEditorPage() {
                             <Select
                               value={line.liabilityAccountId || undefined}
                               onValueChange={(value) => updateLine(i, "liabilityAccountId", value)}
-                              disabled={!isDraft || liabilityAccountsLoading}
+                              disabled={(!isDraft && !withholdingCorrectionOpen) || liabilityAccountsLoading}
                             >
                               <SelectTrigger className="h-9">
                                 <SelectValue placeholder={liabilityAccountsLoading ? "Memuat akun..." : "Pilih akun PPh"} />
