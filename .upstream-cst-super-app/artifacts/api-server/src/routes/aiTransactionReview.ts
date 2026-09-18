@@ -179,6 +179,78 @@ aiTransactionReviewRouter.get('/review-cases', async (req: Request, res: Respons
   }
 });
 
+// ─── Phase 12: Source cross-link endpoints ────────────────────────────────────
+
+/**
+ * Supported source types for cross-linking.
+ * Mirrors the source values stored in ai_review_cases.source column.
+ */
+const SUPPORTED_SOURCES = new Set([
+  'BANK_MUTATION',
+  'BANK_RECONCILIATION',
+  'TREASURY',
+  'ACCOUNTING_ENTRY',
+  'EXPENSE',
+  'CASH_ADVANCE',
+  'VENDOR_PAYMENT',
+  'CUSTOMER_PAYMENT',
+  'INVOICE',
+  'SALES_DOCUMENT',
+  'PURCHASE',
+  'LOGISTIC_ORDER',
+  'SPORT_PAYMENT',
+  'PPJK',
+  'EXPECTED_CASH_FLOW',
+  // also accept lowercase/legacy values that analyzeAndCreateReviewCase uses internally
+  'bank_mutation',
+  'bank_reconciliation',
+  'treasury',
+  'accounting_entry',
+  'expense',
+  'cash_advance',
+  'vendor_payment',
+  'customer_payment',
+  'invoice',
+  'sales_document',
+  'purchase',
+  'logistic_order',
+  'sport_payment',
+  'ppjk',
+  'expected_cash_flow',
+]);
+
+// Register this literal route before /review-cases/:id so "by-source" is not
+// interpreted as a numeric review-case ID.
+aiTransactionReviewRouter.get('/review-cases/by-source', async (req: Request, res: Response) => {
+  if (!(await requireFinanceRole(req, res))) return;
+
+  const companyId = resolveCompanyId(req);
+  const source = String(req.query['source'] ?? '').trim();
+  const sourceRecordId = String(req.query['sourceRecordId'] ?? '').trim();
+
+  if (!source || !sourceRecordId) {
+    res.status(400).json({
+      ok: false,
+      error: { code: 'AI_REVIEW_VALIDATION_ERROR', message: 'source and sourceRecordId query params are required' },
+    });
+    return;
+  }
+
+  if (!SUPPORTED_SOURCES.has(source)) {
+    const { statusCode, body } = toSafeErrorResponse(sourceUnsupported(source));
+    res.status(statusCode).json(body);
+    return;
+  }
+
+  try {
+    const cases = await aiReviewCaseRepo.findBySource(companyId, source, sourceRecordId);
+    const reviewCase = cases[0] ?? null;
+    res.json({ ok: true, data: { exists: !!reviewCase, reviewCase } });
+  } catch (err) {
+    handleError(res, err);
+  }
+});
+
 // ─── GET /api/ai-transaction/review-cases/:id ────────────────────────────────
 
 aiTransactionReviewRouter.get('/review-cases/:id', async (req: Request, res: Response) => {
@@ -473,80 +545,6 @@ aiTransactionReviewRouter.post('/rule-packages/:id/review', async (req: Request,
     await aiRuleRecommendationRepo.updateReviewStatus(id, companyId, parsed.data.status, user?.id ?? 'admin', now);
 
     res.json({ ok: true, data: { id, status: parsed.data.status, reviewedAt: now.toISOString() } });
-  } catch (err) {
-    handleError(res, err);
-  }
-});
-
-// ─── Phase 12: Source cross-link endpoints ────────────────────────────────────
-
-/**
- * Supported source types for cross-linking.
- * Mirrors the source values stored in ai_review_cases.source column.
- */
-const SUPPORTED_SOURCES = new Set([
-  'BANK_MUTATION',
-  'BANK_RECONCILIATION',
-  'TREASURY',
-  'ACCOUNTING_ENTRY',
-  'EXPENSE',
-  'CASH_ADVANCE',
-  'VENDOR_PAYMENT',
-  'CUSTOMER_PAYMENT',
-  'INVOICE',
-  'SALES_DOCUMENT',
-  'PURCHASE',
-  'LOGISTIC_ORDER',
-  'SPORT_PAYMENT',
-  'PPJK',
-  'EXPECTED_CASH_FLOW',
-  // also accept lowercase/legacy values that analyzeAndCreateReviewCase uses internally
-  'bank_mutation',
-  'bank_reconciliation',
-  'treasury',
-  'accounting_entry',
-  'expense',
-  'cash_advance',
-  'vendor_payment',
-  'customer_payment',
-  'invoice',
-  'sales_document',
-  'purchase',
-  'logistic_order',
-  'sport_payment',
-  'ppjk',
-  'expected_cash_flow',
-]);
-
-// ─── GET /api/ai-transaction/review-cases/by-source ──────────────────────────
-// Query: ?source=BANK_RECONCILIATION&sourceRecordId=123
-// Returns: { ok, data: { exists, reviewCase: ... | null } }
-
-aiTransactionReviewRouter.get('/review-cases/by-source', async (req: Request, res: Response) => {
-  if (!(await requireFinanceRole(req, res))) return;
-
-  const companyId = resolveCompanyId(req);
-  const source = String(req.query['source'] ?? '').trim();
-  const sourceRecordId = String(req.query['sourceRecordId'] ?? '').trim();
-
-  if (!source || !sourceRecordId) {
-    res.status(400).json({
-      ok: false,
-      error: { code: 'AI_REVIEW_VALIDATION_ERROR', message: 'source and sourceRecordId query params are required' },
-    });
-    return;
-  }
-
-  if (!SUPPORTED_SOURCES.has(source)) {
-    const { statusCode, body } = toSafeErrorResponse(sourceUnsupported(source));
-    res.status(statusCode).json(body);
-    return;
-  }
-
-  try {
-    const cases = await aiReviewCaseRepo.findBySource(companyId, source, sourceRecordId);
-    const reviewCase = cases[0] ?? null;
-    res.json({ ok: true, data: { exists: !!reviewCase, reviewCase } });
   } catch (err) {
     handleError(res, err);
   }
