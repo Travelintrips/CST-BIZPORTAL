@@ -4,6 +4,7 @@ import {
   ensureVendorWithholdingRecords,
   hasCombinedVendorWithholdingRow,
   inferVendorInvoiceGrossSettlement,
+  isVendorWithholdingDisabled,
   resolveVendorInvoiceNetSettlement,
   vendorWithholdingTaxPlans,
 } from "../lib/vendorInvoicePaymentStatus.js";
@@ -178,6 +179,17 @@ describe("vendor invoice payment status", () => {
     ]);
   });
 
+  it("recognizes only the explicit zero withholding state as disabled", () => {
+    expect(isVendorWithholdingDisabled({
+      withholding_tax_amount: "0",
+      withholding_review_status: "not_required",
+    })).toBe(true);
+    expect(isVendorWithholdingDisabled({
+      withholding_tax_amount: "0",
+      withholding_review_status: "required",
+    })).toBe(false);
+  });
+
   it("surfaces an existing mixed PPh row for repair", () => {
     const plans = vendorWithholdingTaxPlans({
       components: [
@@ -283,6 +295,44 @@ describe("vendor invoice payment status", () => {
         { accountId: 23102, amount: 1_056_625 },
       ],
     });
+  });
+
+  it("does not materialize legacy PPh for an explicitly disabled invoice", async () => {
+    const executed: string[] = [];
+    const executor = {
+      execute: async (query: unknown) => {
+        const chunks = (query as { queryChunks?: unknown[] })?.queryChunks ?? [];
+        const text = chunks.map((chunk) => {
+          const value = (chunk as { value?: unknown })?.value;
+          return Array.isArray(value) ? value.join("") : "";
+        }).join("");
+        executed.push(text);
+        if (text.includes("FROM vendor_invoices")) {
+          return {
+            rows: [{
+              id: 9,
+              invoice_number: "VI/2026/00003",
+              supplier_name: "PT Angkasa Pura Indonesia",
+              total_amount: "28553506",
+              withholding_tax_amount: "0",
+              withholding_review_status: "not_required",
+              invoice_breakdown: {
+                components: [{
+                  component: "concession",
+                  dpp: 15_834_000,
+                  withholding_tax_type: "PPh 23",
+                }],
+              },
+            }],
+          };
+        }
+        throw new Error(`Disabled invoice should not query legacy tax data: ${text}`);
+      },
+    };
+
+    await expect(ensureVendorWithholdingRecords(executor, 1, 9))
+      .resolves.toEqual({ withholdingAmount: 0, recordCount: 0 });
+    expect(executed).toHaveLength(1);
   });
 
   it("rejects a header-only combined PPh import without creating a tax row", async () => {

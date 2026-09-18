@@ -21,6 +21,17 @@ function money(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * `not_required` is the explicit persisted state for an invoice where the
+ * owner has disabled withholding.  A zero header alone is not enough to
+ * classify older imports because those can still carry legacy line-tax data
+ * that needs Finance Review.
+ */
+export function isVendorWithholdingDisabled(invoice: Record<string, unknown>): boolean {
+  return money(numberValue(invoice.withholding_tax_amount)) <= 0
+    && String(invoice.withholding_review_status ?? "").trim().toLowerCase() === "not_required";
+}
+
 export interface VendorWithholdingTaxPlan {
   componentIndex: number;
   invoiceLineId?: number;
@@ -214,13 +225,19 @@ export async function ensureVendorWithholdingRecords(
 ): Promise<{ withholdingAmount: number; recordCount: number }> {
   const invoiceRows = rows<Record<string, unknown>>(await executor.execute(sql`
     SELECT id, invoice_number, supplier_name, total_amount, withholding_tax_amount,
-           withholding_tax_type, tax_object, invoice_breakdown
+           withholding_tax_type, tax_object, withholding_review_status, invoice_breakdown
     FROM vendor_invoices
     WHERE id = ${vendorInvoiceId} AND company_id = ${companyId}
     LIMIT 1
   `));
   const invoice = invoiceRows[0];
   if (!invoice) return { withholdingAmount: 0, recordCount: 0 };
+  if (isVendorWithholdingDisabled(invoice)) {
+    // Do not inspect or materialize legacy line-tax/breakdown data for an
+    // explicitly disabled invoice. Cleanup is performed by the scoped repair
+    // transaction; this path must remain side-effect free.
+    return { withholdingAmount: 0, recordCount: 0 };
+  }
 
   const legacy = legacyWithholding(invoice);
   const componentPlans = vendorWithholdingTaxPlans(
@@ -422,7 +439,8 @@ export async function recalculateVendorInvoicePaymentStatus(
 ): Promise<{ status: string; amountPaid: number; withholdingComplete: boolean }> {
   const linkage = await ensureVendorWithholdingRecords(executor, companyId, vendorInvoiceId);
   const invoiceRows = rows<Record<string, unknown>>(await executor.execute(sql`
-    SELECT amount_paid, grand_total, status, withholding_review_status
+    SELECT amount_paid, grand_total, status, withholding_tax_amount,
+           withholding_review_status
     FROM vendor_invoices
     WHERE id = ${vendorInvoiceId} AND company_id = ${companyId}
     FOR UPDATE
@@ -431,6 +449,7 @@ export async function recalculateVendorInvoicePaymentStatus(
   if (!invoice) {
     return { status: "missing", amountPaid: 0, withholdingComplete: false };
   }
+  const withholdingDisabled = isVendorWithholdingDisabled(invoice);
 
   const records = rows<{ status: string; resolution_status: string }>(await executor.execute(sql`
     SELECT vwr.status, vit.resolution_status
@@ -438,7 +457,14 @@ export async function recalculateVendorInvoicePaymentStatus(
     INNER JOIN vendor_invoice_line_taxes vit ON vit.id = vwr.line_tax_id
     WHERE vwr.company_id = ${companyId} AND vwr.vendor_invoice_id = ${vendorInvoiceId}
   `));
-  const hasWithholding = linkage.withholdingAmount > 0 || records.length > 0;
+  if (withholdingDisabled && records.length > 0) {
+    throw Object.assign(
+      new Error("Invoice PPh-disabled masih memiliki record withholding yang harus dibersihkan."),
+      { httpStatus: 409, code: "WITHHOLDING_DISABLED_STATE_DIRTY" },
+    );
+  }
+  const hasWithholding = !withholdingDisabled
+    && (linkage.withholdingAmount > 0 || records.length > 0);
   const withholdingComplete = !hasWithholding
     || (records.length > 0 && records.every((record) =>
       TERMINAL_WITHHOLDING_STATUSES.has(String(record.status))

@@ -981,11 +981,6 @@ router.get("/vendor-invoices/:id", async (req, res) => {
   }
   let [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  if (vi.companyId != null && vi.status !== "draft" && vi.status !== "cancelled") {
-    await ensureVendorWithholdingRecords(db, vi.companyId, id);
-    await recalculateVendorInvoicePaymentStatus(db, vi.companyId, id);
-    [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  }
   const lines = await db.select().from(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
   const lineTaxes = await db
     .select()
