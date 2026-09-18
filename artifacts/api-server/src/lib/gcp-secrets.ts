@@ -50,9 +50,13 @@ function extractBackendOrigin(secretValue: string, secretName: string): string |
   return null;
 }
 
-function validateConfiguredOrigin(value: string, source: string): URL {
+function validateConfiguredOrigin(
+  value: string,
+  source: string,
+  options: { allowLocalHttp?: boolean } = {},
+): URL {
   try {
-    const configuredUrl = validateUpstreamBaseUrl(value);
+    const configuredUrl = validateUpstreamBaseUrl(value, options);
     // BIZPORTAL_API_ORIGIN is an origin, not an API route prefix. Ignore an
     // accidental path in the stored config so requests keep their /api/... path
     // exactly once.
@@ -93,6 +97,12 @@ async function loadUpstreamOrigin(): Promise<URL> {
   const configuredOrigin = validateConfiguredOrigin(
     explicitOrigin,
     backendOrigin ? "BIZPORTAL_BACKEND_API_ORIGIN" : environmentOriginKey,
+    {
+      allowLocalHttp:
+        !isProduction &&
+        backendOrigin !== undefined &&
+        /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/?$/i.test(backendOrigin),
+    },
   );
   if (isProduction && configuredOrigin.hostname.endsWith(".replit.dev")) {
     throw new Error("BIZPORTAL_API_ORIGIN_PROD cannot use an ephemeral Replit development host");

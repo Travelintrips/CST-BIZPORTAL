@@ -131,7 +131,7 @@ function setSessionCookie(response: Response, session: DevSession): void {
 
   const payload = encode(JSON.stringify(session));
   const value = `${payload}.${sign(payload, secret)}`;
-  response.setHeader(
+  response.append(
     "Set-Cookie",
     `${DEV_SESSION_COOKIE}=${value}; Max-Age=${DEV_SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax`,
   );
