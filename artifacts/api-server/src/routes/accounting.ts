@@ -431,6 +431,78 @@ router.get("/accounting/accounts", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/accounting/journals", async (req, res): Promise<void> => {
+  try {
+    const companyId = requestedCompanyId(req);
+    const result = await pool.query<{
+      id: number;
+      code: string;
+      name: string;
+      type: string;
+      default_debit_account_id: number | null;
+      default_credit_account_id: number | null;
+      is_active: boolean | null;
+      created_at: Date | string;
+    }>(
+      `select id, code, name, type::text type,
+              default_debit_account_id, default_credit_account_id,
+              is_active, created_at
+         from public.accounting_journals
+        where coalesce(is_active, true) = true
+          and ($1::int is null or company_id = $1 or company_id is null)
+        order by code, id`,
+      [companyId],
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      type: row.type,
+      defaultDebitAccountId: row.default_debit_account_id,
+      defaultCreditAccountId: row.default_credit_account_id,
+      isActive: row.is_active ?? true,
+      createdAt: new Date(row.created_at).toISOString(),
+    })));
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
+router.get("/accounting/taxes", async (req, res): Promise<void> => {
+  try {
+    const companyId = requestedCompanyId(req);
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      rate: string | number;
+      kind: string;
+      account_id: number;
+      is_active: boolean | null;
+      created_at: Date | string;
+    }>(
+      `select id, name, rate, kind::text kind, account_id, is_active, created_at
+         from public.accounting_taxes
+        where coalesce(is_active, true) = true
+          and ($1::int is null or company_id = $1)
+        order by id`,
+      [companyId],
+    );
+
+    res.json(result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      rate: numberValue(row.rate),
+      kind: row.kind,
+      accountId: row.account_id,
+      isActive: row.is_active ?? true,
+      createdAt: new Date(row.created_at).toISOString(),
+    })));
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
 router.get("/accounting/reports/trial-balance", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];
