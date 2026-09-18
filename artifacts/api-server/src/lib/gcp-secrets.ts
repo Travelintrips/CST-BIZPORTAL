@@ -86,7 +86,12 @@ async function loadUpstreamOrigin(): Promise<URL> {
   const environmentOriginKey = isProduction
     ? "BIZPORTAL_API_ORIGIN_PROD"
     : "BIZPORTAL_API_ORIGIN_DEV";
-  const backendOrigin = process.env.BIZPORTAL_BACKEND_API_ORIGIN?.trim();
+  // The backend origin is a development-only convenience. Production must
+  // always use its explicit environment origin so a leaked localhost value
+  // cannot override the deployed upstream configuration.
+  const backendOrigin = isProduction
+    ? undefined
+    : process.env.BIZPORTAL_BACKEND_API_ORIGIN?.trim();
   const explicitOrigin = backendOrigin || process.env[environmentOriginKey]?.trim();
   if (!explicitOrigin) {
     throw new Error(

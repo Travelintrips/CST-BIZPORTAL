@@ -5,6 +5,7 @@ const originalEnvironment = {
   NODE_ENV: process.env.NODE_ENV,
   BIZPORTAL_API_ORIGIN_DEV: process.env.BIZPORTAL_API_ORIGIN_DEV,
   BIZPORTAL_API_ORIGIN_PROD: process.env.BIZPORTAL_API_ORIGIN_PROD,
+  BIZPORTAL_BACKEND_API_ORIGIN: process.env.BIZPORTAL_BACKEND_API_ORIGIN,
   BIZPORTAL_API_ORIGIN: process.env.BIZPORTAL_API_ORIGIN,
   GCP_SECRET_MANAGER_BOOTSTRAP_JSON: process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON,
 };
@@ -75,6 +76,19 @@ describe("configured BizPortal API origin", () => {
     const productionModule = await import("./gcp-secrets");
     await expect(productionModule.getConfiguredUpstreamOrigin()).rejects.toThrow(
       "BIZPORTAL_API_ORIGIN_PROD cannot use an ephemeral Replit development host",
+    );
+  });
+
+  it("ignores a development backend origin in production", async () => {
+    process.env.APP_ENV = "production";
+    delete process.env.NODE_ENV;
+    process.env.BIZPORTAL_BACKEND_API_ORIGIN = "http://127.0.0.1:18444";
+    process.env.BIZPORTAL_API_ORIGIN_PROD = "https://production.example.test";
+
+    const { getConfiguredUpstreamOrigin } = await import("./gcp-secrets");
+
+    await expect(getConfiguredUpstreamOrigin()).resolves.toEqual(
+      new URL("https://production.example.test/"),
     );
   });
 });
