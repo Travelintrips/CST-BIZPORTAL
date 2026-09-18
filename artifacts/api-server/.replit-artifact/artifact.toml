@@ -22,7 +22,7 @@ NODE_ENV = "production"
 APP_ENV = "production"
 
 [services.production.run]
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+args = ["node", "--max-http-header-size=65536", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 
 [services.production.run.env]
 PORT = "8080"
