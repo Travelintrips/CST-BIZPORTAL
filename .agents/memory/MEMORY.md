@@ -22,3 +22,4 @@
 - [Recurring payment source guard](recurring-payment-source-guard.md) — canonical Sport Center payment_status has only four values; rejected is the inactive replacement state.
 - [Voided reconciliation journal reuse](voided-reconciliation-journal-reuse.md) — reopening a mutation must create a new journal event, never reuse its voided journal by source identity.
 - [Imported PPh liability accounts](imported-pph-liability-accounts.md) — imported liability IDs are untrusted; confirm them through company-scoped Finance Review before payment.
+- [Top-level artifact routing](top-level-artifact-routing.md) — the preview gateway only publishes root artifacts from top-level `artifacts/`; upstream manifests need a validated root wrapper.
