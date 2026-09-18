@@ -209,6 +209,48 @@ describe("production purchase authentication", () => {
     expect(queryMock).toHaveBeenCalledTimes(5);
   });
 
+  it("blocks cross-company repair history without querying audit logs", async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("from public.users")) {
+        return {
+          rows: [{
+            user_data: {
+              email: "admin@example.com",
+              role: "admin",
+              company_id: 1,
+            },
+          }],
+        };
+      }
+      if (sql.includes("from public.audit_logs")) return { rows: [] };
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const crossCompanyResponse = await request(
+      server,
+      "/purchase-workflow/vendor-invoices/12/legacy-withholding-repair-history?company=2",
+      { cookie: makeProductionCookie("admin@example.com") },
+    );
+    expect(crossCompanyResponse.status).toBe(400);
+    expect(crossCompanyResponse.body).toEqual({
+      error: "Invoice atau perusahaan tidak valid",
+      code: "INVALID_REPAIR_HISTORY_TARGET",
+    });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(String(queryMock.mock.calls[0]?.[0])).not.toContain("public.audit_logs");
+
+    queryMock.mockClear();
+    const sameCompanyResponse = await request(
+      server,
+      "/purchase-workflow/vendor-invoices/12/legacy-withholding-repair-history?company=1",
+      { cookie: makeProductionCookie("admin@example.com") },
+    );
+    expect(sameCompanyResponse.status).toBe(200);
+    expect(sameCompanyResponse.body).toEqual({ data: [], total: 0 });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(String(queryMock.mock.calls[1]?.[0])).toContain("public.audit_logs");
+  });
+
   it("rejects a non-OTP token without issuing a cookie", async () => {
     const response = await request(server, "/auth/supabase-exchange", {
       method: "POST",
