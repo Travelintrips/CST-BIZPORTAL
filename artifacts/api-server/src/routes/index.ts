@@ -5,7 +5,13 @@ import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
 import localProductionAuthRouter from "./local-production-auth";
-import { createDevAuthRouter } from "./dev-auth";
+import {
+  createDevAuthRouter,
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  isDevelopmentEnvironment,
+} from "./dev-auth";
 import { pool } from "@workspace/db";
 
 const router: IRouter = Router();
