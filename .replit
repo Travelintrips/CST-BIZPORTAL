@@ -24,8 +24,10 @@ timeoutMs = 20000
 [userenv.development]
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
+BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
 
 [userenv.production]
+BIZPORTAL_API_ORIGIN_PROD = "https://bizportal.cstlogistic.co.id"
 
 [nix]
 channel = "stable-25_05"
