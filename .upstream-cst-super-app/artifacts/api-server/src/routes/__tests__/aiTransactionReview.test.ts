@@ -25,20 +25,6 @@ vi.mock("../../lib/ai/transaction-intelligence/aiReviewRepository.js", () => ({
   aiRuleRecommendationRepo: {},
 }));
 
-vi.mock("../../lib/ai/transaction-intelligence/aiReviewErrors.js", () => ({
-  sourceUnsupported: vi.fn(
-    (source: string) => new Error(`Unsupported source: ${source}`),
-  ),
-  toSafeErrorResponse: vi.fn(() => ({
-    statusCode: 500,
-    body: {
-      ok: false,
-      error: { code: "INTERNAL_ERROR", message: "Internal error" },
-    },
-  })),
-  AIReviewError: class AIReviewError extends Error {},
-}));
-
 vi.mock(
   "../../lib/ai/transaction-intelligence/aiTransactionPersistenceService.js",
   () => ({
@@ -97,6 +83,23 @@ describe("GET /api/ai-transaction/review-cases/by-source", () => {
       error: {
         code: "AI_REVIEW_VALIDATION_ERROR",
         message: "source and sourceRecordId query params are required",
+      },
+    });
+    expect(findBySourceMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported sources with the typed AI review error", async () => {
+    const response = await request(makeApp())
+      .get("/api/ai-transaction/review-cases/by-source")
+      .query({ source: "UNKNOWN_SOURCE", sourceRecordId: "record-123" });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      ok: false,
+      error: {
+        code: "AI_REVIEW_SOURCE_UNSUPPORTED",
+        message:
+          "Source type 'UNKNOWN_SOURCE' is not supported for AI review cross-linking",
       },
     });
     expect(findBySourceMock).not.toHaveBeenCalled();
