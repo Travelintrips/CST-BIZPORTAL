@@ -54,6 +54,18 @@ describe("bank reconciliation status source parity", () => {
     );
   });
 
+  it("keeps imported NEED_REVIEW rows in the duplicate review queue", () => {
+    expect(routeSource).toContain(
+      "WHEN ${alias}.status = 'NEED_REVIEW'",
+    );
+    expect(routeSource).toContain(
+      "THEN 'duplicate_need_review'",
+    );
+    expect(listRoute).toContain(
+      "bmiFilters.push(`${effectiveImportStatus} = '${esc(status)}'`);",
+    );
+  });
+
   it("counts from the same filtered predicates used by the paginated list", () => {
     expect(listRoute).toContain(
       "SELECT bm.id FROM bank_mutations bm ${bmWhere}",
@@ -63,6 +75,18 @@ describe("bank reconciliation status source parity", () => {
     );
     expect(listRoute).toContain(
       "total: Number((countRows[0] as any)?.total ?? 0)",
+    );
+  });
+
+  it("includes deduplicated imported review rows in the summary projection", () => {
+    expect(summaryRoute).toContain(
+      '${effectiveBankMutationImportStatusSql("bmi")} AS status',
+    );
+    expect(summaryRoute).toContain(
+      "FROM bank_mutation_imports bmi",
+    );
+    expect(summaryRoute).toContain(
+      "bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)",
     );
   });
 
