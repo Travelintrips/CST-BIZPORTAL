@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bash start-dev.sh",
-    "build": "node scripts/validate-translations.mjs && node scripts/build-vite.mjs && node scripts/prerender.mjs",
+    "build": "node scripts/validate-translations.mjs && node scripts/build-vite.mjs && node scripts/embed-bizportal.mjs && node scripts/prerender.mjs",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate:i18n": "node scripts/validate-translations.mjs",

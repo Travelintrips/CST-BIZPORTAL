@@ -151,12 +151,27 @@ from = "/privacy-policy"
 to = "/privacy-policy/index.html"
 
 [[services.production.rewrites]]
+from = "/bizportal/"
+to = "/bizportal/index.html"
+
+[[services.production.rewrites]]
+from = "/bizportal"
+to = "/bizportal/index.html"
+
+[[services.production.rewrites]]
+from = "/bizportal/*"
+to = "/bizportal/index.html"
+
+[[services.production.rewrites]]
 from = "/*"
 to = "/index.html"
 
 [services.env]
 PORT = "23434"
 BASE_PATH = "/customer-portal/"
+BASE_PATH = "/"
+BIZPORTAL_PORT = "18442"
 
 [services.production.env]
 BASE_PATH = "/"
+

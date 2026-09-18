@@ -28,41 +28,37 @@ function isRealTransactionCandidate(candidate: CandidateFixture): boolean {
   return realTransactionCandidateTypes.has(candidate.candidate_type);
 }
 
-function selectableCandidates(
-  candidateRequirement: "required" | "not_required",
-  candidates: CandidateFixture[],
-): CandidateFixture[] {
-  return candidateRequirement === "required"
-    ? candidates.filter(isRealTransactionCandidate)
-    : candidates;
+function displayableCandidates(candidates: CandidateFixture[]): CandidateFixture[] {
+  return candidates.filter(isRealTransactionCandidate);
 }
 
 describe("Rule AI required-candidate approval UI", () => {
-  it("keeps a Rule AI COA classification visible but not selectable by itself", () => {
+  it("hides a Rule AI COA classification from the transaction candidate list", () => {
     const candidates = [{ candidate_type: "recon_rule" }];
 
-    expect(selectableCandidates("required", candidates)).toEqual([]);
+    expect(displayableCandidates(candidates)).toEqual([]);
   });
 
-  it("allows a real transaction candidate when the same rule requires one", () => {
+  it("keeps a real transaction candidate visible while hiding the Rule AI hint", () => {
     const candidates = [
       { candidate_type: "recon_rule" },
       { candidate_type: "accounting_payment" },
     ];
 
-    expect(selectableCandidates("required", candidates)).toEqual([
+    expect(displayableCandidates(candidates)).toEqual([
       { candidate_type: "accounting_payment" },
     ]);
   });
 
-  it("does not restrict ordinary rules that do not require a source transaction", () => {
+  it("hides Rule AI hints even when the rule does not require a source transaction", () => {
     const candidates = [{ candidate_type: "recon_rule" }];
 
-    expect(selectableCandidates("not_required", candidates)).toEqual(candidates);
+    expect(displayableCandidates(candidates)).toEqual([]);
   });
 
   it("wires the runtime guard into candidate selection and approval actions", () => {
     expect(componentSource).toContain('m.review_code === "RULE_CANDIDATE_REQUIRED"');
+    expect(componentSource).toContain("isRealTransactionCandidate(candidate)");
     expect(componentSource).toContain("matchingCandidates.filter(isRealTransactionCandidate)");
     expect(componentSource).toContain("candidateSelectionEnabled && candidateIsSelectable");
     expect(componentSource).toContain("onApproveCandidate && canApprove(m) && candidateIsSelectable");
