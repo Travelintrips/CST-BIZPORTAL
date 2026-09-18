@@ -1,6 +1,11 @@
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
+import {
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  isDevelopmentEnvironment,
+} from "./dev-auth";
 
 interface CompanyRow {
   id: number;
@@ -19,19 +24,33 @@ interface CompanyRow {
 
 const router: IRouter = Router();
 
-router.use((req, res, next) => {
-  if (!isDevelopmentEnvironment()) {
-    next("router");
-    return;
+router.use(async (req, res, next) => {
+  try {
+    if (isDevelopmentEnvironment()) {
+      if (!getDevSession(req)) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+      return;
+    }
+    const session = getProductionSession(req);
+    if (!session) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!await getProductionUser(session)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Company authorization failed");
+    res.status(503).json({ error: "Authorization service unavailable." });
   }
-  if (!getDevSession(req)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
 });
 
-router.get(["/companies", "/companies/list"], async (req, res) => {
+router.get(["/companies", "/companies/list", "/accounting/companies"], async (req, res) => {
   try {
     const sessionCompanyId = getDevSession(req)?.companyId ?? null;
     const result = await pool.query<CompanyRow>(`

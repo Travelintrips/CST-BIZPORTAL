@@ -1,20 +1,29 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
+import {
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  isDevelopmentEnvironment,
+} from "./dev-auth";
 
 const router: IRouter = Router();
 
-router.use((req, res, next) => {
-  if (!isDevelopmentEnvironment()) {
-    next("router");
-    return;
+router.use(async (req, res, next) => {
+  try {
+    const session = isDevelopmentEnvironment() ? null : getProductionSession(req);
+    const user = isDevelopmentEnvironment()
+      ? getDevSession(req)
+      : session ? await getProductionUser(session) : null;
+    if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Accounting authorization failed");
+    res.status(503).json({ error: "Authorization service unavailable." });
   }
-  const user = getDevSession(req);
-  if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
 });
 
 type QueryValue = string | number;
