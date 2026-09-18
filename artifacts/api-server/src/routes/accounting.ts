@@ -42,6 +42,23 @@ router.use(async (req, res, next) => {
   }
 });
 
+router.use(async (req, res, next) => {
+  try {
+    const session = isDevelopmentEnvironment() ? null : getProductionSession(req);
+    const user = isDevelopmentEnvironment()
+      ? getDevSession(req)
+      : session ? await getProductionUser(session) : null;
+    if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Accounting authorization failed");
+    res.status(503).json({ error: "Authorization service unavailable." });
+  }
+});
+
 type QueryValue = string | number;
 
 interface PostingErrorRow {
