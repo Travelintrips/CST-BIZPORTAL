@@ -101,3 +101,31 @@ export async function inspectSpreadsheet(
     serviceAccountEmail: credentials.client_email,
   };
 }
+
+export async function readSpreadsheetValues(
+  spreadsheetId: string,
+  tabName: string,
+): Promise<string[][]> {
+  const credentials = getCredentials();
+  const accessToken = await getAccessToken(credentials);
+  const range = `${tabName}!A:ZZ`;
+  const url = new URL(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`,
+  );
+  url.searchParams.set("majorDimension", "ROWS");
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 404) {
+      throw new Error("Spreadsheet tidak ditemukan atau belum dibagikan ke Service Account");
+    }
+    throw new Error(`Google Sheets API failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as { values?: unknown[][] };
+  return (data.values ?? []).map((row) =>
+    row.map((value) => (value == null ? "" : String(value))),
+  );
+}

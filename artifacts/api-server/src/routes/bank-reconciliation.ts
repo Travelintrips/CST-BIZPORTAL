@@ -2,6 +2,10 @@ import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { inspectSpreadsheet } from "../lib/google-sheets";
 import {
+  syncAllBankSheetConfigs,
+  syncOneBankSheetConfig,
+} from "../lib/bank-sheet-sync";
+import {
   getDevSession,
   getProductionSession,
   getProductionUser,
@@ -798,6 +802,47 @@ router.post("/bank-reconciliation/sheet-configs/:id/test", async (req, res): Pro
       error: message,
       hint: "Pastikan sheet sudah dibagikan ke Service Account sebagai Editor",
     });
+  }
+});
+
+router.post("/bank-reconciliation/sheet-configs/:id/sync", async (req, res): Promise<void> => {
+  const id = parsePositiveInt(req.params.id);
+  if (id === null) {
+    res.status(400).json({ ok: false, error: "ID konfigurasi tidak valid" });
+    return;
+  }
+  try {
+    res.json(await syncOneBankSheetConfig(id));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Sheet sync gagal";
+    req.log.error({ error, configId: id }, "Google Sheet sync failed");
+    res.status(502).json({ ok: false, error: message });
+  }
+});
+
+router.post("/bank-reconciliation/sheet-sync", async (req, res): Promise<void> => {
+  const rawCompanyId = req.query.company_id;
+  const companyId =
+    rawCompanyId === undefined || rawCompanyId === "" || rawCompanyId === "all"
+      ? undefined
+      : parsePositiveInt(rawCompanyId);
+  if (rawCompanyId !== undefined && companyId === null) {
+    res.status(400).json({ error: "company_id tidak valid" });
+    return;
+  }
+  try {
+    const summaries = await syncAllBankSheetConfigs(companyId ?? undefined);
+    const imported = summaries.reduce((sum, item) => sum + Number(item.imported ?? 0), 0);
+    res.json({
+      ok: true,
+      imported,
+      configs: summaries,
+      message: `Sync dari Google Sheet selesai: ${imported} mutasi baru`,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Sheet sync gagal";
+    req.log.error({ error, companyId }, "Google Sheet sync failed");
+    res.status(502).json({ error: message, code: "GOOGLE_SHEET_SYNC_FAILED" });
   }
 });
 
