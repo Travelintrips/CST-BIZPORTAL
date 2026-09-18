@@ -83,7 +83,70 @@ describe("vendor invoice detail read path", () => {
 
   beforeEach(() => {
     queryMock.mockReset();
-    queryMock.mockImplementation(async (sql: string) => {
+    queryMock.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("from public.audit_logs")) {
+        const auditEvents = [
+          {
+            id: 101,
+            company_id: 1,
+            entity_id: "12",
+            user_email: "finance@example.com",
+            created_at: new Date("2026-09-17T08:30:00.000Z"),
+            before_data: {
+              reason: "Header PPh perlu dipisahkan",
+              rows: [
+                {
+                  invoice_line_id: "77",
+                  tax_type: "PPh 23",
+                  tax_object: "Jasa",
+                  base_amount: "1000.456",
+                  tax_amount: "20.129",
+                  liability_account_id: "501",
+                  line_tax_id: "900",
+                  resolution_status: "pending",
+                },
+              ],
+            },
+            after_data: {
+              reason: "Baris PPh dipisahkan berdasarkan jenis pajak",
+              rows: [
+                {
+                  invoiceLineId: 77,
+                  taxType: "PPh 23",
+                  taxObject: "Jasa",
+                  baseAmount: "1000.46",
+                  taxAmount: "20.13",
+                  liabilityAccountId: 501,
+                  lineTaxId: 900,
+                  resolutionStatus: "confirmed",
+                },
+              ],
+            },
+          },
+          {
+            id: 202,
+            company_id: 2,
+            entity_id: "12",
+            user_email: "other-company@example.com",
+            created_at: new Date("2026-09-17T09:00:00.000Z"),
+            before_data: { rows: [] },
+            after_data: { reason: "Perusahaan lain", rows: [] },
+          },
+          {
+            id: 303,
+            company_id: 1,
+            entity_id: "99",
+            user_email: "other-invoice@example.com",
+            created_at: new Date("2026-09-17T09:30:00.000Z"),
+            before_data: { rows: [] },
+            after_data: { reason: "Invoice lain", rows: [] },
+          },
+        ];
+        return {
+          rows: auditEvents.filter((event) =>
+            event.company_id === params?.[0] && event.entity_id === params?.[1]),
+        };
+      }
       if (sql.includes("from public.vendor_invoices vi")) {
         return {
           rows: [{
@@ -134,6 +197,57 @@ describe("vendor invoice detail read path", () => {
     }
 
     expect(queryMock).toHaveBeenCalled();
+    expect(queryMock.mock.calls.every(([sql]) => !String(sql).match(/\b(insert|update|delete)\b/i))).toBe(true);
+  });
+
+  it("returns only the active company's invoice history with normalized rows", async () => {
+    const response = await request(
+      server,
+      "/purchase-workflow/vendor-invoices/12/legacy-withholding-repair-history?company=1",
+      makeDevelopmentCookie(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: [{
+        id: 101,
+        actor: "finance@example.com",
+        timestamp: "2026-09-17T08:30:00.000Z",
+        reason: "Baris PPh dipisahkan berdasarkan jenis pajak",
+        beforeRows: [{
+          invoiceLineId: 77,
+          taxType: "PPh 23",
+          taxObject: "Jasa",
+          baseAmount: 1000.46,
+          taxAmount: 20.13,
+          liabilityAccountId: 501,
+          lineTaxId: 900,
+          resolutionStatus: "pending",
+        }],
+        afterRows: [{
+          invoiceLineId: 77,
+          taxType: "PPh 23",
+          taxObject: "Jasa",
+          baseAmount: 1000.46,
+          taxAmount: 20.13,
+          liabilityAccountId: 501,
+          lineTaxId: 900,
+          resolutionStatus: "confirmed",
+        }],
+      }],
+      total: 1,
+    });
+    const historyBody = response.body as { data: unknown[] };
+    expect(historyBody.data).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 202, actor: "other-company@example.com" }),
+    ]));
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [historySql, historyParams] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(historySql).toMatch(/where\s+company_id\s*=\s*\$1/i);
+    expect(historySql).toMatch(/entity_id\s*=\s*\$2/i);
+    expect(historySql).toMatch(/action\s*=\s*'repair_legacy_withholding'/i);
+    expect(historyParams).toEqual([1, "12"]);
     expect(queryMock.mock.calls.every(([sql]) => !String(sql).match(/\b(insert|update|delete)\b/i))).toBe(true);
   });
 
