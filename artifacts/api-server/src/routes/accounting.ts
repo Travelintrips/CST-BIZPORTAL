@@ -1,20 +1,45 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
+import {
+  getDevSession,
+  getProductionSession,
+  getProductionUser,
+  isDevelopmentEnvironment,
+  type DevAuthUser,
+} from "./dev-auth";
 
 const router: IRouter = Router();
 
-router.use((req, res, next) => {
-  if (!isDevelopmentEnvironment()) {
-    next("router");
-    return;
+type AccountingRequest = Request & {
+  accountingUser?: DevAuthUser;
+};
+
+router.use(async (req, res, next) => {
+  try {
+    const user = isDevelopmentEnvironment()
+      ? getDevSession(req)
+      : (() => {
+          const session = getProductionSession(req);
+          return session ? getProductionUser(session) : Promise.resolve(null);
+        })();
+    const resolvedUser = await user;
+    const role = resolvedUser?.role.toLowerCase();
+
+    if (!resolvedUser) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!role || !["admin", "owner", "finance", "accounting"].includes(role)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+
+    (req as AccountingRequest).accountingUser = resolvedUser;
+    next();
+  } catch (error) {
+    req.log.error({ error }, "Failed to authenticate accounting request");
+    res.status(503).json({ error: "Authorization service unavailable" });
   }
-  const user = getDevSession(req);
-  if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  next();
 });
 
 type QueryValue = string | number;
@@ -69,7 +94,7 @@ function first(value: unknown): string | undefined {
 
 function requestedCompanyId(req: Request): number | null {
   const raw = first(req.query.company) ?? first(req.query.companyId) ?? first(req.query.company_id);
-  const sessionCompanyId = getDevSession(req)?.companyId ?? null;
+  const sessionCompanyId = (req as AccountingRequest).accountingUser?.companyId ?? null;
   if (!raw || raw === "all") return sessionCompanyId;
   const companyId = Number(raw);
   if (!Number.isInteger(companyId) || companyId <= 0) throw new Error("INVALID_COMPANY");
@@ -120,6 +145,226 @@ function costCenterFilter(req: Request, values: QueryValue[], column = "e.cost_c
 function numberValue(value: string | number | null): number {
   return Number(value ?? 0);
 }
+
+const ACCOUNTING_SETTING_FIELDS = [
+  ["arAccountId", "ar_account_id", "number"],
+  ["apAccountId", "ap_account_id", "number"],
+  ["salesIncomeAccountId", "sales_income_account_id", "number"],
+  ["purchaseExpenseAccountId", "purchase_expense_account_id", "number"],
+  ["defaultBankAccountId", "default_bank_account_id", "number"],
+  ["defaultCashAccountId", "default_cash_account_id", "number"],
+  ["qrisAccountId", "qris_account_id", "number"],
+  ["ppnOutputAccountId", "ppn_output_account_id", "number"],
+  ["ppnInputAccountId", "ppn_input_account_id", "number"],
+  ["salesJournalId", "sales_journal_id", "number"],
+  ["purchaseJournalId", "purchase_journal_id", "number"],
+  ["bankJournalId", "bank_journal_id", "number"],
+  ["qrisJournalId", "qris_journal_id", "number"],
+  ["cashJournalId", "cash_journal_id", "number"],
+  ["defaultSalesTaxId", "default_sales_tax_id", "number"],
+  ["defaultPurchaseTaxId", "default_purchase_tax_id", "number"],
+  ["inventoryAccountId", "inventory_account_id", "number"],
+  ["cogsAccountId", "cogs_account_id", "number"],
+  ["companyName", "company_name", "string"],
+  ["companyAddress", "company_address", "string"],
+  ["companyNpwp", "company_npwp", "string"],
+  ["companyLogoUrl", "company_logo_url", "string"],
+] as const;
+
+type AccountingSettingField = (typeof ACCOUNTING_SETTING_FIELDS)[number];
+
+interface AccountingSettingsRow {
+  id: number;
+  ar_account_id: number | null;
+  ap_account_id: number | null;
+  sales_income_account_id: number | null;
+  purchase_expense_account_id: number | null;
+  default_bank_account_id: number | null;
+  default_cash_account_id: number | null;
+  qris_account_id: number | null;
+  ppn_output_account_id: number | null;
+  ppn_input_account_id: number | null;
+  sales_journal_id: number | null;
+  purchase_journal_id: number | null;
+  bank_journal_id: number | null;
+  qris_journal_id: number | null;
+  cash_journal_id: number | null;
+  default_sales_tax_id: number | null;
+  default_purchase_tax_id: number | null;
+  inventory_account_id: number | null;
+  cogs_account_id: number | null;
+  company_name: string | null;
+  company_address: string | null;
+  company_npwp: string | null;
+  company_logo_url: string | null;
+  updated_at: Date | string;
+}
+
+function serializeAccountingSettings(row: AccountingSettingsRow) {
+  return {
+    id: Number(row.id),
+    arAccountId: row.ar_account_id,
+    apAccountId: row.ap_account_id,
+    salesIncomeAccountId: row.sales_income_account_id,
+    purchaseExpenseAccountId: row.purchase_expense_account_id,
+    defaultBankAccountId: row.default_bank_account_id,
+    defaultCashAccountId: row.default_cash_account_id,
+    qrisAccountId: row.qris_account_id,
+    ppnOutputAccountId: row.ppn_output_account_id,
+    ppnInputAccountId: row.ppn_input_account_id,
+    salesJournalId: row.sales_journal_id,
+    purchaseJournalId: row.purchase_journal_id,
+    bankJournalId: row.bank_journal_id,
+    qrisJournalId: row.qris_journal_id,
+    cashJournalId: row.cash_journal_id,
+    defaultSalesTaxId: row.default_sales_tax_id,
+    defaultPurchaseTaxId: row.default_purchase_tax_id,
+    inventoryAccountId: row.inventory_account_id,
+    cogsAccountId: row.cogs_account_id,
+    companyName: row.company_name,
+    companyAddress: row.company_address,
+    companyNpwp: row.company_npwp,
+    companyLogoUrl: row.company_logo_url,
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+async function loadAccountingSettings(req: Request) {
+  const companyId = requestedCompanyId(req);
+  const result = await pool.query<AccountingSettingsRow>(`
+    select
+      coalesce(s.id, 0)::int as id,
+      s.ar_account_id,
+      s.ap_account_id,
+      s.sales_income_account_id,
+      s.purchase_expense_account_id,
+      s.default_bank_account_id,
+      s.default_cash_account_id,
+      s.qris_account_id,
+      s.ppn_output_account_id,
+      s.ppn_input_account_id,
+      s.sales_journal_id,
+      s.purchase_journal_id,
+      s.bank_journal_id,
+      s.qris_journal_id,
+      s.cash_journal_id,
+      s.default_sales_tax_id,
+      s.default_purchase_tax_id,
+      s.inventory_account_id,
+      s.cogs_account_id,
+      coalesce(nullif(s.company_name, ''), c.company_name, c.name) as company_name,
+      coalesce(nullif(s.company_address, ''), c.address) as company_address,
+      coalesce(nullif(s.company_npwp, ''), c.npwp) as company_npwp,
+      coalesce(nullif(s.company_logo_url, ''), c.logo_url) as company_logo_url,
+      coalesce(s.updated_at, now()) as updated_at
+    from (select $1::int as company_id) target
+    left join public.accounting_settings s
+      on (($1::int is null and s.company_id is null) or s.company_id = $1::int)
+    left join public.companies c on c.id = $1::int
+    order by s.id desc nulls last
+    limit 1
+  `, [companyId]);
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("ACCOUNTING_SETTINGS_NOT_FOUND");
+  }
+  return serializeAccountingSettings(row);
+}
+
+function normalizeSettingValue(field: AccountingSettingField, value: unknown): number | string | null {
+  if (value === null) return null;
+  if (field[2] === "number") {
+    if (!Number.isInteger(value) || Number(value) <= 0) {
+      throw new Error(`INVALID_${field[0]}`);
+    }
+    return Number(value);
+  }
+  if (typeof value !== "string") throw new Error(`INVALID_${field[0]}`);
+  return value.trim() || null;
+}
+
+router.get("/accounting/settings", async (req, res): Promise<void> => {
+  try {
+    res.json(await loadAccountingSettings(req));
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "Perusahaan tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to load accounting settings from Supabase");
+    res.status(503).json({ error: "Pengaturan akuntansi tidak dapat dimuat" });
+  }
+});
+
+router.patch("/accounting/settings", async (req, res): Promise<void> => {
+  const companyId = requestedCompanyId(req);
+  const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+  const updates: Array<{ column: string; value: number | string | null }> = [];
+
+  try {
+    for (const field of ACCOUNTING_SETTING_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(body, field[0])) {
+        updates.push({ column: field[1], value: normalizeSettingValue(field, body[field[0]]) });
+      }
+    }
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Pengaturan tidak valid" });
+    return;
+  }
+
+  if (updates.length === 0) {
+    try {
+      res.json(await loadAccountingSettings(req));
+    } catch (error) {
+      req.log.error({ error }, "Failed to load accounting settings after empty update");
+      res.status(503).json({ error: "Pengaturan akuntansi tidak dapat dimuat" });
+    }
+    return;
+  }
+
+  try {
+    const existing = await pool.query<{ id: number }>(
+      `select id from public.accounting_settings
+       where (($1::int is null and company_id is null) or company_id = $1::int)
+       order by id desc limit 1`,
+      [companyId],
+    );
+
+    if (existing.rows[0]) {
+      const values: Array<number | string | null> = [];
+      const assignments = updates.map((update) => {
+        values.push(update.value);
+        return `${update.column} = $${values.length}`;
+      });
+      values.push(existing.rows[0].id);
+      await pool.query(
+        `update public.accounting_settings
+            set ${assignments.join(", ")}, updated_at = now()
+          where id = $${values.length}`,
+        values,
+      );
+    } else {
+      const columns = ["company_id", ...updates.map((update) => update.column)];
+      const values = [companyId, ...updates.map((update) => update.value)];
+      const placeholders = values.map((_, index) => `$${index + 1}`);
+      await pool.query(
+        `insert into public.accounting_settings (${columns.join(", ")})
+         values (${placeholders.join(", ")})`,
+        values,
+      );
+    }
+
+    res.json(await loadAccountingSettings(req));
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "Perusahaan tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to update accounting settings in Supabase");
+    res.status(503).json({ error: "Pengaturan akuntansi tidak dapat disimpan" });
+  }
+});
 
 function fiscalYearPeriod(req: Request): { from: string; to: string } {
   const to = first(req.query.to) ?? first(req.query.endDate) ?? first(req.query.date_to)
