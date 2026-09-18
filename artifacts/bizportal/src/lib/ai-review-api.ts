@@ -534,6 +534,8 @@ export interface AIReviewBySourceResult {
 export interface AICreateFromSourcePayload {
   source: string;
   sourceRecordId: string;
+  /** Explicit company scope for admin/dev sessions without an assigned company. */
+  companyId?: number;
   transaction: {
     id: string;
     description: string;
@@ -569,10 +571,20 @@ export const aiReviewSourceApi = {
    * Check if a review case exists for a given source entity.
    * Returns { exists, reviewCase } — does NOT create a case.
    */
-  getBySource: async (source: string, sourceRecordId: string): Promise<AIReviewBySourceResult> => {
-    const qs = `?source=${encodeURIComponent(source)}&sourceRecordId=${encodeURIComponent(sourceRecordId)}`;
+  getBySource: async (
+    source: string,
+    sourceRecordId: string,
+    companyId?: number,
+  ): Promise<AIReviewBySourceResult> => {
+    const params = new URLSearchParams({
+      source,
+      sourceRecordId,
+    });
+    if (typeof companyId === "number" && Number.isInteger(companyId) && companyId > 0) {
+      params.set("companyId", String(companyId));
+    }
     const { data } = await api.get<{ ok: true; data: AIReviewBySourceResult }>(
-      `/api/ai-transaction/review-cases/by-source${qs}`
+      `/api/ai-transaction/review-cases/by-source?${params.toString()}`
     );
     return data.data;
   },
