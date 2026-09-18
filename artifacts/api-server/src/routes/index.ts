@@ -13,6 +13,10 @@ router.use(healthRouter);
 
 router.use(createDevAuthRouter());
 
+// Authentication is owned locally by CST-BIZPORTAL. No login or session
+// exchange is forwarded to CST-SUPER-APP.
+router.use(localProductionAuthRouter);
+
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);
