@@ -365,44 +365,18 @@ function WaLoginSection() {
 }
 
 function EmailPasswordLoginSection() {
-  const { sendEmailOtp, verifyEmailOtp } = useSupabaseAuth();
+  const { signInWithEmail } = useSupabaseAuth();
   const [email, setEmail] = React.useState("");
-  const [code, setCode] = React.useState("");
-  const [otpSent, setOtpSent] = React.useState(false);
+  const [password, setPassword] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [countdown, setCountdown] = React.useState(0);
-
-  React.useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000);
-    return () => window.clearTimeout(timer);
-  }, [countdown]);
-
-  const sendOtp = async () => {
-    if (!email.trim() || loading) return;
-    setLoading(true);
-    setError(null);
-    const result = await sendEmailOtp(email);
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setOtpSent(true);
-      setCountdown(60);
-    }
-    setLoading(false);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otpSent) {
-      await sendOtp();
-      return;
-    }
-    if (code.length !== 6 || loading) return;
+    if (!email.trim() || !password || loading) return;
     setLoading(true);
     setError(null);
-    const result = await verifyEmailOtp(email, code);
+    const result = await signInWithEmail(email, password);
     if (result.error) {
       setError(result.error);
       setLoading(false);
@@ -420,55 +394,28 @@ function EmailPasswordLoginSection() {
         placeholder="Email admin"
         value={email}
         onChange={(event) => setEmail(event.target.value)}
-        readOnly={otpSent}
         required
         autoComplete="email"
         className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 read-only:cursor-not-allowed read-only:opacity-70"
       />
-      {otpSent && (
-        <>
-          <p className="text-xs text-slate-400 text-center">
-            Masukkan kode 6 digit yang dikirim ke email admin.
-          </p>
-          <input
-            type="text"
-            inputMode="numeric"
-            placeholder="Kode OTP 6 digit"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            required
-            autoFocus
-            autoComplete="one-time-code"
-            className="rounded-lg bg-slate-800 border border-indigo-600/40 px-4 py-2.5 text-center text-lg font-mono tracking-widest text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-        </>
-      )}
+      <input
+        type="password"
+        aria-label="Password admin"
+        placeholder="Password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        required
+        autoComplete="current-password"
+        className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      />
       {error && <p className="text-xs text-red-400 text-center">{error}</p>}
       <button
         type="submit"
-        disabled={loading || (otpSent && code.length !== 6)}
+        disabled={loading || !email.trim() || !password}
         className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
       >
-        {loading ? "Memproses..." : otpSent ? "Verifikasi & Masuk" : "Kirim Kode OTP"}
+        {loading ? "Memproses..." : "Masuk"}
       </button>
-      {otpSent && (
-        <div className="flex justify-between text-xs text-slate-500">
-          <button
-            type="button"
-            onClick={() => { setOtpSent(false); setCode(""); setError(null); }}
-            className="hover:text-slate-300"
-          >
-            Ganti email
-          </button>
-          {countdown > 0 ? (
-            <span>Kirim ulang ({countdown}s)</span>
-          ) : (
-            <button type="button" onClick={() => void sendOtp()} disabled={loading} className="hover:text-slate-300">
-              Kirim ulang OTP
-            </button>
-          )}
-        </div>
-      )}
     </form>
   );
 }

@@ -23,10 +23,13 @@ export function validateUpstreamOrigin(value: string): URL {
   return url;
 }
 
-export function validateUpstreamBaseUrl(value: string): URL {
+export function validateUpstreamBaseUrl(
+  value: string,
+  options: { allowLocalHttp?: boolean } = {},
+): URL {
   const url = new URL(value);
   const isLocalDevelopmentHttp =
-    isDevelopmentEnvironment()
+    (options.allowLocalHttp === true || isDevelopmentEnvironment())
     && url.protocol === "http:"
     && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
   if (

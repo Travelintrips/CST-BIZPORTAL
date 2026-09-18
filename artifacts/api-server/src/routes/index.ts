@@ -12,6 +12,8 @@ import {
   getProductionSession,
   getProductionUser,
   isDevelopmentEnvironment,
+  setProductionSessionCookie,
+  type ProductionSession,
   type DevAuthUser,
 } from "./dev-auth";
 import { pool } from "@workspace/db";
@@ -25,6 +27,7 @@ import { getConfiguredUpstreamOrigin } from "../lib/gcp-secrets";
 const router: IRouter = Router();
 const UPSTREAM_REQUEST_TIMEOUT_MS = 15_000;
 const UPSTREAM_STREAM_TIMEOUT_MS = 120_000;
+const EMAIL_LOGIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 function requestUpstream(url: URL): typeof http.request {
   return url.protocol === "http:" ? http.request : https.request;
@@ -180,6 +183,143 @@ router.use(createDevAuthRouter({
   onLogin: establishDevelopmentUpstreamSession,
   onProductionLogin: establishProductionUpstreamSession,
 }));
+
+router.post("/auth/email-login", async (req, res): Promise<void> => {
+  const email = typeof req.body?.email === "string"
+    ? req.body.email.trim().toLowerCase()
+    : "";
+  const password = typeof req.body?.password === "string"
+    ? req.body.password
+    : "";
+
+  if (!email || !email.includes("@") || !password) {
+    res.status(400).json({ error: "Email dan password wajib diisi." });
+    return;
+  }
+
+  let upstreamOrigin: URL;
+  try {
+    upstreamOrigin = await getConfiguredUpstreamOrigin();
+  } catch (error) {
+    req.log.error({ error }, "Email login upstream configuration unavailable");
+    res.status(503).json({ error: "Konfigurasi login belum tersedia." });
+    return;
+  }
+
+  const loginUrl = buildUpstreamUrl("/api/auth/email-login", upstreamOrigin);
+  const body = JSON.stringify({ email, password });
+
+  await new Promise<void>((resolve) => {
+    const upstream = requestUpstream(loginUrl)(
+      loginUrl,
+      {
+        method: "POST",
+        headers: {
+          host: loginUrl.host,
+          origin: loginUrl.origin,
+          referer: `${loginUrl.origin}/`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      },
+      (upstreamResponse) => {
+        const chunks: Buffer[] = [];
+        upstreamResponse.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        upstreamResponse.on("end", async () => {
+          const statusCode = upstreamResponse.statusCode ?? 502;
+          const responseText = Buffer.concat(chunks).toString("utf8");
+          let responseBody: {
+            user?: {
+              id?: unknown;
+              email?: unknown;
+              firstName?: unknown;
+              lastName?: unknown;
+              profileImageUrl?: unknown;
+              role?: unknown;
+              companyId?: unknown;
+            };
+            error?: unknown;
+            message?: unknown;
+          } = {};
+          try {
+            responseBody = JSON.parse(responseText) as typeof responseBody;
+          } catch {
+            // Preserve a stable error response when the upstream is not JSON.
+          }
+
+          if (statusCode < 200 || statusCode >= 300 || !responseBody.user) {
+            const message = typeof responseBody.error === "string"
+              ? responseBody.error
+              : typeof responseBody.message === "string"
+                ? responseBody.message
+                : "Email atau password salah.";
+            res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 502).json({ error: message });
+            resolve();
+            return;
+          }
+
+          const upstreamUser = responseBody.user;
+          const normalizedUserEmail = typeof upstreamUser.email === "string"
+            ? upstreamUser.email.trim().toLowerCase()
+            : "";
+          const role = typeof upstreamUser.role === "string"
+            ? upstreamUser.role.trim().toLowerCase()
+            : "";
+          const userId = upstreamUser.id === undefined || upstreamUser.id === null
+            ? ""
+            : String(upstreamUser.id);
+
+          if (!normalizedUserEmail || !userId || !role) {
+            res.status(502).json({ error: "Respons login dari server tidak lengkap." });
+            resolve();
+            return;
+          }
+
+          const now = Date.now();
+          const productionSession: ProductionSession = {
+            id: userId,
+            email: normalizedUserEmail,
+            issuedAt: now,
+            expiresAt: now + EMAIL_LOGIN_SESSION_TTL_MS,
+          };
+
+          try {
+            // The local session is required by proxy-owned routes. Validate
+            // the same email against the local user table before issuing it.
+            const localUser = await getProductionUser(productionSession);
+            if (!localUser) {
+              res.status(403).json({ error: "Akun belum terdaftar di BizPortal." });
+              resolve();
+              return;
+            }
+
+            const upstreamCookies = rewriteSetCookies(upstreamResponse.headers["set-cookie"]) ?? [];
+            for (const cookie of upstreamCookies) res.append("Set-Cookie", cookie);
+            setProductionSessionCookie(res, productionSession);
+            res.json({ user: localUser });
+          } catch (error) {
+            req.log.error({ error, email: normalizedUserEmail }, "Email login session creation failed");
+            res.status(503).json({ error: "Session login belum dapat dibuat." });
+          }
+          resolve();
+        });
+      },
+    );
+
+    upstream.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+      upstream.destroy(new Error("Email login upstream timed out"));
+    });
+    upstream.on("error", (error) => {
+      req.log.error({ error }, "Email login upstream request failed");
+      if (!res.headersSent) res.status(502).json({ error: "Server login tidak dapat dihubungi." });
+      resolve();
+    });
+    upstream.end(body);
+  });
+});
+
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);

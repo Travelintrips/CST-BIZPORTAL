@@ -16,7 +16,7 @@ interface DevSession extends DevAuthUser {
   expiresAt: number;
 }
 
-interface ProductionSession {
+export interface ProductionSession {
   id: string;
   email: string;
   issuedAt: number;
@@ -137,7 +137,7 @@ function setSessionCookie(response: Response, session: DevSession): void {
   );
 }
 
-function setProductionSessionCookie(response: Response, session: ProductionSession): void {
+export function setProductionSessionCookie(response: Response, session: ProductionSession): void {
   const secret = getSessionSecret();
   if (!secret) throw new Error("SESSION_SECRET is unavailable");
 

@@ -286,8 +286,29 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     return () => subscription.unsubscribe();
   }, [exchangeToken]);
 
-  const signInWithEmail = useCallback(async (_email: string, _password: string) => {
-    return { error: "Login password tidak didukung. Gunakan kode OTP email." };
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
+    try {
+      const res = await fetch("/api/auth/email-login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password,
+        }),
+      });
+      const data = await res.json().catch(() => null) as {
+        user?: AuthUser;
+        error?: string;
+      } | null;
+      if (!res.ok) return { error: data?.error ?? "Email atau password salah." };
+      if (!data?.user) return { error: "Session login tidak diterima server." };
+      writeCache(data.user);
+      setUser(data.user);
+      return { error: null };
+    } catch {
+      return { error: "Koneksi ke server gagal." };
+    }
   }, []);
 
   const sendEmailOtp = useCallback(async (email: string) => {
