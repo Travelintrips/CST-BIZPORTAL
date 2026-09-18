@@ -124,6 +124,24 @@ interface LegacyRepairPreview {
     liabilityAccountId: number | null;
   }>;
 }
+interface LegacyRepairAuditRow {
+  invoiceLineId: number | null;
+  taxType: string;
+  taxObject: string;
+  baseAmount: number;
+  taxAmount: number;
+  liabilityAccountId: number | null;
+  lineTaxId: number | null;
+  resolutionStatus: string | null;
+}
+interface LegacyRepairAuditEvent {
+  id: number;
+  actor: string | null;
+  timestamp: string;
+  reason: string;
+  beforeRows: LegacyRepairAuditRow[];
+  afterRows: LegacyRepairAuditRow[];
+}
 type VendorInvoiceListItem = Record<string, unknown>;
 interface VendorInvoicePage {
   data: VendorInvoiceListItem[];
@@ -677,6 +695,20 @@ export function VendorInvoiceEditorPage() {
         throw new Error(message);
       }
       return payload as VI;
+    },
+    enabled: !isNew && activeCompanyId != null,
+  });
+  const { data: repairHistory = [], isLoading: repairHistoryLoading, isError: repairHistoryError } = useQuery<LegacyRepairAuditEvent[]>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repair-history", id, activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${id}/legacy-withholding-repair-history?company=${activeCompanyId}`,
+      );
+      const payload = await response.json().catch(() => null) as { data?: unknown } | null;
+      if (!response.ok || !Array.isArray(payload?.data)) {
+        throw new Error("Riwayat perbaikan PPh gagal dimuat.");
+      }
+      return payload.data as LegacyRepairAuditEvent[];
     },
     enabled: !isNew && activeCompanyId != null,
   });
@@ -1266,6 +1298,89 @@ export function VendorInvoiceEditorPage() {
             </div>
           </CardContent>
         </Card>
+
+        {!isNew && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Riwayat Perbaikan PPh Legacy</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Riwayat audit bersifat read-only dan hanya menampilkan perbaikan untuk perusahaan aktif.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {repairHistoryLoading ? (
+                <div className="py-4 text-sm text-muted-foreground">Memuat riwayat perbaikan...</div>
+              ) : repairHistoryError ? (
+                <div className="py-4 text-sm text-destructive">Riwayat perbaikan PPh gagal dimuat.</div>
+              ) : repairHistory.length === 0 ? (
+                <div className="py-4 text-sm text-muted-foreground">Belum ada perbaikan PPh legacy untuk invoice ini.</div>
+              ) : (
+                <div className="space-y-4">
+                  {repairHistory.map((event) => (
+                    <div key={event.id} className="rounded-lg border p-4">
+                      <div className="grid gap-3 border-b pb-3 text-sm md:grid-cols-[1fr_1fr_2fr]">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Actor</p>
+                          <p className="font-medium">{event.actor || "system"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Waktu</p>
+                          <p className="font-medium">
+                            {new Date(event.timestamp).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Alasan perbaikan</p>
+                          <p className="font-medium">{event.reason || "Tidak ada alasan tercatat."}</p>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        {[
+                          { label: "Sebelum perbaikan", rows: event.beforeRows },
+                          { label: "Sesudah perbaikan", rows: event.afterRows },
+                        ].map((section) => (
+                          <div key={section.label} className="min-w-0">
+                            <p className="mb-2 text-sm font-semibold">{section.label}</p>
+                            {section.rows.length === 0 ? (
+                              <p className="rounded-md bg-muted/40 px-3 py-3 text-xs text-muted-foreground">Tidak ada baris PPh.</p>
+                            ) : (
+                              <div className="overflow-x-auto rounded-md border">
+                                <table className="w-full min-w-[620px] text-xs">
+                                  <thead className="bg-muted/40">
+                                    <tr className="border-b">
+                                      <th className="px-2 py-2 text-left">Baris</th>
+                                      <th className="px-2 py-2 text-left">Jenis PPh</th>
+                                      <th className="px-2 py-2 text-left">Objek</th>
+                                      <th className="px-2 py-2 text-right">DPP</th>
+                                      <th className="px-2 py-2 text-right">PPh</th>
+                                      <th className="px-2 py-2 text-right">COA</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {section.rows.map((row, index) => (
+                                      <tr key={`${row.lineTaxId ?? "row"}-${index}`} className="border-b last:border-0">
+                                        <td className="px-2 py-2 font-mono">{row.invoiceLineId ?? "—"}</td>
+                                        <td className="px-2 py-2">{row.taxType || "—"}</td>
+                                        <td className="px-2 py-2">{row.taxObject || "—"}</td>
+                                        <td className="px-2 py-2 text-right font-mono">{idr(row.baseAmount)}</td>
+                                        <td className="px-2 py-2 text-right font-mono">{idr(row.taxAmount)}</td>
+                                        <td className="px-2 py-2 text-right font-mono">{row.liabilityAccountId ?? "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </AppShell>
   );

@@ -136,6 +136,25 @@ interface LegacyRepairRequestRow {
   liabilityAccountId: number;
 }
 
+interface LegacyRepairAuditDbRow {
+  id: number;
+  user_email: string | null;
+  created_at: Date | string;
+  before_data: unknown;
+  after_data: unknown;
+}
+
+interface LegacyRepairAuditTaxRow {
+  invoiceLineId: number | null;
+  taxType: string;
+  taxObject: string;
+  baseAmount: number;
+  taxAmount: number;
+  liabilityAccountId: number | null;
+  lineTaxId: number | null;
+  resolutionStatus: string | null;
+}
+
 function getLocalApiUser(req: Request): DevAuthUser | null {
   const devUser = getDevSession(req);
   if (devUser) return devUser;
@@ -229,6 +248,7 @@ router.use("/purchase-workflow/vendor-invoices", (req, _res, next) => {
     || path === "/purchase-workflow/vendor-invoices/liability-accounts"
     || path === "/purchase-workflow/vendor-invoices/legacy-withholding-repairs"
     || /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair$/.test(path)
+    || /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair-history$/.test(path)
     || /^\/purchase-workflow\/vendor-invoices\/\d+$/.test(path)
   );
   const isLocalRepair = req.method === "POST"
@@ -349,6 +369,49 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function positiveIntegerOrNull(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function auditTaxRows(value: unknown): LegacyRepairAuditTaxRow[] {
+  const rows = objectValue(value).rows;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((raw) => {
+    const row = objectValue(raw);
+    const taxType = String(row.taxType ?? row.tax_type ?? "").trim();
+    const taxObject = String(row.taxObject ?? row.tax_object ?? "").trim();
+    const taxAmount = finiteMoney(row.taxAmount ?? row.tax_amount);
+    if (!taxType && !taxObject && taxAmount <= 0) return [];
+    return [{
+      invoiceLineId: positiveIntegerOrNull(row.invoiceLineId ?? row.invoice_line_id),
+      taxType,
+      taxObject,
+      baseAmount: finiteMoney(row.baseAmount ?? row.base_amount),
+      taxAmount,
+      liabilityAccountId: positiveIntegerOrNull(row.liabilityAccountId ?? row.liability_account_id),
+      lineTaxId: positiveIntegerOrNull(row.lineTaxId ?? row.line_tax_id ?? row.id),
+      resolutionStatus: row.resolutionStatus == null && row.resolution_status == null
+        ? null
+        : String(row.resolutionStatus ?? row.resolution_status),
+    }];
+  });
+}
+
+function legacyRepairAuditEvent(row: LegacyRepairAuditDbRow) {
+  const beforeData = objectValue(row.before_data);
+  const afterData = objectValue(row.after_data);
+  const reason = String(afterData.reason ?? beforeData.reason ?? "").trim();
+  return {
+    id: row.id,
+    actor: row.user_email,
+    timestamp: row.created_at,
+    reason,
+    beforeRows: auditTaxRows(row.before_data),
+    afterRows: auditTaxRows(row.after_data),
+  };
 }
 
 export function legacyRepairComponents(invoice: LegacyRepairInvoiceRow): LegacyRepairComponent[] {
@@ -626,6 +689,39 @@ router.get("/purchase-workflow/vendor-invoices/:id/legacy-withholding-repair", a
   } catch (error) {
     req.log.error({ error, invoiceId }, "Failed to preview legacy withholding repair");
     sendError(res, 503, "Preview perbaikan PPh tidak dapat dimuat", "LEGACY_WITHHOLDING_REPAIR_PREVIEW_FAILED");
+  }
+});
+
+router.get("/purchase-workflow/vendor-invoices/:id/legacy-withholding-repair-history", async (req, res): Promise<void> => {
+  const invoiceId = parseInvoiceId(req);
+  const companyId = parseCompanyId(req);
+  if (invoiceId === null || companyId === null) {
+    sendError(res, 400, "Invoice atau perusahaan tidak valid", "INVALID_REPAIR_HISTORY_TARGET");
+    return;
+  }
+  try {
+    const result = await pool.query<LegacyRepairAuditDbRow>(
+      `select id, user_email, created_at, before_data, after_data
+         from public.audit_logs
+        where company_id = $1
+          and entity_type = 'vendor_invoice'
+          and entity_id = $2
+          and action = 'repair_legacy_withholding'
+        order by created_at desc nulls last, id desc`,
+      [companyId, String(invoiceId)],
+    );
+    res.json({
+      data: result.rows.map(legacyRepairAuditEvent),
+      total: result.rows.length,
+    });
+  } catch (error) {
+    req.log.error({ error, invoiceId }, "Failed to load legacy withholding repair history");
+    sendError(
+      res,
+      503,
+      "Riwayat perbaikan PPh tidak dapat dimuat",
+      "LEGACY_WITHHOLDING_REPAIR_HISTORY_FAILED",
+    );
   }
 });
 
