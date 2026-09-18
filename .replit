@@ -9,28 +9,6 @@ args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "CST BizPortal upstream API"
-
-[[workflows.workflow]]
-name = "CST BizPortal upstream API"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd .upstream-cst-super-app/artifacts/api-server && APP_ENV=development NODE_ENV=development PORT=18444 pnpm run dev"
-waitForPort = 18444
 
 [agent]
 stack = "PNPM_WORKSPACE"

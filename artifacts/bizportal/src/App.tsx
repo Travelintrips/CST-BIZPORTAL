@@ -257,7 +257,6 @@ function WaLoginSection() {
   const [otpSent, setOtpSent] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [devCode, setDevCode] = React.useState<string | null>(null);
   const [countdown, setCountdown] = React.useState(0);
 
   React.useEffect(() => {
@@ -270,7 +269,6 @@ function WaLoginSection() {
     if (!phone || loading) return;
     setLoading(true);
     setError(null);
-    setDevCode(null);
     try {
       const res = await fetch("/api/auth/wa-otp/send", {
         method: "POST",
@@ -281,7 +279,6 @@ function WaLoginSection() {
         ok?: boolean;
         message?: string;
         error?: string;
-        _dev_code?: string;
       };
       if (!res.ok) {
         setError(data.message ?? data.error ?? "Gagal mengirim OTP");
@@ -289,7 +286,6 @@ function WaLoginSection() {
       }
       setOtpSent(true);
       setCountdown(60);
-      if (data._dev_code) setDevCode(data._dev_code);
     } catch {
       setError("Gagal terhubung ke server");
     } finally {
@@ -331,11 +327,6 @@ function WaLoginSection() {
           <p className="text-xs text-slate-400 text-center">
             Kode OTP dikirim ke WhatsApp <span className="text-white font-mono">{phone}</span>
           </p>
-          {devCode && (
-            <p className="text-xs text-amber-400 text-center font-mono bg-amber-900/20 rounded p-1">
-              DEV: kode = {devCode}
-            </p>
-          )}
           <input
             type="text"
             inputMode="numeric"
@@ -372,14 +363,24 @@ function WaLoginSection() {
   );
 }
 
-function EmailPasswordLoginSection() {
-  const { signInWithEmail } = useSupabaseAuth();
+function EmailLoginSection() {
+  const { signInWithEmail, sendEmailOtp, verifyEmailOtp } = useSupabaseAuth();
+  const [mode, setMode] = React.useState<"password" | "otp">("password");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [code, setCode] = React.useState("");
+  const [otpSent, setOtpSent] = React.useState(false);
+  const [countdown, setCountdown] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  React.useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [countdown]);
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password || loading) return;
     setLoading(true);
@@ -394,8 +395,54 @@ function EmailPasswordLoginSection() {
     }
   };
 
+  const handleSendOtp = async () => {
+    if (!email.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    const result = await sendEmailOtp(email);
+    if (result.error) {
+      setError(result.error);
+    } else {
+      setOtpSent(true);
+      setCode("");
+      setCountdown(60);
+    }
+    setLoading(false);
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || code.length !== 6 || loading) return;
+    setLoading(true);
+    setError(null);
+    const result = await verifyEmailOtp(email, code);
+    if (result.error) {
+      setError(result.error);
+      setLoading(false);
+      return;
+    }
+    writeRoleCache("admin");
+    window.location.href = appRootPath;
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
+      <div className="flex rounded-lg bg-slate-800/80 p-1 gap-1">
+        <button
+          type="button"
+          onClick={() => { setMode("password"); setOtpSent(false); setError(null); }}
+          className={`flex-1 rounded-md py-2 text-xs font-medium transition-all ${mode === "password" ? "bg-indigo-600 text-white shadow" : "text-slate-400 hover:text-white"}`}
+        >
+          Password
+        </button>
+        <button
+          type="button"
+          onClick={() => { setMode("otp"); setError(null); }}
+          className={`flex-1 rounded-md py-2 text-xs font-medium transition-all ${mode === "otp" ? "bg-indigo-600 text-white shadow" : "text-slate-400 hover:text-white"}`}
+        >
+          OTP Email
+        </button>
+      </div>
       <input
         type="email"
         aria-label="Email admin"
@@ -406,25 +453,83 @@ function EmailPasswordLoginSection() {
         autoComplete="email"
         className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 read-only:cursor-not-allowed read-only:opacity-70"
       />
-      <input
-        type="password"
-        aria-label="Password admin"
-        placeholder="Password"
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-        required
-        autoComplete="current-password"
-        className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      />
-      {error && <p className="text-xs text-red-400 text-center">{error}</p>}
-      <button
-        type="submit"
-        disabled={loading || !email.trim() || !password}
-        className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
-      >
-        {loading ? "Memproses..." : "Masuk"}
-      </button>
-    </form>
+      {mode === "password" ? (
+        <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-3">
+          <input
+            type="password"
+            aria-label="Password admin"
+            placeholder="Password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+            autoComplete="current-password"
+            className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading || !email.trim() || !password}
+            className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
+          >
+            {loading ? "Memproses..." : "Masuk"}
+          </button>
+        </form>
+      ) : !otpSent ? (
+        <>
+          <p className="text-xs leading-5 text-slate-400 text-center">
+            Kode sekali pakai akan dikirim ke email admin dan berlaku selama 5 menit.
+          </p>
+          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+          <button
+            type="button"
+            onClick={handleSendOtp}
+            disabled={loading || !email.trim()}
+            className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
+          >
+            {loading ? "Mengirim..." : "Kirim OTP ke Email"}
+          </button>
+        </>
+      ) : (
+        <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
+          <p className="text-xs leading-5 text-slate-400 text-center">
+            Masukkan kode 6 digit dari email admin. Kode berlaku 5 menit.
+          </p>
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Kode OTP email"
+            placeholder="Masukkan 6 digit OTP"
+            value={code}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+            required
+            maxLength={6}
+            autoComplete="one-time-code"
+            autoFocus
+            className="rounded-lg bg-slate-800/70 border border-indigo-500/50 px-4 py-2.5 text-center text-lg tracking-[0.35em] font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading || code.length !== 6}
+            className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
+          >
+            {loading ? "Memverifikasi..." : "Verifikasi OTP"}
+          </button>
+          <div className="flex justify-between text-xs text-slate-500">
+            <button type="button" onClick={() => { setOtpSent(false); setCode(""); setError(null); }} className="hover:text-slate-300">
+              ← Ganti email
+            </button>
+            {countdown > 0 ? (
+              <span>Kirim ulang ({countdown}s)</span>
+            ) : (
+              <button type="button" onClick={handleSendOtp} disabled={loading} className="hover:text-slate-300">
+                Kirim ulang OTP
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -462,7 +567,7 @@ function LoginScreen() {
       </div>
 
       <div className="flex flex-col gap-3 w-72">
-        {loginMode === "email" ? <EmailPasswordLoginSection /> : <WaLoginSection />}
+        {loginMode === "email" ? <EmailLoginSection /> : <WaLoginSection />}
       </div>
 
       {IS_DEV && (
