@@ -39,20 +39,6 @@ router.use(async (req, res, next) => {
   } catch (error) {
     req.log.error({ error }, "Failed to authenticate accounting request");
     res.status(503).json({ error: "Authorization service unavailable" });
-router.use(async (req, res, next) => {
-  try {
-    const session = isDevelopmentEnvironment() ? null : getProductionSession(req);
-    const user = isDevelopmentEnvironment()
-      ? getDevSession(req)
-      : session ? await getProductionUser(session) : null;
-    if (!user || !["admin", "owner", "finance", "accounting"].includes(user.role)) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    next();
-  } catch (error) {
-    req.log.error({ error }, "Accounting authorization failed");
-    res.status(503).json({ error: "Authorization service unavailable." });
   }
 });
 
