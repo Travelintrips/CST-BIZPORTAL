@@ -101,7 +101,10 @@ router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> =
 });
 
 router.use((_request, response) => {
-  response.status(404).json({ error: "Endpoint BizPortal belum tersedia di runtime mandiri." });
+  response.status(404).json({
+    error: "Endpoint tidak tersedia di backend mandiri CST-BIZPORTAL",
+    code: "BIZPORTAL_LOCAL_ENDPOINT_NOT_FOUND",
+  });
 });
 
 export default router;

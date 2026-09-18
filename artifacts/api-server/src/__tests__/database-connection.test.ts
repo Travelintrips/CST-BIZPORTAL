@@ -30,6 +30,7 @@ describe("database URL resolution", () => {
     process.env.NODE_ENV = "development";
     delete process.env.SUPABASE_DATABASE_URL_DEV;
     delete process.env.SUPABASE_DATABASE_URL;
+    delete process.env.SUPABASE_PG_URL;
     process.env.DATABASE_URL = "postgresql://replit-user:password@replit.example.test:5432/replit";
 
     expect(getDatabaseUrl()).toBeUndefined();
