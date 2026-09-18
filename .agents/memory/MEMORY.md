@@ -27,3 +27,4 @@
 - [Posted ledger immutability](posted-ledger-immutability.md) — posted accounting entries reject financial date edits; corrections require a reversal/new entry workflow.
 - [Supabase database selection](supabase-database-selection.md) — never fall back to generic DATABASE_URL; readiness must report the resolved Supabase runtime.
 - [Upstream artifact build dependencies](upstream-artifact-build.md) — nested workspace production builds must install their own dependencies before running.
+- [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
