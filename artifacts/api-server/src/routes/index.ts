@@ -29,10 +29,6 @@ router.post("/auth/email-login", (_request, response) => {
   response.status(404).json({ error: "Not found" });
 });
 
-// Authentication is owned locally by CST-BIZPORTAL. No login or session
-// exchange is forwarded to CST-SUPER-APP.
-router.use(localProductionAuthRouter);
-
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);
@@ -106,11 +102,6 @@ router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> =
 
 router.use((_request, response) => {
   response.status(404).json({ error: "Endpoint BizPortal belum tersedia di runtime mandiri." });
-router.use((_req, res) => {
-  res.status(404).json({
-    error: "Endpoint tidak tersedia di backend mandiri CST-BIZPORTAL",
-    code: "BIZPORTAL_LOCAL_ENDPOINT_NOT_FOUND",
-  });
 });
 
 export default router;
