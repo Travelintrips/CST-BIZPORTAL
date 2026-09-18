@@ -39,6 +39,9 @@ router.use(async (req, res, next) => {
   } catch (error) {
     req.log.error({ error }, "Failed to authenticate accounting request");
     res.status(503).json({ error: "Authorization service unavailable" });
+  }
+});
+
 router.use(async (req, res, next) => {
   try {
     const session = isDevelopmentEnvironment() ? null : getProductionSession(req);
