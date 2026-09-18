@@ -89,7 +89,7 @@ echo "[PORT CHECK] PID=$PROXY_PID PORT=$GW_PORT SERVICE=customer-portal-proxy"
 
 # Start Vite (NOT with exec so proxy keeps running alongside it)
 APP_ENV=development NODE_ENV=development \
-  node ../api-server/load-secrets.mjs node node_modules/vite/bin/vite.js \
+  node node_modules/vite/bin/vite.js \
   --config vite.config.ts --host 0.0.0.0 --port "${VITE_PORT}"
 
 # If vite exits, also kill the proxy

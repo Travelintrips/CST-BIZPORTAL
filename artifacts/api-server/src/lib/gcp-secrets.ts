@@ -82,14 +82,18 @@ async function loadUpstreamOrigin(): Promise<URL> {
   const environmentOriginKey = isProduction
     ? "BIZPORTAL_API_ORIGIN_PROD"
     : "BIZPORTAL_API_ORIGIN_DEV";
-  const explicitOrigin = process.env[environmentOriginKey]?.trim();
+  const backendOrigin = process.env.BIZPORTAL_BACKEND_API_ORIGIN?.trim();
+  const explicitOrigin = backendOrigin || process.env[environmentOriginKey]?.trim();
   if (!explicitOrigin) {
     throw new Error(
-      `${environmentOriginKey} is not configured; ${isProduction ? "production" : "development"} cannot fall back to another environment`,
+      `BIZPORTAL_BACKEND_API_ORIGIN or ${environmentOriginKey} is not configured; ${isProduction ? "production" : "development"} cannot fall back to another environment`,
     );
   }
 
-  const configuredOrigin = validateConfiguredOrigin(explicitOrigin, environmentOriginKey);
+  const configuredOrigin = validateConfiguredOrigin(
+    explicitOrigin,
+    backendOrigin ? "BIZPORTAL_BACKEND_API_ORIGIN" : environmentOriginKey,
+  );
   if (isProduction && configuredOrigin.hostname.endsWith(".replit.dev")) {
     throw new Error("BIZPORTAL_API_ORIGIN_PROD cannot use an ephemeral Replit development host");
   }
