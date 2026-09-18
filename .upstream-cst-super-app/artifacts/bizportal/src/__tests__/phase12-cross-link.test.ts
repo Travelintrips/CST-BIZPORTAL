@@ -18,10 +18,10 @@
  * Hooks:
  *  - useAIReviewBySource: enabled only when both params present
  *  - useAIReviewBySource: disabled when params absent
- *  - bySource cache key includes source + sourceRecordId
+ *  - bySource cache key includes source + sourceRecordId + companyId
  *
  * Safety:
- *  - No hardcoded companyId in hook
+ *  - Company scope is supplied by the active company context
  *  - No DB access in components
  */
 
@@ -170,22 +170,30 @@ describe('getAISourceLabel', () => {
 describe('Phase 12 — aiReviewKeys.bySource', () => {
   it('cache key includes source and sourceRecordId', async () => {
     const { aiReviewKeys } = await import('../hooks/useAiReview');
-    const key = aiReviewKeys.bySource('EXPENSE', 'EXP-55');
+    const key = aiReviewKeys.bySource('EXPENSE', 'EXP-55', 42);
     expect(key).toContain('EXPENSE');
     expect(key).toContain('EXP-55');
+    expect(key).toContain(42);
   });
 
   it('different sources produce different cache keys', async () => {
     const { aiReviewKeys } = await import('../hooks/useAiReview');
-    const k1 = aiReviewKeys.bySource('EXPENSE', '1');
-    const k2 = aiReviewKeys.bySource('TREASURY', '1');
+    const k1 = aiReviewKeys.bySource('EXPENSE', '1', 42);
+    const k2 = aiReviewKeys.bySource('TREASURY', '1', 42);
     expect(JSON.stringify(k1)).not.toBe(JSON.stringify(k2));
   });
 
   it('different sourceRecordIds produce different cache keys', async () => {
     const { aiReviewKeys } = await import('../hooks/useAiReview');
-    const k1 = aiReviewKeys.bySource('EXPENSE', '1');
-    const k2 = aiReviewKeys.bySource('EXPENSE', '2');
+    const k1 = aiReviewKeys.bySource('EXPENSE', '1', 42);
+    const k2 = aiReviewKeys.bySource('EXPENSE', '2', 42);
+    expect(JSON.stringify(k1)).not.toBe(JSON.stringify(k2));
+  });
+
+  it('different company scopes produce different cache keys', async () => {
+    const { aiReviewKeys } = await import('../hooks/useAiReview');
+    const k1 = aiReviewKeys.bySource('EXPENSE', '1', 42);
+    const k2 = aiReviewKeys.bySource('EXPENSE', '1', 43);
     expect(JSON.stringify(k1)).not.toBe(JSON.stringify(k2));
   });
 });

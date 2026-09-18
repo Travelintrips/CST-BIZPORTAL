@@ -1,11 +1,14 @@
 /**
  * useAiReview.ts
  * Reusable React Query hooks for the AI Transaction Review module.
- * All hooks enforce company isolation via backend — no companyId param needed.
+ * All hooks enforce company isolation via backend. Source-linked requests also
+ * include the active company because admin/dev sessions may not have a company
+ * assigned directly to their server-side session.
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
+import { useCompany } from "@/contexts/CompanyContext";
 import {
   aiReviewApi,
   aiReviewSourceApi,
@@ -27,7 +30,8 @@ export const aiReviewKeys = {
   observability: () => ["ai-review-observability"] as const,
   learningFeedback: () => ["ai-review-learning-feedback"] as const,
   rulePackages: () => ["ai-review-rule-packages"] as const,
-  bySource: (source: string, sourceRecordId: string) => ["ai-review-by-source", source, sourceRecordId] as const,
+  bySource: (source: string, sourceRecordId: string, companyId: number | null = null) =>
+    ["ai-review-by-source", source, sourceRecordId, companyId] as const,
 } as const;
 
 // ── Query hooks ──────────────────────────────────────────────────────────────
@@ -191,15 +195,20 @@ export function useReevaluateCase(caseId: string) {
 
 /**
  * Fetch AI review case(s) linked to a specific source entity.
- * Only fires when both source and sourceRecordId are non-empty strings.
- * Cache key is scoped to source + sourceRecordId — no companyId param needed
- * (company context enforced on the backend via session).
+ * Only fires when source, sourceRecordId, and a concrete company scope are
+ * available. The company is included in both the request and cache key so
+ * switching companies cannot reuse another company's result.
  */
 export function useAIReviewBySource(source: string | undefined | null, sourceRecordId: string | undefined | null) {
-  const enabled = !!source && !!sourceRecordId;
+  const { activeCompanyId } = useCompany();
+  const companyId =
+    typeof activeCompanyId === "number" && Number.isInteger(activeCompanyId) && activeCompanyId > 0
+      ? activeCompanyId
+      : null;
+  const enabled = !!source && !!sourceRecordId && companyId !== null;
   return useQuery({
-    queryKey: aiReviewKeys.bySource(source ?? '', sourceRecordId ?? ''),
-    queryFn: () => aiReviewSourceApi.getBySource(source!, sourceRecordId!),
+    queryKey: aiReviewKeys.bySource(source ?? '', sourceRecordId ?? '', companyId),
+    queryFn: () => aiReviewSourceApi.getBySource(source!, sourceRecordId!, companyId!),
     enabled,
     staleTime: 30_000,
   });
@@ -212,8 +221,18 @@ export function useAIReviewBySource(source: string | undefined | null, sourceRec
  */
 export function useCreateAIReviewFromSource() {
   const qc = useQueryClient();
+  const { activeCompanyId } = useCompany();
+  const companyId =
+    typeof activeCompanyId === "number" && Number.isInteger(activeCompanyId) && activeCompanyId > 0
+      ? activeCompanyId
+      : null;
   return useMutation({
-    mutationFn: (payload: AICreateFromSourcePayload) => aiReviewSourceApi.createFromSource(payload),
+    mutationFn: (payload: AICreateFromSourcePayload) => {
+      if (companyId === null) {
+        throw new Error("Pilih perusahaan terlebih dahulu sebelum membuat AI Review.");
+      }
+      return aiReviewSourceApi.createFromSource({ ...payload, companyId });
+    },
     onSuccess: (result, variables) => {
       if (result.created) {
         toast({ title: "AI Review berhasil dibuat" });
@@ -222,7 +241,7 @@ export function useCreateAIReviewFromSource() {
       }
       // Invalidate by-source cache for this entity so badge updates
       qc.invalidateQueries({
-        queryKey: aiReviewKeys.bySource(variables.source, variables.sourceRecordId),
+        queryKey: aiReviewKeys.bySource(variables.source, variables.sourceRecordId, companyId),
       });
       qc.invalidateQueries({ queryKey: ["ai-review-cases"] });
     },
