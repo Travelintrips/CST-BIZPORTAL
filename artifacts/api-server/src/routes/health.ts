@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { pool, getDatabaseUrl } from "@workspace/db";
+import { pool, runtimeDatabaseUrl } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -20,7 +20,7 @@ router.get("/health/ready", async (_req, res) => {
       status: "ok",
       ready: true,
       database: "connected",
-      databaseProvider: getDatabaseUrl()?.includes("supabase") ? "supabase" : "postgres",
+      databaseProvider: runtimeDatabaseUrl.includes("supabase") ? "supabase" : "postgres",
     });
   } catch (error) {
     res.status(503).json({

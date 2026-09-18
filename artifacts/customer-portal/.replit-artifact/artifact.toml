@@ -18,7 +18,7 @@ localPort = 23434
 run = "bash ../../.upstream-cst-super-app/artifacts/customer-portal/start-dev.sh"
 
 [services.production]
-build = [ "pnpm", "--dir", ".upstream-cst-super-app", "--filter", "@workspace/customer-portal", "run", "build" ]
+build = [ "bash", "-lc", "pnpm --dir .upstream-cst-super-app install --frozen-lockfile && pnpm --dir .upstream-cst-super-app --filter @workspace/customer-portal run build" ]
 publicDir = ".upstream-cst-super-app/artifacts/customer-portal/dist/public"
 serve = "static"
 
