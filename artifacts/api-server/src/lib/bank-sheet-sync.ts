@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { pool } from "@workspace/db";
-import { readSpreadsheetValues } from "./google-sheets";
+import {
+  readSpreadsheetValues,
+  spreadsheetCellRange,
+  writeSpreadsheetValues,
+  type SpreadsheetValueUpdate,
+} from "./google-sheets";
 
 type SheetConfig = {
   id: number;
@@ -12,6 +17,7 @@ type SheetConfig = {
 };
 
 type ParsedMutation = {
+  rowNumber: number;
   transactionDate: string;
   description: string;
   debit: number;
@@ -19,6 +25,17 @@ type ParsedMutation = {
   amount: number;
   direction: "IN" | "OUT";
   bank: string | null;
+  mutationKey: string | null;
+  sheetStatus: string | null;
+};
+
+type ExistingMutation = {
+  id: number;
+  mutation_key: string | null;
+  canonical_key: string | null;
+  status: string | null;
+  reconciliation_status: string | null;
+  journal_entry_id: number | null;
 };
 
 function normalizeDescription(value: string): string {
@@ -29,7 +46,11 @@ function normalizeDescription(value: string): string {
     .trim();
 }
 
-function canonicalKey(row: ParsedMutation, companyId: number | null, bankAccountId: number | null): string {
+function canonicalKey(
+  row: ParsedMutation,
+  companyId: number | null,
+  bankAccountId: number | null,
+): string {
   const payload = [
     companyId ?? 0,
     bankAccountId ?? 0,
@@ -37,9 +58,13 @@ function canonicalKey(row: ParsedMutation, companyId: number | null, bankAccount
     Math.round(Math.abs(row.debit) * 100),
     Math.round(Math.abs(row.credit) * 100),
     normalizeDescription(row.description),
-    "",
   ].join("|");
   return crypto.createHash("sha256").update(payload, "utf8").digest("hex");
+}
+
+function normalizeMutationKey(value: string): string | null {
+  const normalized = value.trim();
+  return normalized ? normalized : null;
 }
 
 function parseAmount(value: string): number {
@@ -114,8 +139,37 @@ function findColumn(headers: string[], candidates: string[]): number {
   return -1;
 }
 
-function parseRows(rows: string[][]): ParsedMutation[] {
-  if (rows.length < 2) return [];
+function statusLabel(mutation: {
+  status: string | null;
+  reconciliation_status: string | null;
+}): string {
+  const reconciliationStatus = String(mutation.reconciliation_status ?? "").toLowerCase();
+  const status = String(mutation.status ?? "").toLowerCase();
+  if (["posted", "reconciled"].includes(reconciliationStatus) || status === "posted") {
+    return "POSTED";
+  }
+  if (["approved", "approved_pending_posting"].includes(status)) return "APPROVED";
+  if (reconciliationStatus === "matched" || status === "matched") return "MATCHED";
+  if (["void", "voided"].includes(status)) return "VOID";
+  return "UNMATCHED";
+}
+
+function parseRows(rows: string[][]): {
+  mutations: ParsedMutation[];
+  headers: string[];
+  keyColumn: number;
+  statusColumn: number;
+  headerRow: number;
+} {
+  if (rows.length < 2) {
+    return {
+      mutations: [],
+      headers: rows[0] ?? [],
+      keyColumn: -1,
+      statusColumn: -1,
+      headerRow: rows.length === 1 ? 1 : 0,
+    };
+  }
   const headers = rows[0] ?? [];
   let dateColumn = findColumn(headers, ["tanggal", "tgl", "date", "waktu", "time"]);
   let descriptionColumn = findColumn(headers, [
@@ -124,21 +178,37 @@ function parseRows(rows: string[][]): ParsedMutation[] {
   let creditColumn = findColumn(headers, ["kredit", "credit", "masuk", "cr", "jumlah masuk"]);
   let debitColumn = findColumn(headers, ["debit", "debet", "keluar", "db", "out", "jumlah keluar"]);
   const bankColumn = findColumn(headers, ["bank", "rekening", "akun"]);
+  let keyColumn = findColumn(headers, [
+    "mutation_key",
+    "mutation key",
+    "mutation id",
+    "id mutasi",
+    "kunci mutasi",
+  ]);
+  let statusColumn = findColumn(headers, [
+    "status rekonsiliasi",
+    "reconciliation status",
+    "status",
+  ]);
   let start = 1;
+  let headerRow = 1;
 
   if (dateColumn < 0 && descriptionColumn < 0 && creditColumn < 0 && debitColumn < 0) {
     const firstData = rows.findIndex((row) => parseDate(String(row[0] ?? "")) !== null);
     if (firstData >= 0) {
       start = firstData;
+      headerRow = 0;
       dateColumn = 0;
       descriptionColumn = 1;
       debitColumn = 2;
       creditColumn = 3;
+      keyColumn = -1;
+      statusColumn = -1;
     }
   }
 
   const result: ParsedMutation[] = [];
-  for (const row of rows.slice(start)) {
+  for (const [offset, row] of rows.slice(start).entries()) {
     if (!row?.some((cell) => String(cell ?? "").trim())) continue;
     const date = parseDate(String(row[dateColumn] ?? ""));
     const debit = parseAmount(String(row[debitColumn] ?? ""));
@@ -146,6 +216,7 @@ function parseRows(rows: string[][]): ParsedMutation[] {
     const amount = credit || debit;
     if (!date || amount <= 0) continue;
     result.push({
+      rowNumber: start + offset + 1,
       transactionDate: date,
       description: String(row[descriptionColumn] ?? "").trim(),
       debit,
@@ -153,80 +224,213 @@ function parseRows(rows: string[][]): ParsedMutation[] {
       amount,
       direction: debit > 0 && credit <= 0 ? "OUT" : "IN",
       bank: bankColumn >= 0 ? String(row[bankColumn] ?? "").trim() || null : null,
+      mutationKey:
+        keyColumn >= 0 ? normalizeMutationKey(String(row[keyColumn] ?? "")) : null,
+      sheetStatus:
+        statusColumn >= 0 ? String(row[statusColumn] ?? "").trim() || null : null,
     });
   }
-  return result;
+  return { mutations: result, headers, keyColumn, statusColumn, headerRow };
 }
 
-async function syncConfig(config: SheetConfig): Promise<{ imported: number; total: number; existing: number }> {
+function addSheetStatusUpdates(
+  config: SheetConfig,
+  parsed: ReturnType<typeof parseRows>,
+  mutationStatuses: Map<number, { key: string; status: string }>,
+): SpreadsheetValueUpdate[] {
+  if (parsed.mutations.length === 0) return [];
+
+  let keyColumn = parsed.keyColumn;
+  let statusColumn = parsed.statusColumn;
+  const updates: SpreadsheetValueUpdate[] = [];
+  let nextColumn = parsed.headers.length;
+
+  if (keyColumn < 0 && parsed.headerRow > 0) {
+    keyColumn = nextColumn++;
+    updates.push({
+      range: spreadsheetCellRange(config.tab_name, keyColumn, parsed.headerRow),
+      values: [["mutation_key"]],
+    });
+  }
+  if (statusColumn < 0 && parsed.headerRow > 0) {
+    statusColumn = nextColumn++;
+    updates.push({
+      range: spreadsheetCellRange(config.tab_name, statusColumn, parsed.headerRow),
+      values: [["status"]],
+    });
+  }
+
+  if (parsed.headerRow <= 0) return updates;
+  for (const row of parsed.mutations) {
+    const status = mutationStatuses.get(row.rowNumber);
+    if (!status) continue;
+    if (keyColumn >= 0) {
+      updates.push({
+        range: spreadsheetCellRange(config.tab_name, keyColumn, row.rowNumber),
+        values: [[status.key]],
+      });
+    }
+    if (statusColumn >= 0) {
+      updates.push({
+        range: spreadsheetCellRange(config.tab_name, statusColumn, row.rowNumber),
+        values: [[status.status]],
+      });
+    }
+  }
+  return updates;
+}
+
+async function markConfigSync(
+  configId: number,
+  status: string,
+  error: string | null = null,
+): Promise<void> {
+  await pool.query(
+    `update public.bank_sheet_configs
+        set last_synced_at = now(), last_sync_status = $1, last_sync_error = $2, updated_at = now()
+      where id = $3`,
+    [status, error, configId],
+  );
+}
+
+async function syncConfig(config: SheetConfig): Promise<{
+  imported: number;
+  total: number;
+  existing: number;
+  sheetUpdates: number;
+}> {
+  const client = await pool.connect();
   try {
     const rows = await readSpreadsheetValues(config.sheet_id, config.tab_name);
     const parsed = parseRows(rows);
-    if (parsed.length === 0) {
-      await pool.query(
-        `update public.bank_sheet_configs
-            set last_synced_at = now(), last_sync_status = $1, last_sync_error = null, updated_at = now()
-          where id = $2`,
-        ["success", config.id],
-      );
-      return { imported: 0, total: rows.length > 0 ? rows.length - 1 : 0, existing: 0 };
+    if (parsed.mutations.length === 0) {
+      await markConfigSync(config.id, "success");
+      return {
+        imported: 0,
+        total: rows.length > 0 ? rows.length - 1 : 0,
+        existing: 0,
+        sheetUpdates: 0,
+      };
     }
 
     const bankAccount = config.bank_account_number?.trim() || null;
+    const prepared = parsed.mutations.map((row) => {
+      const generatedKey = canonicalKey(row, config.company_id, null);
+      return {
+        row,
+        key: row.mutationKey ?? generatedKey,
+        canonical: generatedKey,
+      };
+    });
+    const mutationKeys = [...new Set(prepared.map((item) => item.key))];
+    const canonicalKeys = [...new Set(prepared.map((item) => item.canonical))];
     let imported = 0;
     let existing = 0;
-    for (const row of parsed) {
-      const key = canonicalKey(row, config.company_id, null);
-      const inserted = await pool.query<{ id: number }>(
+    const mutationStatuses = new Map<number, { key: string; status: string }>();
+
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+      `google-sheet-sync:${config.id}`,
+    ]);
+    const existingResult = await client.query<ExistingMutation>(
+      `select id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id
+         from public.bank_mutations
+        where source = 'google_sheet'
+          and company_id is not distinct from $1
+          and (mutation_key = any($2::text[]) or canonical_key = any($3::text[]))`,
+      [config.company_id, mutationKeys, canonicalKeys],
+    );
+    const byMutationKey = new Map<string, ExistingMutation>();
+    const byCanonicalKey = new Map<string, ExistingMutation>();
+    for (const mutation of existingResult.rows) {
+      if (mutation.mutation_key) byMutationKey.set(mutation.mutation_key, mutation);
+      if (mutation.canonical_key) byCanonicalKey.set(mutation.canonical_key, mutation);
+    }
+
+    for (const item of prepared) {
+      const found = byMutationKey.get(item.key) ?? byCanonicalKey.get(item.canonical);
+      if (found) {
+        existing += 1;
+        mutationStatuses.set(item.row.rowNumber, {
+          key: found.mutation_key ?? item.key,
+          status: statusLabel(found),
+        });
+        continue;
+      }
+
+      const inserted = await client.query<ExistingMutation>(
         `insert into public.bank_mutations
           (mutation_key, canonical_key, transaction_date, description, amount, direction,
            credit_amount, debit_amount, normalized_description, provider_name,
            bank_account_id, source_classification, status, source, source_account,
            company_id, sheet_config_id)
-         values ($1, $1, $2, $3, $4, $5, $6, $7, $8, null,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, null,
                  (select id from public.company_bank_accounts
-                   where company_id = $9
+                   where company_id = $10
                      and coalesce(is_active, true) = true
-                     and ($10::text is null or account_number = $10)
+                     and ($11::text is null or account_number = $11)
                    order by id limit 1),
-                 'actual_bank_mutation', 'unmatched', 'google_sheet', $11, $9, $12)
+                 'actual_bank_mutation', 'unmatched', 'google_sheet', $12, $10, $13)
          on conflict do nothing
-         returning id`,
+         returning id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id`,
         [
-          key,
-          row.transactionDate,
-          row.description,
-          row.amount,
-          row.direction,
-          row.credit,
-          row.debit,
-          normalizeDescription(row.description),
+          item.key,
+          item.canonical,
+          item.row.transactionDate,
+          item.row.description,
+          item.row.amount,
+          item.row.direction,
+          item.row.credit,
+          item.row.debit,
+          normalizeDescription(item.row.description),
           config.company_id,
           bankAccount,
-          row.bank,
+          item.row.bank,
           config.id,
         ],
       );
-      if (inserted.rowCount) imported += inserted.rowCount;
-      else existing += 1;
+      const mutation = inserted.rows[0];
+      if (mutation) {
+        imported += 1;
+        byMutationKey.set(item.key, mutation);
+        byCanonicalKey.set(item.canonical, mutation);
+        mutationStatuses.set(item.row.rowNumber, { key: item.key, status: "UNMATCHED" });
+      } else {
+        existing += 1;
+        mutationStatuses.set(item.row.rowNumber, { key: item.key, status: "UNMATCHED" });
+      }
+    }
+    await client.query("commit");
+
+    const sheetUpdates = addSheetStatusUpdates(config, parsed, mutationStatuses);
+    try {
+      await writeSpreadsheetValues(config.sheet_id, sheetUpdates);
+    } catch (sheetError) {
+      const message = sheetError instanceof Error ? sheetError.message : String(sheetError);
+      await markConfigSync(config.id, "partial", message.slice(0, 500));
+      throw new Error(
+        `Data tersimpan di database, tetapi status sheet gagal diperbarui: ${message}`,
+      );
     }
 
-    await pool.query(
-      `update public.bank_sheet_configs
-          set last_synced_at = now(), last_sync_status = $1, last_sync_error = null, updated_at = now()
-        where id = $2`,
-      ["success", config.id],
-    );
-    return { imported, total: parsed.length, existing };
+    await markConfigSync(config.id, "success");
+    return {
+      imported,
+      total: parsed.mutations.length,
+      existing,
+      sheetUpdates: sheetUpdates.length,
+    };
   } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // The transaction may already have been committed or the connection lost.
+    }
     const message = error instanceof Error ? error.message : String(error);
-    await pool.query(
-      `update public.bank_sheet_configs
-          set last_synced_at = now(), last_sync_status = $1, last_sync_error = $2, updated_at = now()
-        where id = $3`,
-      ["error", message.slice(0, 500), config.id],
-    ).catch(() => undefined);
+    await markConfigSync(config.id, "error", message.slice(0, 500)).catch(() => undefined);
     throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -243,7 +447,7 @@ export async function syncOneBankSheetConfig(configId: number) {
   return {
     ok: true,
     ...stats,
-    message: `Sync selesai: ${stats.imported} mutasi baru dari ${stats.total} baris`,
+    message: `Sync selesai: ${stats.imported} mutasi baru, ${stats.existing} sudah ada dari ${stats.total} baris`,
   };
 }
 
