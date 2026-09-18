@@ -53,6 +53,25 @@ const PAY_LABEL: Record<string, string> = {
 type Booking = Record<string, unknown>;
 type Facility = { id: number; name: string; price_per_hour: number };
 
+const EMPTY_PAY_FORM = {
+  method: "cash",
+  notes: "",
+  recurring_series_id: "",
+  group_id: "",
+  member_id: "",
+};
+
+const bookingPaymentScope = (booking: Booking) => ({
+  recurring_series_id: String(booking.recurring_series_id ?? ""),
+  group_id: String(booking.group_id ?? ""),
+  member_id: String(booking.member_id ?? ""),
+});
+
+const optionalIdentifier = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+};
+
 export default function SportCenterBookings() {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
@@ -77,7 +96,7 @@ export default function SportCenterBookings() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [realtimeCount, setRealtimeCount] = useState(0);
   const [payBooking, setPayBooking] = useState<Booking | null>(null);
-  const [payForm, setPayForm] = useState({ method: "cash", notes: "" });
+  const [payForm, setPayForm] = useState(EMPTY_PAY_FORM);
   const pushDoneRef = useRef(false);
   const syncLegacyDoneRef = useRef(false);
 
@@ -313,7 +332,7 @@ export default function SportCenterBookings() {
     onSuccess: () => {
       toast({ title: "Pembayaran berhasil dicatat" });
       setPayBooking(null);
-      setPayForm({ method: "cash", notes: "" });
+      setPayForm(EMPTY_PAY_FORM);
       qc.invalidateQueries({ queryKey: ["sport-center-bookings"] });
       qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
     },
@@ -580,7 +599,7 @@ export default function SportCenterBookings() {
                         <div className="flex items-center gap-1">
                           {b.payment_status !== "paid" && !["cancelled"].includes(b.status as string) && (
                             <Button size="sm" variant="outline" className="text-xs h-7 px-2 gap-1 text-emerald-400 border-emerald-700 hover:bg-emerald-900/30"
-                              onClick={() => { setPayBooking(b); setPayForm({ method: "cash", notes: "" }); }}>
+                              onClick={() => { setPayBooking(b); setPayForm({ ...EMPTY_PAY_FORM, ...bookingPaymentScope(b) }); }}>
                               <DollarSign className="h-3 w-3" /> Bayar
                             </Button>
                           )}
@@ -628,7 +647,7 @@ export default function SportCenterBookings() {
         </div>
 
         {/* Payment Dialog */}
-        <Dialog open={!!payBooking} onOpenChange={(o) => { if (!o) { setPayBooking(null); setPayForm({ method: "cash", notes: "" }); } }}>
+        <Dialog open={!!payBooking} onOpenChange={(o) => { if (!o) { setPayBooking(null); setPayForm(EMPTY_PAY_FORM); } }}>
           <DialogContent className="max-w-md">
             <DialogHeader><DialogTitle>Catat Pembayaran Booking</DialogTitle></DialogHeader>
             {payBooking && (
@@ -672,10 +691,44 @@ export default function SportCenterBookings() {
                   <Label className="text-xs">Catatan</Label>
                   <Input value={payForm.notes} onChange={(e) => setPayForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Opsional" />
                 </div>
+                <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-sky-200">Identitas Payment Recurring</p>
+                    <p className="text-xs text-muted-foreground">
+                      Isi untuk menggabungkan beberapa sesi dalam satu rangkaian recurring. Kosongkan jika booking berdiri sendiri.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Recurring Series ID</Label>
+                      <Input
+                        value={payForm.recurring_series_id}
+                        onChange={(e) => setPayForm((p) => ({ ...p, recurring_series_id: e.target.value }))}
+                        placeholder="Contoh: RS-2026-001"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Group ID</Label>
+                      <Input
+                        value={payForm.group_id}
+                        onChange={(e) => setPayForm((p) => ({ ...p, group_id: e.target.value }))}
+                        placeholder="Opsional"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Member ID</Label>
+                      <Input
+                        value={payForm.member_id}
+                        onChange={(e) => setPayForm((p) => ({ ...p, member_id: e.target.value }))}
+                        placeholder="Opsional"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             <DialogFooter>
-              <Button variant="outline" onClick={() => { setPayBooking(null); setPayForm({ method: "cash", notes: "" }); }}>Batal</Button>
+              <Button variant="outline" onClick={() => { setPayBooking(null); setPayForm(EMPTY_PAY_FORM); }}>Batal</Button>
               <Button
                 disabled={payMutation.isPending}
                 className="bg-emerald-700 hover:bg-emerald-600"
@@ -685,6 +738,9 @@ export default function SportCenterBookings() {
                   amount: payBooking.total_amount,
                   method: payForm.method,
                   notes: payForm.notes,
+                  ...(optionalIdentifier(payForm.recurring_series_id) ? { recurring_series_id: optionalIdentifier(payForm.recurring_series_id) } : {}),
+                  ...(optionalIdentifier(payForm.group_id) ? { group_id: optionalIdentifier(payForm.group_id) } : {}),
+                  ...(optionalIdentifier(payForm.member_id) ? { member_id: optionalIdentifier(payForm.member_id) } : {}),
                 })}
               >
                 {payMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Konfirmasi Pembayaran"}

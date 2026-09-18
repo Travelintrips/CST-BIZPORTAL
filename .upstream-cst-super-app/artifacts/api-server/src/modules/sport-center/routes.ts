@@ -54,6 +54,12 @@ async function nextPaymentNumber(companyId?: number): Promise<string> {
   return `PAY/${new Date().getFullYear()}/${pad(Number((res.rows[0] as any).cnt) + 1)}`;
 }
 
+function normalizePaymentIdentifier(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
 // Pastikan booking yang sudah 'paid' punya record di sport_payments.
 // Dipakai oleh PATCH /bookings/:id dan legacy sync push-bookings agar booking lunas
 // selalu muncul di daftar Pembayaran.
@@ -1938,6 +1944,9 @@ router.get("/payments", async (req, res) => {
             NULL::integer                                  AS bank_account_id,
             NULL::text                                     AS bank_account_name,
             p.provider_order_id::text                      AS provider_order_id
+             ,p.recurring_series_id::text                   AS recurring_series_id
+             ,p.group_id::text                              AS group_id
+             ,COALESCE(p.recurring_member_id, p.member_id::text) AS member_id
           FROM sport_center.sport_payments p
           LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
           LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
@@ -1977,6 +1986,9 @@ router.get("/payments", async (req, res) => {
             cba.id::integer                                AS bank_account_id,
             cba.name::text                                 AS bank_account_name,
             sp.provider_order_id::text                     AS provider_order_id
+             ,sp.recurring_series_id::text                  AS recurring_series_id
+             ,sp.group_id::text                             AS group_id
+             ,COALESCE(sp.recurring_member_id, sp.member_id::text) AS member_id
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
@@ -2061,6 +2073,10 @@ router.post("/payments", async (req, res) => {
       notes,
       payment_date,
     } = req.body;
+    const recurringSeriesId = normalizePaymentIdentifier(req.body.recurring_series_id);
+    const groupId = normalizePaymentIdentifier(req.body.group_id);
+    const memberId = normalizePaymentIdentifier(req.body.member_id);
+    const numericMemberId = memberId && /^\d+$/.test(memberId) ? Number(memberId) : null;
     // Terima amount ATAU total_amount (alias)
     const amount = req.body.amount ?? req.body.total_amount;
     // Terima payment_method ATAU method (alias), default cash
@@ -2111,15 +2127,36 @@ router.post("/payments", async (req, res) => {
     let payRow: Record<string, unknown>;
     try {
       const txResult = await db.transaction(async (tx) => {
+        if (recurringSeriesId) {
+          await tx.execute(sql`
+            SELECT pg_advisory_xact_lock(hashtextextended(${recurringSeriesId}, 0))
+          `);
+          const duplicate = await tx.execute(sql`
+            SELECT id
+            FROM sport_payments
+            WHERE NULLIF(BTRIM(recurring_series_id), '') = ${recurringSeriesId}
+              AND status <> 'rejected'
+            ORDER BY id
+            LIMIT 1
+          `);
+          if (duplicate.rows.length > 0) {
+            throw new Error(
+              `DUPLICATE_RECURRING_PAYMENT: recurring_series_id=${recurringSeriesId} already has active payment`,
+            );
+          }
+        }
+
         // 3. Insert sport_payments
         const r = await tx.execute(sql`
           INSERT INTO sport_payments
             (company_id, booking_id, payment_number, amount, method, status,
-             paid_at, notes, source, payment_type, bank_account_id, tax_rate, tax_amount)
+             paid_at, notes, source, payment_type, bank_account_id, tax_rate, tax_amount,
+             recurring_series_id, group_id, member_id, recurring_member_id)
           VALUES
             (${bCompanyId}, ${booking_id}, ${paymentNumber}, ${amount}, ${finalMethod},
              'paid', COALESCE(${paidAt}::timestamptz, NOW()), ${notes ?? null},
-             'SPORT_CENTER', 'booking', ${bankAccountId}, ${bTaxRate}, ${bTaxAmount})
+              'SPORT_CENTER', 'booking', ${bankAccountId}, ${bTaxRate}, ${bTaxAmount},
+              ${recurringSeriesId}, ${groupId}, ${numericMemberId}, ${memberId})
           RETURNING *
         `);
         const row = r.rows[0] as Record<string, unknown>;
@@ -2138,6 +2175,15 @@ router.post("/payments", async (req, res) => {
     } catch (txErr: unknown) {
       const detail = txErr instanceof Error ? txErr.message : String(txErr);
       console.error("[sport-center] POST /payments transaction failed:", detail);
+      if (
+        detail.includes("DUPLICATE_RECURRING_PAYMENT")
+        || detail.includes("sport_payments_recurring_series_active_unique")
+      ) {
+        return res.status(409).json({
+          error: "Recurring series ini sudah memiliki pembayaran aktif.",
+          code: "DUPLICATE_RECURRING_PAYMENT",
+        });
+      }
       return res.status(500).json({
         error: "Gagal mencatat pembayaran",
         detail,
@@ -2188,6 +2234,9 @@ router.post("/payments", async (req, res) => {
           amount: Number(amount),
           method: finalMethod,
           payment_number: paymentNumber,
+           recurring_series_id: recurringSeriesId,
+           group_id: groupId,
+           member_id: memberId,
           source: 'SPORT_CENTER',
           payment_date: effectiveDate,
           accounting_isolated: true,

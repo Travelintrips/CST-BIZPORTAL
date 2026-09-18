@@ -129,7 +129,7 @@ import { registerWorker, startAll } from "./lib/startupOrchestrator.js";
 import { startTokenCleanupWorker } from "./workers/tokenCleanupWorker.js";
 import { initAlertsBroadcast } from "./lib/alertsBroadcast.js";
 import { warmupMailer } from "./lib/mailer.js";
-import { ensureCanonicalSettlementContracts, ensurePostedJournalMetadataGuard, ensureSportPaymentMirrorTrigger, ensureSportCenterLegacyPaymentRecoveryOwner, repairDevelopmentSportCenterFinanceBaseline, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureCanonicalSettlementContracts, ensurePostedJournalMetadataGuard, ensureSportPaymentMirrorTrigger, ensureSportCenterLegacyPaymentRecoveryOwner, ensureRecurringPaymentGuard, repairDevelopmentSportCenterFinanceBaseline, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { startRecurringExpenseWorker } from "./modules/sport-center/recurringExpenseWorker.js";
 import { startMemberReminderWorker } from "./modules/sport-center/memberReminderWorker.js";
@@ -2148,6 +2148,7 @@ async function startServer() {
     .then(() => runWithRetry("Paylabs payment methods migration", runPaylabsPaymentMethodsMigration))
     .then(() => runWithRetry("Cost Center migration", runCostCenterMigration))
     .then(() => runWithRetry("Sport Center migration", runSportCenterMigration))
+     .then(() => runWithRetry("Sport Center recurring payment guard", ensureRecurringPaymentGuard))
     .then(() => runWithRetry("Sport Center shadow observer migration", runSportCenterShadowObserverMigration))
       .then(() => runWithRetry("Sport Center canonical finance config refresh", ensureCanonicalSettlementContracts))
       .then(() => runWithRetry("Sport Center posted journal metadata guard repair", ensurePostedJournalMetadataGuard))

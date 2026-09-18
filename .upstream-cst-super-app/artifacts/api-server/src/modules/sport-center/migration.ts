@@ -6057,7 +6057,53 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
 
 const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v3";
 
+export async function ensureRecurringPaymentGuard(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE IF EXISTS public.sport_payments
+      ADD COLUMN IF NOT EXISTS recurring_series_id TEXT,
+      ADD COLUMN IF NOT EXISTS group_id TEXT,
+      ADD COLUMN IF NOT EXISTS recurring_member_id TEXT
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE IF EXISTS sport_center.sport_payments
+      ADD COLUMN IF NOT EXISTS recurring_series_id TEXT,
+      ADD COLUMN IF NOT EXISTS group_id TEXT,
+      ADD COLUMN IF NOT EXISTS recurring_member_id TEXT
+  `);
+
+  await db.execute(sql`
+    DO $guard$
+    BEGIN
+      IF to_regclass('public.sport_payments') IS NOT NULL THEN
+        EXECUTE '
+          CREATE UNIQUE INDEX IF NOT EXISTS public.sport_payments_recurring_series_active_unique
+            ON public.sport_payments (NULLIF(BTRIM(recurring_series_id), ''''))
+            WHERE NULLIF(BTRIM(recurring_series_id), '''') IS NOT NULL
+              AND status <> ''rejected''
+        ';
+      END IF;
+
+      IF to_regclass('sport_center.sport_payments') IS NOT NULL THEN
+        EXECUTE '
+          CREATE UNIQUE INDEX IF NOT EXISTS sport_center.sport_payments_recurring_series_active_unique
+            ON sport_center.sport_payments (NULLIF(BTRIM(recurring_series_id), ''''))
+            WHERE NULLIF(BTRIM(recurring_series_id), '''') IS NOT NULL
+              AND status::text <> ''rejected''
+        ';
+      END IF;
+    END
+    $guard$;
+  `);
+
+  logger.info("Sport Center recurring payment identifiers and uniqueness guard ready");
+}
+
 export async function runSportCenterMigration(): Promise<void> {
+  // This guard has its own idempotent DDL so it also applies to databases
+  // whose original Sport Center bootstrap marker is already complete.
+  await ensureRecurringPaymentGuard();
+
   if (await isStartupMigrationComplete("sport_center_bootstrap", SPORT_CENTER_BOOTSTRAP_VERSION)) {
     logger.info("Sport Center bootstrap already provisioned; startup schema/data sync skipped");
     return;
@@ -6297,6 +6343,7 @@ export async function runSportCenterMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS member_id INTEGER,
         ADD COLUMN IF NOT EXISTS customer_id INTEGER
     `);
+    await ensureRecurringPaymentGuard();
 
     // Fase 3: kolom pajak/PPN pada sport_bookings dan sport_payments (idempoten)
     await db.execute(sql`
