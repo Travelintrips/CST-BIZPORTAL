@@ -277,8 +277,16 @@ function WaLoginSection() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
       });
-      const data = await res.json() as { ok?: boolean; message?: string; _dev_code?: string };
-      if (!res.ok) { setError(data.message ?? "Gagal mengirim OTP"); return; }
+      const data = await res.json() as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        _dev_code?: string;
+      };
+      if (!res.ok) {
+        setError(data.message ?? data.error ?? "Gagal mengirim OTP");
+        return;
+      }
       setOtpSent(true);
       setCountdown(60);
       if (data._dev_code) setDevCode(data._dev_code);
