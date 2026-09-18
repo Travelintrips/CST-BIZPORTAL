@@ -24,3 +24,4 @@
 - [Imported PPh liability accounts](imported-pph-liability-accounts.md) — imported liability IDs are untrusted; confirm them through company-scoped Finance Review before payment.
 - [Top-level artifact routing](top-level-artifact-routing.md) — the preview gateway only publishes root artifacts from top-level `artifacts/`; upstream manifests need a validated root wrapper.
 - [Artifact production environment injection](artifact-production-env.md) — service runtime values may need to be declared in the artifact manifest, not only root userenv.
+- [Posted ledger immutability](posted-ledger-immutability.md) — posted accounting entries reject financial date edits; corrections require a reversal/new entry workflow.
