@@ -29,3 +29,4 @@
 - [Supabase database selection](supabase-database-selection.md) — never fall back to generic DATABASE_URL; readiness must report the resolved Supabase runtime.
 - [Upstream artifact build dependencies](upstream-artifact-build.md) — nested workspace production builds must install their own dependencies before running.
 - [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
+- [Bank reconciliation read contract](bank-reconciliation-read-contract.md) — production can have synced bank rows while the UI stays empty if the standalone API omits its list and summary endpoints.

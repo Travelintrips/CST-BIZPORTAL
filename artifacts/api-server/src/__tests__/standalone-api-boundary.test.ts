@@ -31,6 +31,12 @@ describe("standalone BizPortal API boundary", () => {
     expect(bankReconciliationSource).toContain(
       'router.post("/bank-reconciliation/:mutationId/approve"',
     );
+    expect(bankReconciliationSource).toContain(
+      'router.get("/bank-reconciliation/mutations"',
+    );
+    expect(bankReconciliationSource).toContain(
+      'router.get("/bank-reconciliation/summary"',
+    );
     expect(bankReconciliationSource).toContain("await client.query(\"begin\")");
     expect(bankReconciliationSource).toContain("await client.query(\"commit\")");
     expect(bankReconciliationSource).toContain("source = 'bank_reconciliation'");

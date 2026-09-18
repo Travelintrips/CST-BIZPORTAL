@@ -599,6 +599,224 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function queryString(value: unknown): string | null {
+  if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : null;
+  return typeof value === "string" ? value : null;
+}
+
+const MUTATION_STATUSES = new Set([
+  "unmatched",
+  "matched",
+  "manual_review",
+  "duplicate_need_review",
+  "approved_pending_posting",
+  "approved",
+  "posted",
+  "rejected",
+  "void",
+]);
+
+function buildMutationFilters(req: Request): { where: string; values: unknown[]; companyId: number | null } {
+  const values: unknown[] = [];
+  const filters = ["true"];
+  const rawCompanyId = queryString(req.query.company_id)
+    ?? queryString(req.query.companyId)
+    ?? queryString(req.query.company);
+  const companyId = rawCompanyId === null || rawCompanyId === "" || rawCompanyId === "all"
+    ? null
+    : parsePositiveInt(rawCompanyId);
+
+  if (rawCompanyId !== null && rawCompanyId !== "" && rawCompanyId !== "all" && companyId === null) {
+    throw new Error("INVALID_COMPANY");
+  }
+  if (companyId !== null) {
+    values.push(companyId);
+    filters.push(`bm.company_id = $${values.length}`);
+  }
+
+  const status = queryString(req.query.status);
+  if (status && status !== "all") {
+    if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
+    values.push(status);
+    filters.push(`bm.status = $${values.length}`);
+  }
+
+  const direction = queryString(req.query.direction);
+  if (direction && direction !== "all") {
+    const normalizedDirection = direction.toUpperCase();
+    if (!["IN", "OUT"].includes(normalizedDirection)) throw new Error("INVALID_DIRECTION");
+    values.push(normalizedDirection);
+    filters.push(`bm.direction = $${values.length}`);
+  }
+
+  const provider = queryString(req.query.provider);
+  if (provider && provider !== "all") {
+    values.push(provider);
+    filters.push(`bm.provider_name = $${values.length}`);
+  }
+
+  const bankAccountId = queryString(req.query.bank_account_id);
+  if (bankAccountId && bankAccountId !== "all") {
+    values.push(bankAccountId);
+    filters.push(`bm.bank_account_id::text = $${values.length}`);
+  }
+
+  const from = queryString(req.query.from);
+  if (from) {
+    values.push(from);
+    filters.push(`bm.transaction_date >= $${values.length}::date`);
+  }
+
+  const to = queryString(req.query.to);
+  if (to) {
+    values.push(to);
+    filters.push(`bm.transaction_date <= $${values.length}::date`);
+  }
+
+  const search = queryString(req.query.search)?.trim();
+  if (search) {
+    values.push(`%${search}%`);
+    const placeholder = `$${values.length}`;
+    filters.push(`(
+      bm.description ilike ${placeholder}
+      or bm.mutation_key ilike ${placeholder}
+      or coalesce(bm.provider_order_id, '') ilike ${placeholder}
+      or coalesce(bm.source_account, '') ilike ${placeholder}
+    )`);
+  }
+
+  return { where: filters.join(" and "), values, companyId };
+}
+
+const mutationListColumns = `
+  bm.id,
+  bm.company_id,
+  bm.transaction_date,
+  bm.description,
+  bm.credit_amount,
+  bm.debit_amount,
+  bm.amount,
+  upper(bm.direction) as direction,
+  bm.mutation_key,
+  bm.normalized_description,
+  bm.provider_name,
+  bm.provider_order_id,
+  bm.status,
+  bm.matched_payment_id,
+  bm.matched_order_id,
+  bm.uploaded_proof_url,
+  bm.source,
+  bm.import_batch_id,
+  bm.reconciliation_status,
+  bm.linked_transaction_type,
+  bm.linked_transaction_id,
+  bm.journal_entry_id,
+  (
+    select coalesce(json_agg(json_build_object(
+      'id', match.id,
+      'mutation_id', match.mutation_id,
+      'candidate_type', match.candidate_type,
+      'candidate_id', match.candidate_id,
+      'candidate_source', match.candidate_source,
+      'match_score', match.match_score,
+      'match_reason', match.match_reason,
+      'amount_match', match.amount_match,
+      'date_match', match.date_match,
+      'name_match', match.name_match,
+      'order_id_match', match.order_id_match,
+      'proof_match', match.proof_match,
+      'status', match.status,
+      'customer_name', match.customer_name,
+      'order_ref', match.order_ref
+    ) order by match.match_score desc nulls last, match.id), '[]'::json)
+    from public.bank_reconciliation_matches match
+    where match.mutation_id = bm.id
+  ) as candidates,
+  exists (
+    select 1
+    from public.bank_reconciliation_matches approved_match
+    where approved_match.mutation_id = bm.id
+      and approved_match.status = 'approved'
+  ) as has_approved_match
+`;
+
+router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => {
+  try {
+    const { where, values } = buildMutationFilters(req);
+    const requestedLimit = parsePositiveInt(queryString(req.query.limit));
+    const requestedOffset = Number(queryString(req.query.offset) ?? 0);
+    const limit = Math.min(requestedLimit ?? 20, 1_000);
+    const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+
+    const countResult = await pool.query<{ total: string }>(
+      `select count(*)::text as total
+         from public.bank_mutations bm
+        where ${where}`,
+      values,
+    );
+    const listValues = [...values, limit, offset];
+    const result = await pool.query(
+      `select ${mutationListColumns}
+         from public.bank_mutations bm
+        where ${where}
+        order by bm.transaction_date desc nulls last, bm.id desc
+        limit $${listValues.length - 1}
+       offset $${listValues.length}`,
+      listValues,
+    );
+
+    res.json({
+      mutations: result.rows,
+      total: Number(countResult.rows[0]?.total ?? 0),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "company_id tidak valid" });
+      return;
+    }
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+      res.status(400).json({ error: "Filter mutasi tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to load bank mutations");
+    res.status(503).json({
+      error: "Mutasi bank tidak dapat dimuat",
+      code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+    });
+  }
+});
+
+router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
+  try {
+    const { where, values } = buildMutationFilters(req);
+    const result = await pool.query(
+      `select bm.status, count(*)::text as count, coalesce(sum(bm.amount), 0)::text as total_amount
+         from public.bank_mutations bm
+        where ${where}
+        group by bm.status
+        order by bm.status`,
+      values,
+    );
+    res.json({ summary: result.rows });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "company_id tidak valid" });
+      return;
+    }
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+      res.status(400).json({ error: "Filter mutasi tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to load bank mutation summary");
+    res.status(503).json({
+      error: "Ringkasan mutasi bank tidak dapat dimuat",
+      code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+    });
+  }
+});
+
 function normalizeInput(body: unknown): SheetConfigInput {
   if (!body || typeof body !== "object") return {};
   const value = body as Record<string, unknown>;
