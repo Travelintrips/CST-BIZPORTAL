@@ -29,3 +29,4 @@
 - [Supabase database selection](supabase-database-selection.md) — never fall back to generic DATABASE_URL; readiness must report the resolved Supabase runtime.
 - [Upstream artifact build dependencies](upstream-artifact-build.md) — nested workspace production builds must install their own dependencies before running.
 - [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
+- [External production write verification](external-production-write-verification.md) — a shell timeout can occur after an external Supabase transaction commits; verify state before retrying a destructive write.
