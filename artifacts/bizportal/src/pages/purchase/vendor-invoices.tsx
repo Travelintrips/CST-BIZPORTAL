@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, ChevronRight, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, ChevronRight, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw, Wrench, Split } from "lucide-react";
 import { toast } from "sonner";
 import {
   canonicalAmountPaid,
@@ -97,6 +97,33 @@ interface VI {
   withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>;
 }
 interface LiabilityAccount { id: number; code: string; name: string; }
+interface LegacyRepairQueueItem {
+  id: number;
+  invoiceNumber: string;
+  supplierName: string | null;
+  status: string;
+  grandTotal: number;
+  withholdingAmount: number;
+  reasonCode: string;
+  reason: string;
+  componentCount: number;
+}
+interface LegacyRepairPreview {
+  repairRequired: boolean;
+  invoiceId: number;
+  invoiceNumber?: string;
+  supplierName?: string | null;
+  grandTotal?: number;
+  reason?: string;
+  rows: Array<{
+    invoiceLineId: number;
+    taxType: string;
+    taxObject: string;
+    baseAmount: number;
+    taxAmount: number;
+    liabilityAccountId: number | null;
+  }>;
+}
 type VendorInvoiceListItem = Record<string, unknown>;
 interface VendorInvoicePage {
   data: VendorInvoiceListItem[];
@@ -135,6 +162,10 @@ export function VendorInvoicesListPage() {
   const [recoveringId, setRecoveringId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [repairInvoiceId, setRepairInvoiceId] = useState<number | null>(null);
+  const [repairReason, setRepairReason] = useState("");
+  const [repairRows, setRepairRows] = useState<LegacyRepairPreview["rows"]>([]);
+  const [repairKey, setRepairKey] = useState("");
   const pageSize = 50;
 
   const { data: invoicePage, isLoading, isFetching, isError, error } = useQuery<VendorInvoicePage>({
@@ -157,6 +188,43 @@ export function VendorInvoicesListPage() {
     enabled: activeCompanyId != null,
   });
   const vis = invoicePage?.data ?? [];
+  const { data: repairQueue = [], isLoading: repairQueueLoading } = useQuery<LegacyRepairQueueItem[]>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repairs", activeCompanyId],
+    queryFn: async () => {
+      const response = await vendorInvoiceFetch(
+        `/api/purchase-workflow/vendor-invoices/legacy-withholding-repairs?company=${activeCompanyId}`,
+        { credentials: "include" },
+      );
+      const payload = await response.json().catch(() => null) as { data?: unknown } | null;
+      if (!response.ok || !Array.isArray(payload?.data)) {
+        throw new Error("Daftar perbaikan PPh gagal dimuat.");
+      }
+      return payload.data as LegacyRepairQueueItem[];
+    },
+    enabled: activeCompanyId != null,
+  });
+  const { data: repairPreview, isLoading: repairPreviewLoading } = useQuery<LegacyRepairPreview>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repair", repairInvoiceId, activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${repairInvoiceId}/legacy-withholding-repair?company=${activeCompanyId}`,
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(formatPostingError(payload, "Preview perbaikan PPh gagal dimuat."));
+      return payload as LegacyRepairPreview;
+    },
+    enabled: repairInvoiceId != null && activeCompanyId != null,
+  });
+  const { data: repairAccounts = [] } = useQuery<LiabilityAccount[]>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/liability-accounts", activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(`/purchase-workflow/vendor-invoices/liability-accounts?company=${activeCompanyId}`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(payload)) throw new Error("Akun liabilitas gagal dimuat.");
+      return payload as LiabilityAccount[];
+    },
+    enabled: repairInvoiceId != null && activeCompanyId != null,
+  });
   const totalPages = Math.max(1, Math.ceil((invoicePage?.total ?? 0) / pageSize));
 
   useEffect(() => {
@@ -166,6 +234,41 @@ export function VendorInvoicesListPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!repairPreview?.repairRequired) return;
+    setRepairRows(repairPreview.rows.map((row) => ({
+      ...row,
+      taxType: /\s+\+\s+/.test(row.taxType) ? "" : row.taxType,
+      taxObject: row.taxObject === "legacy_invoice_header" ? "" : row.taxObject,
+    })));
+    setRepairReason("");
+    setRepairKey(crypto.randomUUID());
+  }, [repairPreview]);
+
+  const repairMut = useMutation({
+    mutationFn: async () => {
+      const response = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${repairInvoiceId}/legacy-withholding-repair?company=${activeCompanyId}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: repairReason, idempotencyKey: repairKey, rows: repairRows }),
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(formatPostingError(payload, "Perbaikan PPh gagal disimpan."));
+      return payload;
+    },
+    onSuccess: async () => {
+      toast.success("Rincian PPh berhasil diperbaiki dan diaudit");
+      setRepairInvoiceId(null);
+      await Promise.all([
+        qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repairs", activeCompanyId] }),
+        qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] }),
+      ]);
+    },
+    onError: (repairError) => toast.error(repairError instanceof Error ? repairError.message : "Perbaikan PPh gagal."),
+  });
 
   const handlePost = async (id: number) => {
     setPostingId(id);
@@ -267,6 +370,151 @@ export function VendorInvoicesListPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {repairInvoiceId !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border bg-background p-6 shadow-xl">
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold">Perbaiki rincian PPh legacy</h2>
+                <p className="text-sm text-muted-foreground">
+                  {repairPreview?.invoiceNumber} — {repairPreview?.supplierName}
+                </p>
+              </div>
+              {repairPreviewLoading ? <div className="py-8 text-center">Memuat rincian...</div> : (
+                <div className="space-y-4">
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-medium">{repairPreview?.reason}</p>
+                    <p className="mt-1 text-xs">Grand total invoice tetap {idr(repairPreview?.grandTotal)}. Perbaikan hanya mengganti rincian PPh dan pemetaan COA.</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-sm">
+                      <thead><tr className="border-b">
+                        <th className="px-2 py-2 text-left">Jenis PPh</th>
+                        <th className="px-2 py-2 text-left">Tax object</th>
+                        <th className="px-2 py-2 text-right">DPP</th>
+                        <th className="px-2 py-2 text-right">PPh</th>
+                        <th className="px-2 py-2 text-left">COA liabilitas aktif</th>
+                      </tr></thead>
+                      <tbody>{repairRows.map((row, index) => (
+                        <tr key={`${row.invoiceLineId}-${index}`} className="border-b">
+                          <td className="px-2 py-2">
+                            <Input value={row.taxType} placeholder="Contoh: PPh 23" onChange={(event) =>
+                              setRepairRows((current) => current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, taxType: event.target.value } : item))} />
+                          </td>
+                          <td className="px-2 py-2">
+                            <Input value={row.taxObject} placeholder="Objek pajak" onChange={(event) =>
+                              setRepairRows((current) => current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, taxObject: event.target.value } : item))} />
+                          </td>
+                          <td className="px-2 py-2">
+                            <Input type="number" min="0" value={row.baseAmount} className="text-right font-mono"
+                              onChange={(event) => setRepairRows((current) => current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, baseAmount: Number(event.target.value) } : item))} />
+                          </td>
+                          <td className="px-2 py-2">
+                            <Input type="number" min="0.01" value={row.taxAmount} className="text-right font-mono"
+                              onChange={(event) => setRepairRows((current) => current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, taxAmount: Number(event.target.value) } : item))} />
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex gap-1">
+                              <Select
+                                value={row.liabilityAccountId ? String(row.liabilityAccountId) : ""}
+                                onValueChange={(value) => setRepairRows((current) => current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, liabilityAccountId: Number(value) } : item))}
+                              >
+                                <SelectTrigger><SelectValue placeholder="Pilih akun..." /></SelectTrigger>
+                                <SelectContent>{repairAccounts.map((account) => (
+                                  <SelectItem key={account.id} value={String(account.id)}>
+                                    {account.code} — {account.name}
+                                  </SelectItem>
+                                ))}</SelectContent>
+                              </Select>
+                              {repairRows.length > 1 && (
+                                <Button size="icon" variant="ghost"
+                                  onClick={() => setRepairRows((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                                  title="Hapus baris">
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Button size="sm" variant="outline" onClick={() => setRepairRows((current) => {
+                      const source = current[current.length - 1];
+                      return source ? [...current, {
+                        ...source,
+                        taxType: "",
+                        taxObject: "",
+                        baseAmount: 0,
+                        taxAmount: 0,
+                        liabilityAccountId: null,
+                      }] : current;
+                    })}>
+                      <Split className="mr-1 h-4 w-4" />Tambah baris split
+                    </Button>
+                    <p className="text-sm font-medium">
+                      Total PPh: {idr(repairRows.reduce((sum, row) => sum + Number(row.taxAmount || 0), 0))}
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Alasan perbaikan</Label>
+                    <Textarea
+                      value={repairReason}
+                      onChange={(event) => setRepairReason(event.target.value)}
+                      placeholder="Jelaskan sumber data dan alasan koreksi (minimal 10 karakter)."
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setRepairInvoiceId(null)} disabled={repairMut.isPending}>Batal</Button>
+                    <Button
+                      onClick={() => repairMut.mutate()}
+                      disabled={repairMut.isPending || repairReason.trim().length < 10 || repairRows.some((row) =>
+                        !row.liabilityAccountId || !row.taxType.trim() || !row.taxObject.trim() || row.taxAmount <= 0)}
+                    >
+                      {repairMut.isPending ? "Menyimpan..." : "Simpan perbaikan"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!repairQueueLoading && repairQueue.length > 0 && (
+          <Card className="border-amber-300">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Wrench className="h-5 w-5 text-amber-600" />
+                Perbaikan PPh legacy ({repairQueue.length})
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Invoice berikut diblokir dari pembayaran sampai rincian PPh dan COA liabilitas diperbaiki.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {repairQueue.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3">
+                  <div>
+                    <p className="font-medium">{item.invoiceNumber} — {item.supplierName}</p>
+                    <p className="text-xs text-amber-700">{item.reason}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {item.componentCount} komponen · PPh {idr(item.withholdingAmount)} · Grand total {idr(item.grandTotal)}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setRepairInvoiceId(item.id)}>
+                    <Wrench className="mr-1 h-4 w-4" />Perbaiki
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         )}
 
         <Card>

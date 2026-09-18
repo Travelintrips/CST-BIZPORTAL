@@ -132,6 +132,52 @@ describe("vendor invoice payment status", () => {
     });
   });
 
+  it("prefers an audited legacy repair split over a combined header source", () => {
+    expect(vendorWithholdingTaxPlans({
+      withholding_repair_components: [
+        {
+          invoice_line_id: 10,
+          tax_type: "PPh 23",
+          tax_object: "Jasa",
+          base_amount: 500_000,
+          tax_amount: 10_000,
+          liability_account_id: 91,
+        },
+        {
+          invoice_line_id: 11,
+          tax_type: "PPh 4(2)",
+          tax_object: "Sewa",
+          base_amount: 500_000,
+          tax_amount: 20_000,
+          liability_account_id: 92,
+        },
+      ],
+      withholding_tax: {
+        type: "PPh 23 + PPh 4(2)",
+        amount: 30_000,
+      },
+    })).toEqual([
+      {
+        componentIndex: 0,
+        invoiceLineId: 10,
+        type: "PPh 23",
+        object: "Jasa",
+        base: 500_000,
+        amount: 10_000,
+        liabilityAccountId: 91,
+      },
+      {
+        componentIndex: 1,
+        invoiceLineId: 11,
+        type: "PPh 4(2)",
+        object: "Sewa",
+        base: 500_000,
+        amount: 20_000,
+        liabilityAccountId: 92,
+      },
+    ]);
+  });
+
   it("surfaces an existing mixed PPh row for repair", () => {
     const plans = vendorWithholdingTaxPlans({
       components: [

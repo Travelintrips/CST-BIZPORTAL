@@ -23,6 +23,7 @@ function money(value: number): number {
 
 export interface VendorWithholdingTaxPlan {
   componentIndex: number;
+  invoiceLineId?: number;
   type: string;
   object: string;
   base: number;
@@ -34,6 +35,33 @@ export function vendorWithholdingTaxPlans(
   invoiceBreakdown: unknown,
   vendorName = "",
 ): VendorWithholdingTaxPlan[] {
+  const breakdown = jsonObject(invoiceBreakdown);
+  const repairedComponents = Array.isArray(breakdown.withholding_repair_components)
+    ? breakdown.withholding_repair_components
+    : [];
+  if (repairedComponents.length > 0) {
+    return repairedComponents.flatMap((raw, componentIndex) => {
+      const component = jsonObject(raw);
+      const amount = money(numberValue(component.tax_amount));
+      const type = String(component.tax_type ?? "").trim();
+      const object = String(component.tax_object ?? "").trim();
+      if (amount <= 0 || !type || !object) return [];
+      const liabilityAccountId = Number(component.liability_account_id);
+      return [{
+        componentIndex,
+        invoiceLineId: Number.isInteger(Number(component.invoice_line_id))
+          ? Number(component.invoice_line_id)
+          : undefined,
+        type,
+        object,
+        base: money(numberValue(component.base_amount)),
+        amount,
+        liabilityAccountId: Number.isInteger(liabilityAccountId) && liabilityAccountId > 0
+          ? liabilityAccountId
+          : null,
+      }];
+    });
+  }
   const recalculated = recalculateVendorInvoiceBreakdown(invoiceBreakdown, vendorName);
   if (!recalculated) return [];
 
@@ -243,7 +271,8 @@ export async function ensureVendorWithholdingRecords(
             liabilityAccountId: null,
           }]).map((plan) => ({
             ...plan,
-            invoiceLineId: Number(lineRows[plan.componentIndex]?.id ?? firstInvoiceLineId),
+            invoiceLineId: plan.invoiceLineId
+              ?? Number(lineRows[plan.componentIndex]?.id ?? firstInvoiceLineId),
           }));
       const plans = Array.from(rawPlans.reduce((byKey, plan) => {
         const key = `${plan.invoiceLineId}\u0000${plan.type}\u0000${plan.object}`;

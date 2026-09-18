@@ -89,6 +89,53 @@ interface VendorWithholdingRecordRow {
   status: string | null;
 }
 
+interface LegacyRepairInvoiceRow {
+  id: number;
+  invoice_number: string;
+  supplier_name: string | null;
+  status: string;
+  grand_total: string;
+  total_amount: string;
+  withholding_tax_amount: string | null;
+  withholding_tax_type: string | null;
+  tax_object: string | null;
+  invoice_breakdown: unknown;
+  created_at: Date | string;
+}
+
+interface LegacyRepairTaxRow {
+  id: number;
+  invoice_line_id: number;
+  tax_type: string;
+  tax_object: string;
+  base_amount: string;
+  tax_amount: string;
+  liability_account_id: number | null;
+  resolution_status: string | null;
+}
+
+interface LegacyRepairPlan {
+  invoiceLineId: number;
+  taxType: string;
+  taxObject: string;
+  baseAmount: number;
+  taxAmount: number;
+  liabilityAccountId: number | null;
+}
+
+type LegacyRepairComponent = Omit<LegacyRepairPlan, "invoiceLineId"> & {
+  invoiceLineId?: number;
+};
+
+interface LegacyRepairRequestRow {
+  invoiceLineId: number;
+  taxType: string;
+  taxObject: string;
+  baseAmount: number;
+  taxAmount: number;
+  liabilityAccountId: number;
+}
+
 function getLocalApiUser(req: Request): DevAuthUser | null {
   const devUser = getDevSession(req);
   if (devUser) return devUser;
@@ -180,9 +227,13 @@ router.use("/purchase-workflow/vendor-invoices", (req, _res, next) => {
     path === "/purchase-workflow/vendor-invoices"
     || path === "/purchase-workflow/vendor-invoices/"
     || path === "/purchase-workflow/vendor-invoices/liability-accounts"
+    || path === "/purchase-workflow/vendor-invoices/legacy-withholding-repairs"
+    || /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair$/.test(path)
     || /^\/purchase-workflow\/vendor-invoices\/\d+$/.test(path)
   );
-  if (isLocalRead) {
+  const isLocalRepair = req.method === "POST"
+    && /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair$/.test(path);
+  if (isLocalRead || isLocalRepair) {
     next();
     return;
   }
@@ -289,6 +340,180 @@ function invoiceResponse(row: {
   };
 }
 
+function finiteMoney(value: unknown): number {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function legacyRepairComponents(invoice: LegacyRepairInvoiceRow): LegacyRepairComponent[] {
+  const breakdown = objectValue(invoice.invoice_breakdown);
+  const repairedComponents = Array.isArray(breakdown.withholding_repair_components)
+    ? breakdown.withholding_repair_components
+    : [];
+  if (repairedComponents.length > 0) {
+    return repairedComponents.flatMap((raw) => {
+      const component = objectValue(raw);
+      const taxAmount = finiteMoney(component.tax_amount);
+      const taxType = String(component.tax_type ?? "").trim();
+      const taxObject = String(component.tax_object ?? "").trim();
+      if (taxAmount <= 0 || !taxType || !taxObject) return [];
+      return [{
+        invoiceLineId: Number.isInteger(Number(component.invoice_line_id))
+          ? Number(component.invoice_line_id)
+          : undefined,
+        taxType,
+        taxObject,
+        baseAmount: finiteMoney(component.base_amount),
+        taxAmount,
+        liabilityAccountId: Number.isInteger(Number(component.liability_account_id))
+          ? Number(component.liability_account_id)
+          : null,
+      }];
+    });
+  }
+  const components = Array.isArray(breakdown.components) ? breakdown.components : [];
+  const plans = components.flatMap((raw, index) => {
+    const component = objectValue(raw);
+    const taxAmount = finiteMoney(component.withholding_tax_amount);
+    const taxType = String(component.withholding_tax_type ?? "").trim();
+    if (taxAmount <= 0 || !taxType) return [];
+    return [{
+      taxType,
+      taxObject: String(
+        component.tax_object ?? component.component ?? component.label ?? `component_${index + 1}`,
+      ).trim(),
+      baseAmount: finiteMoney(component.dpp ?? component.base_amount),
+      taxAmount,
+      liabilityAccountId: null,
+    }];
+  });
+  if (plans.length > 0) return plans;
+  const taxAmount = finiteMoney(invoice.withholding_tax_amount);
+  if (taxAmount <= 0) return [];
+  return [{
+    taxType: String(invoice.withholding_tax_type ?? "PPh").trim() || "PPh",
+    taxObject: String(invoice.tax_object ?? "legacy_invoice_header").trim() || "legacy_invoice_header",
+    baseAmount: finiteMoney(invoice.total_amount),
+    taxAmount,
+    liabilityAccountId: null,
+  }];
+}
+
+export function repairReason(
+  plans: LegacyRepairPlan[],
+  taxes: LegacyRepairTaxRow[],
+): { code: string; message: string } | null {
+  if (plans.some((plan) => /\s+\+\s+/.test(plan.taxType))) {
+    return {
+      code: "COMBINED_VENDOR_WITHHOLDING_ROW",
+      message: "Header PPh masih menggabungkan beberapa jenis pajak dan harus dipisahkan.",
+    };
+  }
+  if (plans.some((plan) => !plan.taxObject)) {
+    return { code: "INVALID_TAX_OBJECT", message: "Satu atau lebih komponen PPh belum memiliki tax object." };
+  }
+  const expected = new Map(plans.map((plan) => [
+    `${plan.invoiceLineId}\u0000${plan.taxType}\u0000${plan.taxObject}\u0000${plan.taxAmount}`,
+    plan,
+  ]));
+  const actualKeys = taxes.map((tax) =>
+    `${tax.invoice_line_id}\u0000${tax.tax_type.trim()}\u0000${tax.tax_object.trim()}\u0000${finiteMoney(tax.tax_amount)}`);
+  if (
+    taxes.some((tax) => /\s+\+\s+/.test(tax.tax_type))
+    || actualKeys.length !== expected.size
+    || new Set(actualKeys).size !== actualKeys.length
+    || actualKeys.some((key) => !expected.has(key))
+  ) {
+    return {
+      code: "INCONSISTENT_VENDOR_WITHHOLDING_ROWS",
+      message: "Baris PPh tersimpan tidak sesuai rincian jenis, tax object, atau nominal invoice.",
+    };
+  }
+  if (taxes.some((tax) => !tax.liability_account_id || !["confirmed", "approved"].includes(String(tax.resolution_status)))) {
+    return {
+      code: "WITHHOLDING_LIABILITY_ACCOUNT_REQUIRED",
+      message: "Satu atau lebih baris PPh belum dipetakan ke COA liabilitas aktif.",
+    };
+  }
+  return null;
+}
+
+async function loadLegacyRepairData(
+  query: typeof pool.query,
+  companyId: number,
+  invoiceId?: number,
+): Promise<Array<{
+  invoice: LegacyRepairInvoiceRow;
+  lines: Array<{ id: number }>;
+  taxes: LegacyRepairTaxRow[];
+  plans: LegacyRepairPlan[];
+  reason: { code: string; message: string } | null;
+}>> {
+  const invoiceResult = await query<LegacyRepairInvoiceRow>(
+    `select id, invoice_number, supplier_name, status::text status, grand_total, total_amount,
+            withholding_tax_amount, withholding_tax_type, tax_object, invoice_breakdown, created_at
+       from public.vendor_invoices
+      where company_id = $1
+        and cancelled_at is null
+        and ($2::bigint is null or id = $2)
+        and (
+          coalesce(withholding_tax_amount, 0) > 0
+          or coalesce((invoice_breakdown->'totals'->>'withholding_tax_amount')::numeric, 0) > 0
+          or exists (
+            select 1
+              from public.vendor_invoice_lines vil
+              join public.vendor_invoice_line_taxes vit on vit.invoice_line_id = vil.id
+             where vil.invoice_id = vendor_invoices.id
+               and vit.company_id = vendor_invoices.company_id
+               and vit.tax_amount > 0
+          )
+        )
+      order by created_at desc nulls last, id desc`,
+    [companyId, invoiceId ?? null],
+  );
+  return Promise.all(invoiceResult.rows.map(async (invoice) => {
+    const [lineResult, taxResult] = await Promise.all([
+      query<{ id: number }>(
+        "select id from public.vendor_invoice_lines where invoice_id = $1 order by id",
+        [invoice.id],
+      ),
+      query<LegacyRepairTaxRow>(
+        `select vit.id, vit.invoice_line_id, vit.tax_type, vit.tax_object, vit.base_amount,
+                vit.tax_amount, vit.liability_account_id, vit.resolution_status
+           from public.vendor_invoice_line_taxes vit
+           join public.vendor_invoice_lines vil on vil.id = vit.invoice_line_id
+          where vil.invoice_id = $1 and vit.company_id = $2 and vit.tax_amount > 0
+          order by vit.id`,
+        [invoice.id, companyId],
+      ),
+    ]);
+    const components = legacyRepairComponents(invoice);
+    const firstLineId = lineResult.rows[0]?.id ?? 0;
+    const plans = components.map((plan, index) => ({
+      ...plan,
+      invoiceLineId: plan.invoiceLineId ?? lineResult.rows[index]?.id ?? firstLineId,
+      liabilityAccountId: taxResult.rows.find((tax) =>
+        tax.tax_type.trim() === plan.taxType
+        && tax.tax_object.trim() === plan.taxObject
+        && finiteMoney(tax.tax_amount) === plan.taxAmount
+      )?.liability_account_id ?? null,
+    }));
+    return {
+      invoice,
+      lines: lineResult.rows,
+      taxes: taxResult.rows,
+      plans,
+      reason: repairReason(plans, taxResult.rows),
+    };
+  }));
+}
+
 router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void> => {
   const companyId = parseCompanyId(req);
   if (companyId === null) {
@@ -342,6 +567,68 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   }
 });
 
+router.get("/purchase-workflow/vendor-invoices/legacy-withholding-repairs", async (req, res): Promise<void> => {
+  const companyId = parseCompanyId(req);
+  if (companyId === null) {
+    sendError(res, 400, "Perusahaan invoice tidak valid", "INVALID_COMPANY");
+    return;
+  }
+  try {
+    const entries = (await loadLegacyRepairData(pool.query.bind(pool), companyId))
+      .filter((entry) => entry.reason !== null);
+    res.json({
+      data: entries.map(({ invoice, plans, reason }) => ({
+        id: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        supplierName: invoice.supplier_name,
+        status: invoice.status,
+        grandTotal: Number(invoice.grand_total),
+        withholdingAmount: plans.reduce((sum, plan) => sum + plan.taxAmount, 0),
+        reasonCode: reason!.code,
+        reason: reason!.message,
+        componentCount: plans.length,
+      })),
+      total: entries.length,
+    });
+  } catch (error) {
+    req.log.error({ error }, "Failed to load legacy withholding repair queue");
+    sendError(res, 503, "Daftar perbaikan PPh tidak dapat dimuat", "LEGACY_WITHHOLDING_REPAIR_LOAD_FAILED");
+  }
+});
+
+router.get("/purchase-workflow/vendor-invoices/:id/legacy-withholding-repair", async (req, res): Promise<void> => {
+  const invoiceId = parseInvoiceId(req);
+  const companyId = parseCompanyId(req);
+  if (invoiceId === null || companyId === null) {
+    sendError(res, 400, "Invoice atau perusahaan tidak valid", "INVALID_REPAIR_TARGET");
+    return;
+  }
+  try {
+    const entry = (await loadLegacyRepairData(pool.query.bind(pool), companyId, invoiceId))[0];
+    if (!entry) {
+      sendError(res, 404, "Invoice PPh tidak ditemukan", "INVOICE_NOT_FOUND");
+      return;
+    }
+    if (!entry.reason) {
+      res.json({ repairRequired: false, invoiceId, rows: [] });
+      return;
+    }
+    res.json({
+      repairRequired: true,
+      invoiceId,
+      invoiceNumber: entry.invoice.invoice_number,
+      supplierName: entry.invoice.supplier_name,
+      grandTotal: Number(entry.invoice.grand_total),
+      reasonCode: entry.reason.code,
+      reason: entry.reason.message,
+      rows: entry.plans,
+    });
+  } catch (error) {
+    req.log.error({ error, invoiceId }, "Failed to preview legacy withholding repair");
+    sendError(res, 503, "Preview perbaikan PPh tidak dapat dimuat", "LEGACY_WITHHOLDING_REPAIR_PREVIEW_FAILED");
+  }
+});
+
 router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, res): Promise<void> => {
   const companyId = parseCompanyId(req);
   if (companyId === null) {
@@ -352,8 +639,10 @@ router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, 
     const result = await pool.query<LiabilityAccountRow>(`
       select id, code, name
       from public.chart_of_accounts
-      where coalesce(is_active, true) = true
-        and (company_id = $1 or company_id is null)
+       where coalesce(is_active, true) = true
+         and coalesce(is_postable, true) = true
+         and coalesce(status::text, 'ACTIVE') = 'ACTIVE'
+         and company_id = $1
         and (
           lower(coalesce(account_type::text, '')) = 'liability'
           or lower(coalesce(type::text, '')) = 'liability'
@@ -364,6 +653,231 @@ router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, 
   } catch (error) {
     req.log.error({ error }, "Failed to load liability accounts from Supabase");
     sendError(res, 503, "Akun liabilitas tidak dapat dimuat", "LIABILITY_ACCOUNT_LOAD_FAILED");
+  }
+});
+
+router.post("/purchase-workflow/vendor-invoices/:id/legacy-withholding-repair", async (req, res): Promise<void> => {
+  const invoiceId = parseInvoiceId(req);
+  const companyId = parseCompanyId(req);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.trim() : "";
+  const requestedRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (invoiceId === null || companyId === null) {
+    sendError(res, 400, "Invoice atau perusahaan tidak valid", "INVALID_REPAIR_TARGET");
+    return;
+  }
+  if (reason.length < 10 || idempotencyKey.length < 8 || idempotencyKey.length > 120) {
+    sendError(res, 400, "Alasan minimal 10 karakter dan kunci idempotensi wajib diisi", "INVALID_REPAIR_REQUEST");
+    return;
+  }
+  const rows: LegacyRepairRequestRow[] = requestedRows.map((value: unknown): LegacyRepairRequestRow => {
+    const row = objectValue(value);
+    return {
+      invoiceLineId: Number(row.invoiceLineId),
+      taxType: String(row.taxType ?? "").trim(),
+      taxObject: String(row.taxObject ?? "").trim(),
+      baseAmount: finiteMoney(row.baseAmount),
+      taxAmount: finiteMoney(row.taxAmount),
+      liabilityAccountId: Number(row.liabilityAccountId),
+    };
+  });
+  if (
+    rows.length === 0
+    || rows.some((row) =>
+      !Number.isInteger(row.invoiceLineId) || row.invoiceLineId <= 0
+      || !row.taxType || /\s+\+\s+/.test(row.taxType) || !row.taxObject
+      || row.baseAmount < 0 || row.taxAmount <= 0
+      || !Number.isInteger(row.liabilityAccountId) || row.liabilityAccountId <= 0)
+    || new Set(rows.map((row) => `${row.invoiceLineId}\u0000${row.taxType}\u0000${row.taxObject}`)).size !== rows.length
+  ) {
+    sendError(res, 400, "Setiap baris PPh harus terpisah dan memiliki line, jenis, tax object, nominal, serta COA yang valid", "INVALID_REPAIR_ROWS");
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `${companyId}:vendor-invoice:${invoiceId}:legacy-withholding-repair`,
+    ]);
+    const lockedInvoice = await client.query<{ id: number }>(
+      "select id from public.vendor_invoices where id = $1 and company_id = $2 for update",
+      [invoiceId, companyId],
+    );
+    if (!lockedInvoice.rows[0]) {
+      await client.query("rollback");
+      sendError(res, 404, "Invoice PPh tidak ditemukan", "INVOICE_NOT_FOUND");
+      return;
+    }
+    const prior = await client.query<{ after_data: Record<string, unknown> }>(
+      `select after_data from public.audit_logs
+        where company_id = $1 and entity_type = 'vendor_invoice' and entity_id = $2
+          and action = 'repair_legacy_withholding'
+          and after_data->>'idempotencyKey' = $3
+        order by created_at desc limit 1`,
+      [companyId, String(invoiceId), idempotencyKey],
+    );
+    if (prior.rows[0]) {
+      const priorRows = Array.isArray(prior.rows[0].after_data.rows) ? prior.rows[0].after_data.rows : [];
+      if (JSON.stringify(priorRows) !== JSON.stringify(rows)) {
+        await client.query("rollback");
+        sendError(res, 409, "Kunci idempotensi sudah digunakan dengan isi berbeda", "IDEMPOTENCY_CONFLICT");
+        return;
+      }
+      await client.query("commit");
+      res.json({ ok: true, invoiceId, rows: priorRows, idempotent: true });
+      return;
+    }
+    const entry = (await loadLegacyRepairData(client.query.bind(client), companyId, invoiceId))[0];
+    if (!entry) {
+      await client.query("rollback");
+      sendError(res, 404, "Invoice PPh tidak ditemukan", "INVOICE_NOT_FOUND");
+      return;
+    }
+    if (!entry.reason) {
+      await client.query("rollback");
+      sendError(res, 409, "Rincian PPh invoice ini sudah konsisten dan tidak perlu diperbaiki lagi", "REPAIR_NOT_REQUIRED");
+      return;
+    }
+    const lineIds = new Set(entry.lines.map((line) => line.id));
+    if (rows.some((row) => !lineIds.has(row.invoiceLineId))) {
+      await client.query("rollback");
+      sendError(res, 400, "Satu atau lebih line tidak berasal dari invoice ini", "INVOICE_LINE_MISMATCH");
+      return;
+    }
+    const expected = entry.plans.map((plan) => ({
+      invoiceLineId: plan.invoiceLineId,
+      taxType: plan.taxType,
+      taxObject: plan.taxObject,
+      baseAmount: plan.baseAmount,
+      taxAmount: plan.taxAmount,
+    }));
+    const comparable = (value: typeof expected[number]) =>
+      `${value.invoiceLineId}\u0000${value.taxType}\u0000${value.taxObject}\u0000${value.baseAmount}\u0000${value.taxAmount}`;
+    const combinedSource = expected.some((plan) => /\s+\+\s+/.test(plan.taxType));
+    const expectedTaxTotal = finiteMoney(expected.reduce((sum, plan) => sum + plan.taxAmount, 0));
+    const requestedTaxTotal = finiteMoney(rows.reduce((sum, row) => sum + row.taxAmount, 0));
+    const expectedTaxCents = Math.round(expectedTaxTotal * 100);
+    const requestedTaxCents = Math.round(requestedTaxTotal * 100);
+    const exactBreakdownMatch = rows.length === expected.length
+      && new Set(rows.map(comparable)).size === expected.length
+      && rows.every((row) => expected.some((plan) => comparable(plan) === comparable(row)));
+    if (
+      expectedTaxCents !== requestedTaxCents
+      || (!combinedSource && !exactBreakdownMatch)
+    ) {
+      await client.query("rollback");
+      sendError(
+        res,
+        409,
+        "Total PPh atau rincian perbaikan tidak lagi sesuai dengan breakdown invoice terbaru",
+        "REPAIR_PREVIEW_STALE",
+        { expectedTaxTotal, requestedTaxTotal },
+      );
+      return;
+    }
+    const accountIds = [...new Set(rows.map((row) => row.liabilityAccountId))];
+    const accounts = await client.query<{ id: number }>(
+      `select id from public.chart_of_accounts
+        where company_id = $1 and id = any($2::bigint[])
+          and coalesce(is_active, true) = true and coalesce(is_postable, true) = true
+          and coalesce(status::text, 'ACTIVE') = 'ACTIVE'
+          and (lower(coalesce(account_type::text, '')) = 'liability'
+            or lower(coalesce(type::text, '')) = 'liability')
+        for update`,
+      [companyId, accountIds],
+    );
+    if (accounts.rows.length !== accountIds.length) {
+      await client.query("rollback");
+      sendError(res, 400, "COA liabilitas harus aktif, postable, dan berasal dari company aktif", "LIABILITY_ACCOUNT_NOT_FOUND");
+      return;
+    }
+    const before = entry.taxes;
+    await client.query(
+      `delete from public.vendor_withholding_records
+        where company_id = $1 and vendor_invoice_id = $2
+          and coalesce(status::text, 'proof_pending') not in ('proof_received', 'posted')`,
+      [companyId, invoiceId],
+    );
+    const protectedRows = await client.query<{ id: number }>(
+      `select id from public.vendor_withholding_records
+        where company_id = $1 and vendor_invoice_id = $2
+          and status::text in ('proof_received', 'posted') limit 1`,
+      [companyId, invoiceId],
+    );
+    if (protectedRows.rows[0]) {
+      await client.query("rollback");
+      sendError(res, 409, "Perbaikan ditolak karena bukti potong sudah diterima atau diposting", "WITHHOLDING_ALREADY_FINAL");
+      return;
+    }
+    await client.query(
+      `delete from public.vendor_invoice_line_taxes
+        where company_id = $1 and invoice_line_id = any($2::bigint[])`,
+      [companyId, [...lineIds]],
+    );
+    const savedRows: Array<Record<string, unknown>> = [];
+    for (const row of rows) {
+      const inserted = await client.query<{ id: number }>(
+        `insert into public.vendor_invoice_line_taxes
+          (invoice_line_id, company_id, tax_type, tax_object, base_amount, tax_amount,
+           liability_account_id, resolution_status, reviewed_by, reviewed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, 'confirmed', $8, now())
+         returning id`,
+        [row.invoiceLineId, companyId, row.taxType, row.taxObject, row.baseAmount, row.taxAmount,
+          row.liabilityAccountId, (req as PurchaseRequest).purchaseUser?.email ?? "ADMIN"],
+      );
+      const lineTaxId = inserted.rows[0].id;
+      await client.query(
+        `insert into public.vendor_withholding_records
+          (company_id, vendor_invoice_id, invoice_line_id, line_tax_id, tax_type, tax_object,
+           base_amount, tax_amount, liability_account_id, status)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'proof_pending')`,
+        [companyId, invoiceId, row.invoiceLineId, lineTaxId, row.taxType, row.taxObject,
+          row.baseAmount, row.taxAmount, row.liabilityAccountId],
+      );
+      savedRows.push({ ...row, lineTaxId });
+    }
+    const canonicalRepairComponents = rows.map((row) => ({
+      invoice_line_id: row.invoiceLineId,
+      tax_type: row.taxType,
+      tax_object: row.taxObject,
+      base_amount: row.baseAmount,
+      tax_amount: row.taxAmount,
+      liability_account_id: row.liabilityAccountId,
+      resolution_status: "confirmed",
+    }));
+    await client.query(
+      `update public.vendor_invoices
+          set withholding_review_status = 'required',
+              invoice_breakdown = jsonb_set(
+                coalesce(invoice_breakdown, '{}'::jsonb),
+                '{withholding_repair_components}',
+                $3::jsonb,
+                true
+              ),
+              updated_at = now()
+        where id = $1 and company_id = $2`,
+      [invoiceId, companyId, JSON.stringify(canonicalRepairComponents)],
+    );
+    await client.query(
+      `insert into public.audit_logs
+        (user_id, user_email, action, entity_type, entity_id, before_data, after_data,
+         user_agent, created_at, company_id, module)
+       values ($1, $2, 'repair_legacy_withholding', 'vendor_invoice', $3, $4::jsonb, $5::jsonb,
+               $6, now(), $7, 'purchase')`,
+      [null, (req as PurchaseRequest).purchaseUser?.email ?? "unknown-admin", String(invoiceId),
+        JSON.stringify({ reason, rows: before }),
+        JSON.stringify({ reason, idempotencyKey, rows, savedRows }),
+        req.get("user-agent") ?? null, companyId],
+    );
+    await client.query("commit");
+    res.json({ ok: true, invoiceId, rows: savedRows, idempotent: false });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error, invoiceId }, "Failed to repair legacy withholding");
+    sendError(res, 503, "Perbaikan PPh tidak dapat diproses", "LEGACY_WITHHOLDING_REPAIR_FAILED");
+  } finally {
+    client.release();
   }
 });
 
