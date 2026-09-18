@@ -6,6 +6,7 @@ import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
+import localProductionAuthRouter from "./local-production-auth";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -183,6 +184,11 @@ router.use(createDevAuthRouter({
   onLogin: establishDevelopmentUpstreamSession,
   onProductionLogin: establishProductionUpstreamSession,
 }));
+
+// Production auth is local to this deployment. Mount it before the legacy
+// upstream bridge so a deployment URL cannot proxy its own auth requests back
+// into itself.
+router.use(localProductionAuthRouter);
 
 router.post("/auth/email-login", async (req, res): Promise<void> => {
   const email = typeof req.body?.email === "string"

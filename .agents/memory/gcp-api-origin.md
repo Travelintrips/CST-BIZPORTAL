@@ -3,11 +3,11 @@ name: GCP API origin separation
 description: Development Secret Manager configuration and the backend URL required by the BizPortal proxy.
 ---
 
-The development Secret Manager payload currently provides a frontend URL instead of a separate backend API origin. The proxy must use explicit environment-specific origins (`BIZPORTAL_API_ORIGIN_DEV` and `BIZPORTAL_API_ORIGIN_PROD`) and must not silently fall back to production.
+The development Secret Manager payload currently provides a frontend URL instead of a separate backend API origin. The proxy must use explicit environment-specific origins (`BIZPORTAL_API_ORIGIN_DEV` and `BIZPORTAL_API_ORIGIN_PROD`) and must not silently fall back to production. Production auth must not proxy to the published BizPortal domain itself.
 
 **Why:** Requests sent to the frontend URL return 404 for BizPortal API routes, while forwarding development identity to the production host is intentionally blocked.
 
-**How to apply:** Keep `BIZPORTAL_API_ORIGIN_PROD` pointed at the separate `bizportal.cstlogistic.co.id` backend origin while `cstlogistic.co.id` serves the Replit BizPortal deployment. Reject ephemeral `*.replit.dev` hosts and fail clearly if the development origin is missing instead of using production.
+**How to apply:** Treat `bizportal.cstlogistic.co.id` as the current published BizPortal deployment, not as an upstream origin. Keep auth local or configure a genuinely separate BizPortal backend origin; reject ephemeral `*.replit.dev` hosts and fail clearly if the development origin is missing instead of using production.
 
 Development accounting queries also require `SUPABASE_DATABASE_URL_DEV` as a valid PostgreSQL connection string; `SUPABASE_URL_DEV` is a frontend Supabase URL and cannot replace the database connection.
 

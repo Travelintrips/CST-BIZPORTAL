@@ -86,6 +86,7 @@ function mockUpstreamLogin(behavior: UpstreamBehavior): ReturnType<typeof vi.spy
     const callback = args[2] as (response: IncomingMessage) => void;
     const request = new EventEmitter() as EventEmitter & {
       end: (body?: string) => void;
+      setTimeout: (timeout: number, callback?: () => void) => EventEmitter;
     };
 
     request.end = () => {
@@ -109,6 +110,7 @@ function mockUpstreamLogin(behavior: UpstreamBehavior): ReturnType<typeof vi.spy
         response.emit("end");
       });
     };
+    request.setTimeout = () => request;
 
     return request as unknown as ReturnType<typeof https.request>;
   }) as never);
