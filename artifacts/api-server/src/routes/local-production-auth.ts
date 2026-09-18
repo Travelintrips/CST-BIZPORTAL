@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { compare, hash } from "bcryptjs";
 import { pool } from "@workspace/db";
+import { sendAdminLoginOtpEmail } from "../lib/smtp";
 import {
   getProductionUser,
   isDevelopmentEnvironment,
@@ -11,13 +12,17 @@ import {
 
 const router = Router();
 const OTP_PURPOSE = "biz-login";
+const EMAIL_OTP_PURPOSE = "admin-email-login";
 const OTP_TTL_MS = 5 * 60 * 1000;
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const EMAIL_OTP_RATE_LIMIT = 3;
 
 type RawUser = {
   id: string;
   email: string;
   role: string;
+  status: string | null;
+  isActive: boolean;
   passwordHash?: string | null;
 };
 
@@ -54,8 +59,80 @@ async function findUserByEmail(email: string): Promise<RawUser | null> {
     id: data.id,
     email: data.email,
     role: typeof data.role === "string" ? data.role : "",
+    status: typeof data.status === "string"
+      ? data.status
+      : typeof data.user_status === "string"
+        ? data.user_status
+        : null,
+    isActive: data.is_active === true || data.isActive === true,
     passwordHash: typeof data.password_hash === "string" ? data.password_hash : null,
   };
+}
+
+function isActiveAdmin(user: RawUser | null): user is RawUser {
+  return Boolean(
+    user
+    && user.role.trim().toLowerCase() === "admin"
+    && user.isActive
+    && (user.status === null || user.status.trim().toLowerCase() === "active"),
+  );
+}
+
+function getRequestIp(request: Request): string {
+  const forwarded = request.headers["x-forwarded-for"];
+  const firstForwarded = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0];
+  return (firstForwarded?.trim() || request.ip || "unknown").slice(0, 255);
+}
+
+function normalizeEmail(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isValidEmail(value: string): boolean {
+  return value.length > 3 && value.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+async function ensureEmailOtpTable(): Promise<void> {
+  await pool.query(`
+    create table if not exists public.bizportal_email_otp_codes (
+      id bigserial primary key,
+      email text not null,
+      request_ip text not null,
+      purpose text not null,
+      code_hash text,
+      attempts integer not null default 0,
+      expires_at timestamptz not null,
+      verified_at timestamptz,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await pool.query(`
+    create index if not exists bizportal_email_otp_rate_idx
+      on public.bizportal_email_otp_codes (email, request_ip, created_at desc)
+  `);
+  await pool.query(`
+    create index if not exists bizportal_email_otp_lookup_idx
+      on public.bizportal_email_otp_codes (email, purpose, created_at desc)
+  `);
+}
+
+async function countRecentEmailOtpRequests(email: string, requestIp: string): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `select count(*)::text as count
+       from public.bizportal_email_otp_codes
+      where purpose = $3
+        and created_at >= now() - interval '10 minutes'
+        and (email = $1 or request_ip = $2)`,
+    [email, requestIp, EMAIL_OTP_PURPOSE],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+function genericEmailOtpResponse(response: Response, status = 202): void {
+  response.status(status).json({
+    ok: true,
+    message: "Jika email admin terdaftar, kode OTP akan dikirim.",
+  });
 }
 
 async function getFonnteToken(): Promise<string> {
@@ -189,6 +266,179 @@ router.post("/auth/email-login", async (
   } catch (error) {
     request.log.error({ error }, "Local production email login failed");
     response.status(503).json({ error: "Layanan login belum tersedia." });
+  }
+});
+
+router.post("/auth/email-otp/send", async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (isDevelopmentEnvironment()) {
+    next();
+    return;
+  }
+
+  const email = normalizeEmail(request.body?.email);
+  if (!isValidEmail(email)) {
+    response.status(400).json({ error: "Masukkan email admin yang valid." });
+    return;
+  }
+
+  const requestIp = getRequestIp(request);
+  try {
+    await ensureEmailOtpTable();
+    if (await countRecentEmailOtpRequests(email, requestIp) >= EMAIL_OTP_RATE_LIMIT) {
+      response.setHeader("Retry-After", "600");
+      genericEmailOtpResponse(response);
+      return;
+    }
+
+    const user = await findUserByEmail(email);
+    if (!isActiveAdmin(user)) {
+      await pool.query(
+        `insert into public.bizportal_email_otp_codes
+          (email, request_ip, purpose, expires_at)
+         values ($1, $2, $3, $4)`,
+        [email, requestIp, EMAIL_OTP_PURPOSE, new Date(Date.now() + OTP_TTL_MS)],
+      );
+      genericEmailOtpResponse(response);
+      return;
+    }
+
+    const code = String(randomInt(100000, 1000000));
+    const codeHash = await hash(code, 10);
+    const inserted = await pool.query<{ id: string }>(
+      `with invalidated as (
+         update public.bizportal_email_otp_codes
+            set verified_at = now()
+          where email = $1
+            and purpose = $2
+            and verified_at is null
+       )
+       insert into public.bizportal_email_otp_codes
+         (email, request_ip, purpose, code_hash, expires_at)
+       values ($1, $3, $2, $4, $5)
+       returning id`,
+      [email, requestIp, EMAIL_OTP_PURPOSE, codeHash, new Date(Date.now() + OTP_TTL_MS)],
+    );
+    const id = inserted.rows[0]?.id;
+    if (!id) throw new Error("Email OTP record was not created");
+
+    try {
+      await sendAdminLoginOtpEmail(email, code);
+    } catch {
+      await pool.query(
+        "delete from public.bizportal_email_otp_codes where id = $1 and verified_at is null",
+        [id],
+      ).catch(() => undefined);
+    }
+
+    genericEmailOtpResponse(response);
+  } catch {
+    request.log.error({ route: "email-otp-send" }, "Local email OTP request failed");
+    genericEmailOtpResponse(response);
+  }
+});
+
+router.post("/auth/email-otp/verify", async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (isDevelopmentEnvironment()) {
+    next();
+    return;
+  }
+
+  const email = normalizeEmail(request.body?.email);
+  const code = typeof request.body?.code === "string" ? request.body.code.trim() : "";
+  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
+    response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+    return;
+  }
+
+  try {
+    await ensureEmailOtpTable();
+    const result = await pool.query<{
+      id: string;
+      code_hash: string;
+      attempts: number;
+      expires_at: Date;
+    }>(
+      `select id, code_hash, attempts, expires_at
+         from public.bizportal_email_otp_codes
+        where email = $1
+          and purpose = $2
+          and code_hash is not null
+          and verified_at is null
+        order by created_at desc
+        limit 1`,
+      [email, EMAIL_OTP_PURPOSE],
+    );
+    const otp = result.rows[0];
+    if (!otp) {
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+    if (new Date(otp.expires_at).getTime() <= Date.now()) {
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+    if (otp.attempts >= 5) {
+      response.status(429).json({ error: "Terlalu banyak percobaan. Minta OTP baru." });
+      return;
+    }
+
+    if (!(await compare(code, otp.code_hash))) {
+      await pool.query(
+        `update public.bizportal_email_otp_codes
+            set attempts = attempts + 1
+          where id = $1
+            and verified_at is null
+            and attempts < 5`,
+        [otp.id],
+      );
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+
+    const user = await findUserByEmail(email);
+    if (!isActiveAdmin(user)) {
+      await pool.query(
+        "update public.bizportal_email_otp_codes set verified_at = now() where id = $1 and verified_at is null",
+        [otp.id],
+      );
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+
+    const consumed = await pool.query(
+      `update public.bizportal_email_otp_codes
+          set verified_at = now()
+        where id = $1
+          and verified_at is null
+          and attempts < 5
+        returning id`,
+      [otp.id],
+    );
+    if (consumed.rowCount !== 1) {
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+
+    const session = createSession(user);
+    const localUser = await getProductionUser(session);
+    if (!localUser || localUser.role !== "admin") {
+      response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
+      return;
+    }
+
+    setProductionSessionCookie(response, session);
+    response.json({ ok: true, user: localUser });
+  } catch {
+    request.log.error({ route: "email-otp-verify" }, "Local email OTP verification failed");
+    response.status(503).json({ error: "Layanan verifikasi OTP belum tersedia." });
   }
 });
 

@@ -4,6 +4,7 @@ import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
+import businessDashboardRouter from "./business-dashboard";
 import localProductionAuthRouter from "./local-production-auth";
 import {
   createDevAuthRouter,
@@ -15,9 +16,18 @@ import {
 import { pool } from "@workspace/db";
 
 const router: IRouter = Router();
+
 router.use(healthRouter);
 
 router.use(createDevAuthRouter());
+
+// Production auth is local to this deployment and is mounted before the
+// remaining API-owned routes.
+router.use(localProductionAuthRouter);
+
+router.post("/auth/email-login", (_request, response) => {
+  response.status(404).json({ error: "Not found" });
+});
 
 // Authentication is owned locally by CST-BIZPORTAL. No login or session
 // exchange is forwarded to CST-SUPER-APP.
@@ -27,6 +37,7 @@ router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
+router.use(businessDashboardRouter);
 
 router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> => {
   const rawId = req.params.id;
@@ -93,6 +104,8 @@ router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> =
   }
 });
 
+router.use((_request, response) => {
+  response.status(404).json({ error: "Endpoint BizPortal belum tersedia di runtime mandiri." });
 router.use((_req, res) => {
   res.status(404).json({
     error: "Endpoint tidak tersedia di backend mandiri CST-BIZPORTAL",

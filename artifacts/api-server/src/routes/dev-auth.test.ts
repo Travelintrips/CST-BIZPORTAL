@@ -171,7 +171,7 @@ describe("development login bridge", () => {
     });
   });
 
-  it("blocks an unauthorized upstream response instead of creating a local session", async () => {
+  it("creates a local session without contacting a legacy upstream", async () => {
     const upstreamRequest = mockUpstreamLogin({
       kind: "response",
       statusCode: 401,
@@ -181,12 +181,12 @@ describe("development login bridge", () => {
       email: allowedEmail,
     });
 
-    expect(loginResponse.status).toBe(502);
-    expect(JSON.parse(loginResponse.body)).toEqual({
-      error: "Development API login is unavailable",
+    expect(loginResponse.status).toBe(200);
+    expect(JSON.parse(loginResponse.body)).toMatchObject({
+      user: { email: allowedEmail },
     });
-    expect(loginResponse.headers["set-cookie"]).toBeUndefined();
-    expect(upstreamRequest).toHaveBeenCalledOnce();
+    expect(loginResponse.headers["set-cookie"]?.[0]).toMatch(/^bizportal_dev_session=[^;]+;/);
+    expect(upstreamRequest).not.toHaveBeenCalled();
   });
 
   it("blocks an email that is not on the development allowlist", async () => {

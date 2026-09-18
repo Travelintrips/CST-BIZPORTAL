@@ -115,14 +115,7 @@ describe("production purchase authentication", () => {
 
     app = express();
     app.use(express.json());
-    app.use(createDevAuthRouter({
-      onProductionLogin: async (_token, _user, response) => {
-        response.append(
-          "Set-Cookie",
-          "bizportal_upstream_session=upstream; Path=/; HttpOnly; Secure",
-        );
-      },
-    }));
+    app.use(createDevAuthRouter());
     app.use(purchaseWorkflowRouter);
     app.use((_req, res) => res.status(204).end());
     server = await new Promise<http.Server>((resolve) => {
@@ -273,16 +266,15 @@ describe("production purchase authentication", () => {
     expect(response.headers["set-cookie"]).toBeUndefined();
   });
 
-  it("issues both local and upstream cookies to an OTP-authenticated admin", async () => {
+  it("issues only the local cookie to an OTP-authenticated admin", async () => {
     mockUser("admin");
     const response = await request(server, "/auth/supabase-exchange", {
       method: "POST",
       body: { access_token: makeSupabaseToken("otp") },
     });
     expect(response.status).toBe(200);
-    expect(response.headers["set-cookie"]).toEqual(expect.arrayContaining([
-      expect.stringContaining("bizportal_upstream_session="),
+    expect(response.headers["set-cookie"]).toEqual([
       expect.stringContaining("bizportal_supabase_session="),
-    ]));
+    ]);
   });
 });
