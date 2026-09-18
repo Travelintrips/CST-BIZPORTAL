@@ -30,3 +30,4 @@
 - [Upstream artifact build dependencies](upstream-artifact-build.md) — nested workspace production builds must install their own dependencies before running.
 - [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
 - [Bank reconciliation read contract](bank-reconciliation-read-contract.md) — production can have synced bank rows while the UI stays empty if the standalone API omits its list and summary endpoints.
+- [Bank sheet amount locale](bank-sheet-amount-locale.md) — Indonesian-formatted Sheet values such as `685.170` must parse as 685170, not 685.17.

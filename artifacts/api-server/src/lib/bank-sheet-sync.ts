@@ -42,14 +42,37 @@ function canonicalKey(row: ParsedMutation, companyId: number | null, bankAccount
   return crypto.createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
-function parseAmount(value: string): number {
-  const cleaned = String(value ?? "").replace(/[^0-9.,-]/g, "").trim();
+export function parseAmount(value: string): number {
+  const cleaned = String(value ?? "").replace(/\s/g, "").replace(/[^0-9.,-]/g, "");
   if (!cleaned) return 0;
-  const normalized = cleaned.includes(",") && cleaned.includes(".")
-    ? cleaned.replace(/\./g, "").replace(",", ".")
-    : cleaned.includes(",")
+
+  const lastComma = cleaned.lastIndexOf(",");
+  const lastDot = cleaned.lastIndexOf(".");
+  let normalized = cleaned;
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimalSeparator = lastComma > lastDot ? "," : ".";
+    const decimalIndex = Math.max(lastComma, lastDot);
+    const fractionalDigits = cleaned.length - decimalIndex - 1;
+    if (fractionalDigits <= 2) {
+      const integerPart = cleaned.slice(0, decimalIndex).replace(/[.,]/g, "");
+      const fractionPart = cleaned.slice(decimalIndex + 1).replace(/[.,]/g, "");
+      normalized = `${integerPart}.${fractionPart}`;
+    } else {
+      normalized = cleaned.replace(/[.,]/g, "");
+    }
+  } else if (lastComma >= 0) {
+    const fractionalDigits = cleaned.length - lastComma - 1;
+    normalized = fractionalDigits === 1 || fractionalDigits === 2
       ? cleaned.replace(",", ".")
+      : cleaned.replace(/,/g, "");
+  } else if (lastDot >= 0) {
+    const fractionalDigits = cleaned.length - lastDot - 1;
+    normalized = fractionalDigits === 3
+      ? cleaned.replace(/\./g, "")
       : cleaned;
+  }
+
   return Math.abs(Number.parseFloat(normalized) || 0);
 }
 
