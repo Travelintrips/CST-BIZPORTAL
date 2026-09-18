@@ -1045,6 +1045,10 @@ describe("fetchCandidates — optional source schema compatibility", () => {
   const compatibleOptionalSchemaRows = [
     ...["id", "grand_total", "created_at", "sender_name", "order_number", "company_id"]
       .map((column_name) => ({ table_name: "logistic_orders", column_name })),
+    ...["id", "amount", "created_at", "paid_at", "tenant_id", "tenant_booking_id", "payment_number", "company_id", "status", "method"]
+      .map((column_name) => ({ table_name: "tenant_payments", column_name })),
+    ...["id", "tenant_id", "order_number"]
+      .map((column_name) => ({ table_name: "tenant_bookings", column_name })),
     ...["id", "total_amount", "created_at", "tenant_id", "invoice_number", "company_id", "status"]
       .map((column_name) => ({ table_name: "tenant_invoices", column_name })),
     ...["id", "business_name"]
@@ -1093,7 +1097,28 @@ describe("fetchCandidates — optional source schema compatibility", () => {
     expect(query).not.toContain("lo.total_price");
   });
 
-  it("uses the canonical tenant business name without requiring removed legacy columns", async () => {
+  it("uses the canonical tenant payment date and business name", async () => {
+    await fetchCandidates({
+      amount: 500_000,
+      transaction_date: "2026-07-15",
+      company_id: 10,
+      direction: "IN",
+      bank_account_id: null,
+      provider_order_id: null,
+      provider_name: null,
+      normalized_description: null,
+    });
+
+    const query = queryFor("tenant_payments");
+    expect(query).toBeDefined();
+    expect(query).toContain("COALESCE(t.business_name, '') AS name");
+    expect(query).toContain("tp.paid_at AT TIME ZONE 'Asia/Jakarta'");
+    expect(query).toContain("tp.payment_number AS ref");
+    expect(query).toContain("LOWER(COALESCE(tp.method, '')) LIKE '%transfer%'");
+    expect(query).not.toContain("ti.tenant_name");
+  });
+
+  it("retains invoice-only tenant rows as a legacy fallback", async () => {
     await fetchCandidates({
       amount: 500_000,
       transaction_date: "2026-07-15",
@@ -1107,9 +1132,9 @@ describe("fetchCandidates — optional source schema compatibility", () => {
 
     const query = queryFor("tenant_invoices");
     expect(query).toBeDefined();
-    expect(query).toContain("COALESCE(t.business_name, '') AS name");
+    expect(query).toContain("NOT EXISTS");
+    expect(query).toContain("tp_existing.invoice_id = ti.id");
     expect(query).not.toContain("t.name");
-    expect(query).not.toContain("ti.tenant_name");
   });
 });
 

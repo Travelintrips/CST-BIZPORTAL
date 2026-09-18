@@ -76,7 +76,19 @@ const OPTIONAL_SOURCE_REQUIREMENTS: Record<OptionalCandidateSource, Record<strin
     customers: ["id", "name"],
   },
   tenant_invoice: {
-    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "invoice_number", "company_id", "status"],
+    tenant_payments: [
+      "id",
+      "amount",
+      "created_at",
+      "paid_at",
+      "tenant_id",
+      "tenant_booking_id",
+      "payment_number",
+      "company_id",
+      "status",
+      "method",
+    ],
+    tenant_bookings: ["id", "tenant_id", "order_number"],
     tenants: ["id", "business_name"],
   },
 };
@@ -1686,11 +1698,46 @@ export async function fetchCandidates(
     {
       type: "tenant_invoice" as CandidateType,
       q: `
-         SELECT ti.id, ti.total_amount AS amount,
+         -- Tenant bank receipts are canonicalized by tenant_payments. The
+         -- journal adapter for this candidate type also resolves
+         -- accounting_entries.source_id against tenant_payments.id, so using
+         -- tenant_invoices.id here can produce a false candidate identity and
+         -- misses payments whose paid_at was corrected after invoicing.
+         SELECT tp.id,
+                tp.amount AS amount,
+                COALESCE(
+                  (tp.paid_at AT TIME ZONE 'Asia/Jakarta')::date,
+                  (tp.created_at AT TIME ZONE 'Asia/Jakarta')::date
+                )::text AS date,
+                COALESCE(t.business_name, '') AS name,
+                tp.payment_number AS ref,
+                tp.company_id
+        FROM tenant_payments tp
+        LEFT JOIN tenant_bookings tb ON tb.id = tp.tenant_booking_id
+        LEFT JOIN tenants t ON t.id = COALESCE(tp.tenant_id, tb.tenant_id)
+        WHERE ${amtFilter.replace("##AMT##", "tp.amount")}
+          AND '${direction}' = 'IN'
+          AND COALESCE(tp.status, '') IN ('confirmed', 'paid')
+          AND LOWER(COALESCE(tp.method, '')) LIKE '%transfer%'
+          ${coFilter.replace("##TBL##", "tp")}
+          AND COALESCE(
+            (tp.paid_at AT TIME ZONE 'Asia/Jakarta')::date,
+            (tp.created_at AT TIME ZONE 'Asia/Jakarta')::date
+          ) BETWEEN ${dateFrom} AND ${dateTo}
+      `,
+    },
+    {
+      type: "tenant_invoice" as CandidateType,
+      q: `
+        -- Keep invoice-only legacy rows available when no canonical tenant
+        -- payment exists for the invoice. These rows are informational until
+        -- their tenant payment journal can be resolved.
+        SELECT ti.id,
+               ti.total_amount AS amount,
                ti.created_at::date::text AS date,
                COALESCE(t.business_name, '') AS name,
-                ti.invoice_number AS ref,
-                ti.company_id
+               ti.invoice_number AS ref,
+               ti.company_id
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
         WHERE ${amtFilter.replace("##AMT##", "ti.total_amount")}
@@ -1698,6 +1745,12 @@ export async function fetchCandidates(
           AND ti.status = 'paid'
           ${coFilter.replace("##TBL##", "ti")}
           AND ti.created_at::date BETWEEN ${dateFrom} AND ${dateTo}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tenant_payments tp_existing
+            WHERE tp_existing.invoice_id = ti.id
+              AND COALESCE(tp_existing.status, '') IN ('confirmed', 'paid')
+          )
       `,
     },
   ];
