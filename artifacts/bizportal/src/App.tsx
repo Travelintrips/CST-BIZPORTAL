@@ -549,6 +549,12 @@ function AuthRouteGuard() {
 function AppContent() {
   const { isApiAvailable, isApiReady, isAuthenticated, isLoading } = useSupabaseAuth();
 
+  React.useEffect(() => {
+    if (window.location.pathname === "/") {
+      window.location.replace("/bizportal/");
+    }
+  }, []);
+
   // The login page must not depend on the long-running readiness poll. A
   // logged-out user can see the form immediately and receive a normal request
   // error if the API is unavailable. Only authenticated users wait before

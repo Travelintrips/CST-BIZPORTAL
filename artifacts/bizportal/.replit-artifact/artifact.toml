@@ -1,5 +1,5 @@
 kind = "web"
-previewPath = "/bizportal/"
+previewPath = "/"
 title = "CST BizPortal"
 description = "An internal ERP portal for CST teams covering ecommerce, trading, logistics, accounting, administration, and operational workflows."
 version = "1.0.0"
@@ -8,7 +8,7 @@ router = "path"
 
 [[services]]
 name = "web"
-paths = [ "/bizportal" ]
+paths = [ "/", "/bizportal" ]
 localPort = 18442
 
 [services.development]
