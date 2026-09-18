@@ -555,8 +555,8 @@ aiTransactionReviewRouter.post('/rule-packages/:id/review', async (req: Request,
 // Body: { source, sourceRecordId, transaction: TransactionInput, idempotencyKey? }
 
 const FromSourceSchema = z.object({
-  source: z.string().min(1),
-  sourceRecordId: z.string().min(1),
+  source: z.string().trim().min(1),
+  sourceRecordId: z.string().trim().min(1),
   transaction: z.object({
     id: z.string().min(1),
     description: z.string().min(1),
@@ -581,7 +581,7 @@ aiTransactionReviewRouter.post('/review-cases/from-source', async (req: Request,
   if (!parsed.success) {
     res.status(400).json({
       ok: false,
-      error: { code: 'AI_REVIEW_VALIDATION_ERROR', message: 'Invalid body', details: parsed.data },
+      error: { code: 'AI_REVIEW_VALIDATION_ERROR', message: 'Invalid body', details: parsed.error.issues },
     });
     return;
   }

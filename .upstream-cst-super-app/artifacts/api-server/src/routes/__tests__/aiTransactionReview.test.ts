@@ -113,6 +113,36 @@ describe("POST /api/ai-transaction/review-cases/from-source", () => {
     findBySourceMock.mockResolvedValue([]);
   });
 
+  it.each([
+    ["missing source", { sourceRecordId: "record-123" }],
+    ["missing source record id", { source: "BANK_MUTATION" }],
+    ["blank source", { source: "   ", sourceRecordId: "record-123" }],
+    ["blank source record id", { source: "BANK_MUTATION", sourceRecordId: "   " }],
+    ["non-string source", { source: 123, sourceRecordId: "record-123" }],
+    ["non-string source record id", { source: "BANK_MUTATION", sourceRecordId: 123 }],
+  ])(
+    "rejects %s before source lookup or review-case creation",
+    async (_description, sourceLink) => {
+      const response = await request(makeApp())
+        .post("/api/ai-transaction/review-cases/from-source")
+        .send(sourceLink);
+
+      expect(response.status).toBe(400);
+      expect(response.body.ok).toBe(false);
+      expect(response.body.error).toMatchObject({
+        code: "AI_REVIEW_VALIDATION_ERROR",
+        message: "Invalid body",
+      });
+      expect(response.body.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: expect.any(String), path: expect.any(Array) }),
+        ]),
+      );
+      expect(findBySourceMock).not.toHaveBeenCalled();
+      expect(analyzeAndCreateReviewCaseMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects unsupported sources before reading or creating a review case", async () => {
     const response = await request(makeApp())
       .post("/api/ai-transaction/review-cases/from-source")
