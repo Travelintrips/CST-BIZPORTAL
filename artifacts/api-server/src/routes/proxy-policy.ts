@@ -25,15 +25,22 @@ export function validateUpstreamOrigin(value: string): URL {
 
 export function validateUpstreamBaseUrl(value: string): URL {
   const url = new URL(value);
+  const isLocalDevelopmentHttp =
+    isDevelopmentEnvironment()
+    && url.protocol === "http:"
+    && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
   if (
-    url.protocol !== "https:" ||
+    (!isLocalDevelopmentHttp && url.protocol !== "https:") ||
     !url.hostname ||
     url.username ||
     url.password ||
     url.search ||
     url.hash
   ) {
-    throw new Error("BIZPORTAL_API_ORIGIN must be an HTTPS URL without credentials, query, or hash");
+    throw new Error(
+      "BIZPORTAL_API_ORIGIN must be an HTTPS URL without credentials, query, or hash "
+      + "(or a localhost HTTP URL in development)",
+    );
   }
   return url;
 }

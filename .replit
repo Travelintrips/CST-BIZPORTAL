@@ -11,6 +11,27 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "CST BizPortal upstream API"
+
+[[workflows.workflow]]
+name = "CST BizPortal upstream API"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd .upstream-cst-super-app/artifacts/api-server && APP_ENV=development NODE_ENV=development PORT=18444 pnpm run dev:secure"
+waitForPort = 18444
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -24,7 +45,7 @@ timeoutMs = 20000
 [userenv.development]
 DEV_LOGIN_EMAILS = "admcst001@gmail.com"
 DEV_LOGIN_ROLE = "admin"
-BIZPORTAL_API_ORIGIN_DEV = "https://bizportal.cstlogistic.co.id"
+BIZPORTAL_API_ORIGIN_DEV = "http://127.0.0.1:18444"
 
 [userenv.production]
 BIZPORTAL_API_ORIGIN_PROD = "https://bizportal.cstlogistic.co.id"

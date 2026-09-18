@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import http from "node:http";
 import https from "node:https";
 import healthRouter from "./health";
 import companiesRouter from "./companies";
@@ -25,6 +26,10 @@ const router: IRouter = Router();
 const UPSTREAM_REQUEST_TIMEOUT_MS = 15_000;
 const UPSTREAM_STREAM_TIMEOUT_MS = 120_000;
 
+function requestUpstream(url: URL): typeof http.request {
+  return url.protocol === "http:" ? http.request : https.request;
+}
+
 router.use(healthRouter);
 
 function rewriteUpstreamAuthCookies(cookies: string[] | undefined): string[] {
@@ -47,7 +52,7 @@ async function establishDevelopmentUpstreamSession(
   const body = JSON.stringify({ email: user.email });
 
   return new Promise((resolve, reject) => {
-    const upstream = https.request(
+    const upstream = requestUpstream(loginUrl)(
       loginUrl,
       {
         method: "POST",
@@ -106,7 +111,7 @@ async function establishProductionUpstreamSession(
   const body = JSON.stringify({ access_token: accessToken });
 
   return new Promise((resolve, reject) => {
-    const upstream = https.request(
+    const upstream = requestUpstream(exchangeUrl)(
       exchangeUrl,
       {
         method: "POST",
@@ -265,7 +270,7 @@ router.use(async (req, res) => {
   await addTenantDashboardCompanyScope(req, upstreamUrl);
   const headers = buildUpstreamHeaders(req.headers, upstreamOrigin, getDevSession(req));
 
-  const upstream = https.request(
+  const upstream = requestUpstream(upstreamUrl)(
     upstreamUrl,
     {
       method: req.method,

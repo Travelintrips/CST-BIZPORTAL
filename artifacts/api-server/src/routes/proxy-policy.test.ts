@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildUpstreamHeaders,
   rewriteSetCookies,
+  validateUpstreamBaseUrl,
   validateUpstreamOrigin,
 } from "./proxy-policy";
 
@@ -134,5 +135,13 @@ describe("BizPortal proxy credential boundary", () => {
     expect(() => validateUpstreamOrigin("http://example.com")).toThrow();
     expect(() => validateUpstreamOrigin("https://user:pass@example.com")).toThrow();
     expect(() => validateUpstreamOrigin("https://example.com/api")).toThrow();
+  });
+
+  it("allows localhost HTTP only for development upstream services", () => {
+    process.env.APP_ENV = "development";
+    expect(validateUpstreamBaseUrl("http://127.0.0.1:18444").origin).toBe(
+      "http://127.0.0.1:18444",
+    );
+    expect(() => validateUpstreamBaseUrl("http://example.com")).toThrow();
   });
 });
