@@ -47,7 +47,7 @@ describe("standalone BizPortal API boundary", () => {
       'router.post("/bank-reconciliation/qris-candidates/:candidateId/approve"',
     );
     expect(bankReconciliationSource).toContain("canonical_qris_settlement");
-    expect(bankReconciliationSource).not.toContain("from public.qris_mutation_batch_candidates");
+    expect(bankReconciliationSource).not.toContain("qris_mutation_batch_candidates");
     expect(bankReconciliationSource).toContain("LEGACY_QRIS_GENERATOR_REMOVED");
     expect(bankReconciliationSource).toContain("LEGACY_QRIS_APPROVAL_REMOVED");
     expect(bankReconciliationSource).toContain("await client.query(\"begin\")");
