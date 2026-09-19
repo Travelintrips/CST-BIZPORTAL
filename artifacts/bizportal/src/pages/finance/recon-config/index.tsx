@@ -1684,7 +1684,7 @@ function AiRulesTab() {
               </div>
             </div>
             <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
-              <Label className="text-slate-300">Kandidat untuk auto-match</Label>
+              <Label className="text-slate-300">Kandidat untuk auto-match dan auto-post</Label>
               <Select
                 value={form.candidate_requirement ?? "not_required"}
                 onValueChange={(value) => setForm((current: any) => ({
@@ -1702,6 +1702,8 @@ function AiRulesTab() {
               </Select>
               <p className="mt-1 text-[11px] text-slate-500">
                 Wajib kandidat cocok untuk pembayaran/invoice. Pilih tanpa kandidat untuk biaya admin atau alokasi langsung berbasis rule.
+                Auto-approve dan auto-post hanya berjalan jika confidence Rule AI 1, COA target valid, tidak ada ambiguitas,
+                dan rule tidak mewajibkan kandidat atau dokumen.
               </p>
             </div>
             <div className={`rounded-lg border p-3 ${

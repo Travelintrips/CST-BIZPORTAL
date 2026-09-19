@@ -8825,7 +8825,9 @@ export default function BankReconciliationPage() {
           : `AI Matching selesai: ${d.processed} mutasi diproses`,
         description: d.queued
           ? "Tunggu sampai proses selesai, lalu buat kandidat QRIS secara terpisah."
-          : "Tahap berikutnya adalah membuat kandidat QRIS secara eksplisit.",
+          : Number(d.auto_posted ?? 0) > 0
+            ? `${d.auto_posted} mutasi auto-approve dan auto-post oleh Rule AI.`
+            : "Tidak ada mutasi yang memenuhi seluruh syarat auto-approve dan auto-post Rule AI.",
       });
       invalidate();
       try {
@@ -8861,6 +8863,7 @@ export default function BankReconciliationPage() {
       return r.json() as Promise<{
         processed: number;
         auto_matched: number;
+        auto_posted: number;
         manual_review: number;
         unmatched: number;
       }>;
@@ -8868,10 +8871,15 @@ export default function BankReconciliationPage() {
     onSuccess: async (result, mutationId) => {
       await invalidate();
       await refreshMutationDetail(mutationId);
-      if (result.auto_matched > 0) {
+      if (result.auto_posted > 0) {
         toast({
           title: "Recon ulang berhasil",
-          description: "Rule AI berhasil membuat dan mem-posting jurnal setelah seluruh safeguard lulus.",
+          description: "Rule AI berhasil auto-approve dan auto-post jurnal setelah seluruh safeguard lulus.",
+        });
+      } else if (result.auto_matched > 0) {
+        toast({
+          title: "Recon ulang menemukan kecocokan",
+          description: "Rule AI menemukan kecocokan, tetapi belum memenuhi syarat auto-post. Periksa dan approve manual.",
         });
       } else if (result.manual_review > 0) {
         toast({

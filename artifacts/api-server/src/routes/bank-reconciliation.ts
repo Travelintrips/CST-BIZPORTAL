@@ -114,6 +114,27 @@ function safeInteger(value: unknown): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function hasQrisBankEvidenceForAutoPost(mutation: MatchingMutation): boolean {
+  const values = [
+    mutation.provider_name,
+    mutation.provider_order_id,
+    mutation.description,
+    mutation.normalized_description,
+  ];
+  const compactValues = values.map(value =>
+    String(value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, ""),
+  );
+  // InhouseTrf is an explicit bank-transfer marker and wins over a stale
+  // QRIS-like token in the same statement description.
+  if (compactValues.some(value => value.includes("INHOUSETRF"))) return false;
+  return values.some(value => {
+    const normalized = String(value ?? "").trim().toUpperCase();
+    return normalized.includes("QRIS")
+      || /QR[A-Z0-9]{4,}/.test(normalized)
+      || /\bQR\s*(?:CODE|PAY|PAYMENT)\b/.test(normalized);
+  });
+}
+
 async function getApprovalActor(request: Request): Promise<ApprovalActor | null> {
   const allowedRoles = new Set(["admin", "owner", "finance", "accounting"]);
 
@@ -355,7 +376,7 @@ async function matchLocalMutation(
   client: ApprovalClient,
   mutation: MatchingMutation,
   actor: ApprovalActor,
-): Promise<"matched" | "manual_review" | "unmatched"> {
+): Promise<"matched" | "auto_posted" | "manual_review" | "unmatched"> {
   if (mutation.company_id == null) return "unmatched";
 
   await client.query(
@@ -380,7 +401,8 @@ async function matchLocalMutation(
       && matchedRule.candidateRequirement !== 'required'
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
-      && !ruleResult.ambiguityCode;
+      && !ruleResult.ambiguityCode
+      && !hasQrisBankEvidenceForAutoPost(mutation);
     if (autoPostEligible) {
       const ruleMatch = await client.query<{ id: number }>(
         "select id from public.bank_reconciliation_matches where mutation_id=$1 and candidate_type='recon_rule' and candidate_id=$2 and status='candidate' order by id desc limit 1 for update",
@@ -403,6 +425,7 @@ async function matchLocalMutation(
         await client.query("update public.bank_reconciliation_matches set status='superseded' where mutation_id=$1 and id<>$2 and status='candidate'", [mutation.id, matchId]);
         await client.query("update public.bank_mutations set status='posted', reconciliation_status='reconciled', accounting_posted=true, journal_entry_id=$2, posted_at=coalesce(posted_at,now()), approved_at=coalesce(approved_at,now()), review_code='RULE_AI_AUTO_POSTED', review_reason=$3, updated_at=now() where id=$1", [mutation.id, entryId, 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name]);
         await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'AUTO_POSTED',$2,$3::jsonb)", [mutation.id, actor.email, JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence,coa_code:matchedRule.targetCoaCode,journal_entry_id:entryId})]);
+         return "auto_posted";
       }
     }
     return 'matched';}
@@ -590,6 +613,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     let unmatched = 0;
     let failed = 0;
     let ruleMatched = 0;
+    let autoPosted = 0;
 
     for (const mutation of result.rows) {
       try {
@@ -597,9 +621,10 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
         const outcome = await matchLocalMutation(client, mutation, actor);
         await client.query("commit");
         processed++;
-        if (outcome === "matched") autoMatched++;
+        if (outcome === "matched" || outcome === "auto_posted") autoMatched++;
+        if (outcome === "auto_posted") autoPosted++;
         const marker = await client.query<{ review_code: string | null }>("select review_code from public.bank_mutations where id=$1", [mutation.id]);
-        if (marker.rows[0]?.review_code === "RULE_AI_MATCH") ruleMatched++;
+        if (marker.rows[0]?.review_code === "RULE_AI_MATCH" || marker.rows[0]?.review_code === "RULE_AI_AUTO_POSTED") ruleMatched++;
         else if (outcome === "manual_review") manualReview++;
         else unmatched++;
       } catch (error) {
@@ -619,6 +644,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       processed,
       failed,
       auto_matched: autoMatched,
+      auto_posted: autoPosted,
       manual_review: manualReview,
       unmatched,
       rule_matched: ruleMatched,
