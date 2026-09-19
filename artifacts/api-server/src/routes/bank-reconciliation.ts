@@ -2364,11 +2364,9 @@ async function resolveCanonicalQrisSettlement(
     );
   }
 
-  // The local qris_mutation_batch_candidates table is only a review snapshot.
-  // Journal approval must resolve the same complete payment scope to the
-  // canonical Sport Center settlement batch first. Requiring the full scope
-  // prevents a larger canonical batch from being partially approved through
-  // the generic bank journal path.
+  // Resolve the complete payment scope directly against the canonical Sport
+  // Center settlement contract. Requiring the full scope prevents partial or
+  // ambiguous approval through the generic bank journal path.
   const result = await client.query<{ id: number | string }>(
     `with matching_batches as (
        select psb.id
