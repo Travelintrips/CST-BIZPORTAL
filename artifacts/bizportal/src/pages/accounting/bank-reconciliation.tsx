@@ -9258,7 +9258,7 @@ export default function BankReconciliationPage() {
   // matched so the reviewer can choose another candidate or COA.
   const unapproveMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/unapprove`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -9293,7 +9293,7 @@ export default function BankReconciliationPage() {
   // Reopen void → POST /:id/reopen → resets status to 'unmatched' so re-matching can run
   const reopenMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/reopen`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
