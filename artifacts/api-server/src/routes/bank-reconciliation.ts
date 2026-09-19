@@ -1953,6 +1953,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
             lower(coalesce(provider_name, '')) like '%qris%'
             or lower(coalesce(description, '')) like '%qris%'
             or lower(coalesce(description, '')) like '%paylabs%'
+            or lower(coalesce(description, '')) like '%qrtraveli%'
           )
         order by transaction_date desc, id desc
         limit 500
