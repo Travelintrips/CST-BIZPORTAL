@@ -32,3 +32,4 @@
 - [Bank reconciliation read contract](bank-reconciliation-read-contract.md) — production can have synced bank rows while the UI stays empty if the standalone API omits its list and summary endpoints.
 - [Bank sheet amount locale](bank-sheet-amount-locale.md) — Indonesian-formatted Sheet values such as `685.170` must parse as 685170, not 685.17.
 - [External production write verification](external-production-write-verification.md) — a shell timeout can occur after an external Supabase transaction commits; verify state before retrying a destructive write.
+- [Bank reconciliation candidate explanation](candidate-explanation-contract.md) — render persisted match flags and reasons even when optional source details are absent.

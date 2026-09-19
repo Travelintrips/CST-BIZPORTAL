@@ -585,6 +585,7 @@ interface Candidate {
   status: string;
   duplicate_count?: number;
   customer_name?: string | null;
+  order_ref?: string | null;
   details?: CandidateDetails | null;
 }
 
@@ -2259,6 +2260,28 @@ function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[]
     reasons.push("Kandidat belum memenuhi seluruh safeguard untuk diproses otomatis.");
   }
   return reasons;
+}
+
+function candidateEvidenceLabels(candidate: Candidate): string[] {
+  const signals: Array<[boolean, string]> = [
+    [candidate.amount_match, "Nominal cocok"],
+    [candidate.date_match, "Tanggal cocok"],
+    [candidate.name_match, "Nama/deskripsi cocok"],
+    [candidate.order_id_match, "Referensi cocok"],
+    [candidate.proof_match, "Bukti transfer cocok"],
+  ];
+  const matched = signals.filter(([isMatch]) => isMatch).map(([, label]) => label);
+  const unmatched = signals.filter(([isMatch]) => !isMatch).map(([, label]) =>
+    label.replace(" cocok", " belum cocok"),
+  );
+  return [...matched, ...unmatched];
+}
+
+function candidateMatchReasonLabel(reason: string): string {
+  return reason
+    .replace(/^MANUAL_RULE:/i, "Rule manual: ")
+    .replace(/^AUTO_RULE:/i, "Rule otomatis: ")
+    .trim();
 }
 
 function candidateApprovalBlockReason(candidate: Candidate): string | null {
@@ -5652,6 +5675,7 @@ function MutationCard({
                     const candidateReference =
                       candidateDetails?.paymentNumber
                       ?? candidateDetails?.reference
+                      ?? candidate.order_ref
                       ?? `#${candidate.candidate_id}`;
                     return (
                       <div
@@ -5701,6 +5725,33 @@ function MutationCard({
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
+                           <div className="mt-1 rounded border border-border/70 bg-muted/30 px-2 py-1.5">
+                             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                               Alasan pencocokan
+                             </p>
+                             <div className="mt-1 flex flex-wrap gap-1">
+                               {candidateEvidenceLabels(candidate).map((label) => {
+                                 const positive = label.endsWith("cocok");
+                                 return (
+                                   <span
+                                     key={label}
+                                     className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                       positive
+                                         ? "bg-green-950/50 text-green-300"
+                                         : "bg-amber-950/50 text-amber-300"
+                                     }`}
+                                   >
+                                     {positive ? "✓" : "!"} {label}
+                                   </span>
+                                 );
+                               })}
+                             </div>
+                             {candidate.match_reason && (
+                               <p className="mt-1 text-[10px] text-muted-foreground">
+                                 Sinyal sistem: {candidateMatchReasonLabel(candidate.match_reason)}
+                               </p>
+                             )}
+                           </div>
                            <CandidateDetailsBlock candidate={candidate} compact />
                            {candidateApprovalBlockedReason ? (
                              <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
