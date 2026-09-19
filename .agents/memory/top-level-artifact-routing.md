@@ -1,10 +1,10 @@
 ---
 name: Top-level artifact routing
-description: Replit preview gateway behavior for artifact manifests stored in nested upstream workspaces.
+description: CST-BIZPORTAL standalone artifact routing and source-of-truth boundary.
 ---
 
-The preview gateway only maps artifact services whose manifests are registered from the workspace's top-level `artifacts/` directory. A valid artifact manifest under a nested upstream workspace can appear in artifact metadata while still being absent from the active root router.
+The active application source of truth is the repository's top-level `artifacts/` workspace. Production build, development runtime, tests, and preview routing must resolve only to those root artifacts.
 
-**Why:** A Customer Portal manifest under `.upstream-cst-super-app/artifacts/` was registered but the preview gateway exposed only `/bizportal`; the root URL returned 404 until a validated top-level wrapper manifest was registered.
+**Why:** CST-BIZPORTAL has been separated from CST-SUPER-APP. The `.upstream-cst-super-app/` tree is retained only as historical/reference material and must never be used as an application source, build target, runtime target, or deployment dependency.
 
-**How to apply:** Keep the application source in the upstream workspace, but place a validated manifest under `artifacts/<slug>/.replit-artifact/artifact.toml`. Point its development command and production build/public paths back to the upstream source, and avoid running both nested and wrapper services on the same port.
+**How to apply:** Keep each active manifest under `artifacts/<slug>/.replit-artifact/` and point development/build/run commands to the matching top-level artifact. Never point manifests, scripts, CI, or production commands into `.upstream-cst-super-app/`. If historical code is needed for comparison, read it only as reference and port the required behavior into the standalone root artifact.
