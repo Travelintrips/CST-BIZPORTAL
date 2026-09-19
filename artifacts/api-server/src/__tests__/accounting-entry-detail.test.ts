@@ -26,7 +26,10 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    (req as Request & { log: { error: ReturnType<typeof vi.fn> } }).log = { error: vi.fn() };
+    Object.defineProperty(req, "log", {
+      configurable: true,
+      value: { error: vi.fn() },
+    });
     next();
   });
   app.use("/api", accountingRouter);

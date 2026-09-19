@@ -74,3 +74,4 @@
 - [Local tenant candidate contract](local-tenant-candidate-contract.md) — tenant candidates use confirmed tenant payment IDs and canonical detail hydration.
 - [Accounting journal detail endpoint](journal-detail-endpoint.md) — posting confirmation needs a company-scoped journal header/lines endpoint by entry ID.
 - [Supabase array filter casts](supabase-array-filter-cast.md) — use literal status lists for filtered queries; pooler-bound text-array casts can fail as PostgreSQL 42846.
+- [Merge-block cleanup](merge-block-cleanup.md) — duplicate merge blocks can contain newer endpoint/test contracts; preserve those contracts before removing stale code.

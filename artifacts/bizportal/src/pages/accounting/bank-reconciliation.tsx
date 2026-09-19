@@ -1487,7 +1487,7 @@ function statusLabel(m: BankMutation): string {
   }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
-  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
+  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Settlement QRIS Belum Tertaut";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
@@ -7938,7 +7938,12 @@ export default function BankReconciliationPage() {
         offset: String(hasStatusFilter ? 0 : page * PAGE_SIZE),
       });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      if (filterStatus !== "all")   params.set("status",    filterStatus);
+      // "completed" is a UI aggregate (approved + posted), not a DB status.
+      // Fetch the canonical list without a synthetic status and filter it client-side.
+      // Sending status=completed used to make PROD depend on special backend handling.
+      if (filterStatus !== "all" && filterStatus !== "completed") {
+        params.set("status", filterStatus);
+      }
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
       if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
@@ -10021,19 +10026,7 @@ export default function BankReconciliationPage() {
                    Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                 onClick={() => qrisDryRunMut.mutate(undefined)}
-                disabled={qrisDryRunMut.isPending || qrisCompanyId == null}
-                title={qrisCompanyId == null ? "Pilih satu perusahaan aktif terlebih dahulu" : undefined}
-              >
-                {qrisDryRunMut.isPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <Play className="w-3.5 h-3.5" />}
-                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
-              </Button>
+              
             </div>
           </CardHeader>
           <CardContent className="pt-0">
