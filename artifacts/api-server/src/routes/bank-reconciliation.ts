@@ -1696,16 +1696,58 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
         for update`,
       [mutationId],
     );
-    if (approvedMatchResult.rows.length !== 1) {
+    if (approvedMatchResult.rows.length > 1) {
       throw new ApprovalError(
-        approvedMatchResult.rows.length === 0
-          ? "Approved match tidak ditemukan untuk mutasi ini."
-          : "Lebih dari satu approved match ditemukan; posting diblokir.",
+        "Lebih dari satu approved match ditemukan; posting diblokir.",
         409,
-        approvedMatchResult.rows.length === 0 ? "MATCH_NOT_FOUND" : "CONFLICT",
+        "CONFLICT",
       );
     }
-    const approvedMatch = approvedMatchResult.rows[0]!;
+    let approvedMatch = approvedMatchResult.rows[0] ?? null;
+    if (!approvedMatch) {
+      const draftEntry = await client.query<{ source: string; source_id: number | null }>(
+        `select source,source_id from public.accounting_entries
+          where id=$1 and company_id=$2 and status='draft'
+          for update`,
+        [mutation.journal_entry_id, actor.companyId],
+      );
+      const entry = draftEntry.rows[0];
+      if (entry?.source !== "bank_reconciliation" || Number(entry.source_id) !== mutationId) {
+        throw new ApprovalError(
+          "Approved match tidak ditemukan dan draft jurnal bukan milik mutasi ini.",
+          409,
+          "MATCH_NOT_FOUND",
+        );
+      }
+      const recoverableMatch = await client.query<{ id: number; candidate_type: string; candidate_source: string | null }>(
+        `select id,candidate_type,candidate_source
+           from public.bank_reconciliation_matches
+          where mutation_id=$1
+            and candidate_source is not null
+            and status in ('candidate','matched','selected')
+          order by match_score desc nulls last,id desc
+          limit 2
+          for update`,
+        [mutationId],
+      );
+      if (recoverableMatch.rows.length !== 1) {
+        throw new ApprovalError(
+          "Approved match tidak ditemukan dan kandidat canonical tidak dapat dipulihkan secara deterministik.",
+          409,
+          recoverableMatch.rows.length === 0 ? "MATCH_NOT_FOUND" : "CONFLICT",
+        );
+      }
+      approvedMatch = recoverableMatch.rows[0]!;
+      await client.query(
+        `update public.bank_reconciliation_matches set status='approved' where id=$1 and mutation_id=$2`,
+        [approvedMatch.id, mutationId],
+      );
+      await client.query(
+        `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+         values($1,'APPROVED_MATCH_REPAIRED',$2,$3::jsonb)`,
+        [mutationId, actor.email, JSON.stringify({ match_id: approvedMatch.id, journal_entry_id: mutation.journal_entry_id, reason: "Draft jurnal canonical existed but approved match status was missing." })],
+      );
+    }
     if (
       approvedMatch.candidate_type === "qris_settlement"
       && approvedMatch.candidate_source === "sport_center.payment_settlement_batches"
