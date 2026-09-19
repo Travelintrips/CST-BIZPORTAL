@@ -1365,6 +1365,22 @@ async function approveBankMutation(
   const note = textValue(body.note);
   const manualCoaCode = textValue(body.manual_coa_code);
 
+  if (
+    candidateType === "qris_settlement"
+    && requestedSource === "sport_center.payment_settlement_batches"
+    && candidateId != null
+  ) {
+    return approveCanonicalQrisSettlementLink(
+      client,
+      mutationId,
+      candidateId,
+      actor,
+      {
+        reason: note ?? "Canonical QRIS settlement approved through the shared reconciliation contract.",
+      },
+    );
+  }
+
   const mutationResult = await client.query<{
     id: number;
     status: string;
