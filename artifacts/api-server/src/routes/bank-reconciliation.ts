@@ -1682,6 +1682,189 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
   } finally { client.release(); }
 });
 
+
+router.post("/bank-reconciliation/:mutationId/reject", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  const reason = textValue(req.body?.reason) ?? textValue(req.body?.note) ?? "Ditolak melalui rekonsiliasi bank.";
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const locked = await client.query<{ id:number; company_id:number|null; status:string; journal_entry_id:number|null }>(
+      `select id,company_id,status,journal_entry_id from public.bank_mutations where id=$1 for update`,
+      [mutationId],
+    );
+    const mutation = locked.rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan.",404,"NOT_FOUND");
+    if (actor.companyId != null && mutation.company_id !== actor.companyId) {
+      throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.",403,"COMPANY_SCOPE_FORBIDDEN");
+    }
+    if (!["unmatched","matched","manual_review","duplicate_need_review"].includes(mutation.status)) {
+      throw new ApprovalError(`Mutasi berstatus "${mutation.status}" tidak dapat ditolak.`,409,"INVALID_STATUS");
+    }
+    if (mutation.journal_entry_id != null) {
+      throw new ApprovalError("Mutasi sudah memiliki jurnal; batalkan draft atau reverse melalui lifecycle yang sesuai.",409,"JOURNAL_LINKED");
+    }
+    const finalMatch = await client.query<{id:number}>(
+      `select id from public.bank_reconciliation_matches where mutation_id=$1 and status in ('approved','posted') limit 1 for update`,
+      [mutationId],
+    );
+    if (finalMatch.rows[0]) throw new ApprovalError("Mutasi sudah memiliki final match.",409,"CONFLICT");
+    await client.query(
+      `update public.bank_reconciliation_matches set status='rejected'
+        where mutation_id=$1 and status='candidate'`,
+      [mutationId],
+    );
+    await client.query(
+      `update public.bank_mutations
+          set status='rejected',reconciliation_status='rejected',
+              review_code='MANUAL_REJECTED',review_reason=$2,updated_at=now()
+        where id=$1`,
+      [mutationId,reason],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'MATCH_REJECTED',$2,$3::jsonb)`,
+      [mutationId,actor.email,JSON.stringify({reason})],
+    );
+    await client.query("commit");
+    res.json({ok:true,status:"rejected"});
+  } catch(error) {
+    await client.query("rollback").catch(()=>{});
+    if(error instanceof ApprovalError){res.status(error.status).json({error:error.message,code:error.code??null});return;}
+    req.log.error({error,mutationId},"Bank reconciliation reject failed");
+    res.status(503).json({error:"Reject mutasi gagal",code:"BANK_RECONCILIATION_REJECT_FAILED"});
+  } finally { client.release(); }
+});
+
+router.post("/bank-reconciliation/:mutationId/reopen", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const locked = await client.query<{id:number;company_id:number|null;status:string;journal_entry_id:number|null}>(
+      `select id,company_id,status,journal_entry_id from public.bank_mutations where id=$1 for update`,
+      [mutationId],
+    );
+    const mutation=locked.rows[0];
+    if(!mutation) throw new ApprovalError("Mutasi tidak ditemukan.",404,"NOT_FOUND");
+    if(actor.companyId!=null&&mutation.company_id!==actor.companyId) throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.",403,"COMPANY_SCOPE_FORBIDDEN");
+    if(mutation.status!=="void") throw new ApprovalError("Hanya mutasi void yang dapat dibuka ulang.",409,"INVALID_STATUS");
+    if(mutation.journal_entry_id!=null){
+      const jr=await client.query<{status:string}>(`select status::text status from public.accounting_entries where id=$1 limit 1 for update`,[mutation.journal_entry_id]);
+      const js=String(jr.rows[0]?.status??"").toLowerCase();
+      if(js==="posted"||js==="draft") throw new ApprovalError("Jurnal masih aktif; reopen diblokir sampai reversal/void selesai.",409,"JOURNAL_STILL_ACTIVE");
+    }
+    const released=await client.query<{id:number}>(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and status='approved' returning id`,
+      [mutationId],
+    );
+    await client.query(
+      `update public.bank_mutations
+          set status='unmatched',reconciliation_status='unmatched',journal_entry_id=null,
+              accounting_posted=false,approved_by=null,approved_at=null,posted_at=null,
+              review_code=null,review_reason=null,updated_at=now()
+        where id=$1`,
+      [mutationId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'REOPENED',$2,$3::jsonb)`,
+      [mutationId,actor.email,JSON.stringify({released_approved_match_ids:released.rows.map(r=>r.id)})],
+    );
+    await client.query("commit");
+    res.json({ok:true,status:"unmatched",released_approved_match_ids:released.rows.map(r=>r.id)});
+  } catch(error) {
+    await client.query("rollback").catch(()=>{});
+    if(error instanceof ApprovalError){res.status(error.status).json({error:error.message,code:error.code??null});return;}
+    req.log.error({error,mutationId},"Bank reconciliation reopen failed");
+    res.status(503).json({error:"Reopen mutasi gagal",code:"BANK_RECONCILIATION_REOPEN_FAILED"});
+  } finally { client.release(); }
+});
+
+router.patch("/bank-reconciliation/qris-candidates/payments/:paymentId/date", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const paymentId = parsePositiveInt(req.params.paymentId);
+  const paymentDate = textValue(req.body?.paymentDate ?? req.body?.payment_date);
+  const requestedCompanyId = safeInteger(req.body?.companyId ?? req.body?.company_id);
+  if(paymentId===null){res.status(400).json({error:"ID payment Sport Center tidak valid",code:"INVALID_PAYMENT_ID"});return;}
+  if(!paymentDate||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(paymentDate)){res.status(400).json({error:"Tanggal payment harus berformat YYYY-MM-DD",code:"INVALID_PAYMENT_DATE"});return;}
+  if(actor.companyId!=null&&requestedCompanyId!=null&&actor.companyId!==requestedCompanyId){res.status(403).json({error:"Company context tidak sesuai",code:"COMPANY_CONTEXT_MISMATCH"});return;}
+  const companyId=requestedCompanyId??actor.companyId;
+  if(companyId==null){res.status(422).json({error:"Company context wajib dipilih",code:"COMPANY_SCOPE_REQUIRED"});return;}
+  const client=await pool.connect();
+  try{
+    await client.query("begin");
+    const source=await client.query<{id:number;company_id:number|null;status:string;payment_method:string|null;settlement_status:string|null;paid_at:string|null}>(
+      `select id,company_id,status::text status,payment_method::text payment_method,
+              settlement_status::text settlement_status,paid_at::text paid_at
+         from sport_center.sport_payments where id=$1 for update`,
+      [paymentId],
+    );
+    const payment=source.rows[0];
+    if(!payment) throw new ApprovalError("Payment Sport Center tidak ditemukan.",404,"PAYMENT_NOT_FOUND");
+    if((payment.company_id??companyId)!==companyId) throw new ApprovalError("Payment bukan milik perusahaan aktif.",403,"COMPANY_ACCESS_DENIED");
+    if(!String(payment.payment_method??"").toLowerCase().includes("qris")) throw new ApprovalError("Payment ini bukan QRIS.",409,"PAYMENT_NOT_QRIS");
+    if(!["confirmed","pending"].includes(String(payment.status??"").toLowerCase())) throw new ApprovalError("Tanggal hanya dapat diubah untuk payment confirmed/pending.",409,"PAYMENT_STATUS_NOT_EDITABLE");
+    if(String(payment.settlement_status??"unsettled").toLowerCase()!=="unsettled") throw new ApprovalError("Payment sudah masuk settlement; tanggal tidak boleh diubah melalui editor kandidat.",409,"PAYMENT_ALREADY_SETTLED");
+    const updated=await client.query(
+      `update sport_center.sport_payments
+          set paid_at=($2 || ' 00:00:00+07:00')::timestamptz,
+              expected_settlement_date=(($2::date + 1)::date)::text,
+              updated_at=now()
+        where id=$1
+      returning id,paid_at,expected_settlement_date,status::text status,settlement_status::text settlement_status`,
+      [paymentId,paymentDate],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values(null,'QRIS_PAYMENT_DATE_UPDATED',$1,$2::jsonb)`,
+      [actor.email,JSON.stringify({payment_id:paymentId,company_id:companyId,previous_paid_at:payment.paid_at,payment_date:paymentDate})],
+    );
+    await client.query("commit");
+    res.json({ok:true,payment:updated.rows[0],accounting:{requiresCorrectionWorkflow:false},candidateRefreshPending:false,message:"Tanggal payment dan expected settlement date berhasil diperbarui."});
+  }catch(error){
+    await client.query("rollback").catch(()=>{});
+    if(error instanceof ApprovalError){res.status(error.status).json({error:error.message,code:error.code??null});return;}
+    req.log.error({error,paymentId},"QRIS payment date update failed");
+    res.status(503).json({error:"Gagal memperbarui tanggal payment Sport Center",code:"PAYMENT_DATE_UPDATE_FAILED"});
+  }finally{client.release();}
+});
+
+router.post("/bank-reconciliation/qris-candidates/:candidateId/repair", async (req,res): Promise<void> => {
+  const actor=await getApprovalActor(req).catch(()=>null);
+  if(!actor){res.status(401).json({error:"Unauthorized"});return;}
+  const candidateId=parsePositiveInt(req.params.candidateId);
+  if(candidateId===null){res.status(400).json({error:"candidateId tidak valid",code:"INVALID_CANDIDATE_ID"});return;}
+  try{
+    const row=await pool.query<{mutation_id:number;company_id:number|null}>(
+      `select mutation_id,company_id from public.qris_mutation_batch_candidates where id=$1 limit 1`,
+      [candidateId],
+    );
+    const candidate=row.rows[0];
+    if(!candidate){res.status(404).json({error:"Kandidat QRIS tidak ditemukan",code:"QRIS_CANDIDATE_NOT_FOUND"});return;}
+    if(actor.companyId!=null&&candidate.company_id!=null&&actor.companyId!==candidate.company_id){res.status(403).json({error:"Company context tidak sesuai",code:"COMPANY_CONTEXT_MISMATCH"});return;}
+    await pool.query(
+      `update public.qris_mutation_batch_candidates
+          set status=case when lower(coalesce(status,'')) in ('approved','completed') then status else 'stale' end,
+              updated_at=now()
+        where id=$1`,
+      [candidateId],
+    );
+    res.json({ok:true,candidateId,mutationId:candidate.mutation_id,companyId:candidate.company_id,action:"regenerate_required"});
+  }catch(error){
+    req.log.error({error,candidateId},"QRIS candidate repair preparation failed");
+    res.status(503).json({error:"Repair kandidat QRIS gagal disiapkan",code:"QRIS_REPAIR_FAILED"});
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
