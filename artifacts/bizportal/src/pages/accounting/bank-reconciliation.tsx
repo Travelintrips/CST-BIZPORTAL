@@ -2846,8 +2846,8 @@ function AIActionCenter({
           <p className="mt-0.5 text-indigo-800/80 dark:text-indigo-200/80">
             1. Sync mutasi bank <span className="mx-1">→</span>
             2. Tunggu matching selesai <span className="mx-1">→</span>
-            3. Generate kandidat QRIS <span className="mx-1">→</span>
-            4. Review / approve QRIS
+            3. Review kandidat canonical <span className="mx-1">→</span>
+            4. Approve / posting sesuai kontrak
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
