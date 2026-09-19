@@ -15,14 +15,14 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--dir", ".upstream-cst-super-app/artifacts/api-server", "run", "build"]
+args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 APP_ENV = "production"
 
 [services.production.run]
-args = ["node", "--enable-source-maps", ".upstream-cst-super-app/artifacts/api-server/dist/index.mjs"]
+args = ["node", "--max-http-header-size=65536", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 
 [services.production.run.env]
 PORT = "8080"
