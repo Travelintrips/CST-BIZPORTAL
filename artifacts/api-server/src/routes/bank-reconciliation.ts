@@ -2984,6 +2984,104 @@ router.delete("/bank-reconciliation/purge-synced", async (req, res): Promise<voi
   }finally{client.release();}
 });
 
+
+router.patch("/bank-reconciliation/qris-candidates/payments/:paymentId/settlement-status", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const paymentId = parsePositiveInt(req.params.paymentId);
+  const requestedStatus = String(req.body?.settlementStatus ?? req.body?.settlement_status ?? "").trim().toLowerCase();
+  const reason = textValue(req.body?.reason);
+  const requestedCompanyId = safeInteger(req.body?.companyId ?? req.body?.company_id);
+  if (paymentId === null) { res.status(400).json({ error: "ID payment Sport Center tidak valid", code: "INVALID_PAYMENT_ID" }); return; }
+  if (requestedStatus !== "unsettled") { res.status(400).json({ error: "Aksi ini hanya dapat mengubah status menjadi unsettled", code: "INVALID_SETTLEMENT_STATUS" }); return; }
+  if (!reason || reason.length < 5 || reason.length > 500) { res.status(400).json({ error: "Alasan perubahan wajib diisi (5–500 karakter)", code: "INVALID_REASON" }); return; }
+  if (actor.companyId != null && requestedCompanyId != null && actor.companyId !== requestedCompanyId) {
+    res.status(403).json({ error: "Company context tidak sesuai", code: "COMPANY_CONTEXT_MISMATCH" }); return;
+  }
+  const companyId = requestedCompanyId ?? actor.companyId;
+  if (companyId == null) { res.status(422).json({ error: "Company context wajib dipilih", code: "COMPANY_SCOPE_REQUIRED" }); return; }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const sourceResult = await client.query<{
+      id: number;
+      company_id: number | null;
+      payment_method: string | null;
+      settlement_status: string | null;
+      provider_reference: string | null;
+      expected_settlement_date: string | null;
+    }>(
+      `select id,company_id,payment_method::text payment_method,
+              settlement_status::text settlement_status,provider_reference,
+              expected_settlement_date::text expected_settlement_date
+         from sport_center.sport_payments
+        where id=$1
+        for update`,
+      [paymentId],
+    );
+    const payment = sourceResult.rows[0];
+    if (!payment) throw new ApprovalError("Payment Sport Center tidak ditemukan.", 404, "PAYMENT_NOT_FOUND");
+    if ((payment.company_id ?? companyId) !== companyId) {
+      throw new ApprovalError("Payment bukan milik perusahaan aktif.", 403, "COMPANY_ACCESS_DENIED");
+    }
+    if (!String(payment.payment_method ?? "").toLowerCase().includes("qris")) {
+      throw new ApprovalError("Payment ini bukan payment QRIS.", 409, "PAYMENT_NOT_QRIS");
+    }
+    const previousStatus = String(payment.settlement_status ?? "unsettled").toLowerCase();
+    if (previousStatus === "unsettled") {
+      await client.query("commit");
+      res.json({ ok: true, changed: false, payment: { id: paymentId, settlement_status: "unsettled" }, candidateRefreshPending: false, message: "Payment sudah berstatus unsettled; tidak ada perubahan." });
+      return;
+    }
+
+    const activeSettlement = await client.query<{ settlement_id: number; settlement_batch_status: string }>(
+      `select item.settlement_id,batch.status::text settlement_batch_status
+         from sport_center.payment_settlement_items item
+         join sport_center.payment_settlement_batches batch on batch.id=item.settlement_id
+        where item.payment_id=$1
+          and item.item_status='active'
+        order by item.id
+        limit 1
+        for update of item,batch`,
+      [paymentId],
+    );
+    if (activeSettlement.rows[0]) {
+      throw new ApprovalError(
+        `Payment masih berada di settlement batch aktif #${activeSettlement.rows[0].settlement_id}; gunakan workflow de-link/reversal settlement terlebih dahulu.`,
+        409,
+        "ACTIVE_SETTLEMENT_EXISTS",
+        { settlement_id: activeSettlement.rows[0].settlement_id, settlement_status: activeSettlement.rows[0].settlement_batch_status },
+      );
+    }
+
+    const updated = await client.query<{ id: number; settlement_status: string }>(
+      `update sport_center.sport_payments
+          set settlement_status='unsettled',updated_at=now()
+        where id=$1
+        returning id,settlement_status::text settlement_status`,
+      [paymentId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values(null,'QRIS_PAYMENT_SETTLEMENT_RESET',$1,$2::jsonb)`,
+      [actor.email, JSON.stringify({ payment_id: paymentId, company_id: companyId, previous_status: previousStatus, reason })],
+    );
+    await client.query("commit");
+    res.json({ ok: true, changed: true, payment: updated.rows[0], candidateRefreshPending: false, message: "Status settlement payment berhasil diubah menjadi unsettled." });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({ error: error.message, code: error.code ?? null, ...(error.details ? { details: error.details } : {}) });
+      return;
+    }
+    req.log.error({ error, paymentId }, "QRIS settlement status reset failed");
+    res.status(503).json({ error: "Gagal memperbarui status settlement payment", code: "SETTLEMENT_STATUS_UPDATE_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
