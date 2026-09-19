@@ -25,6 +25,7 @@ jobs:
       SUPABASE_PG_URL: postgresql://ci:ci@127.0.0.1:65432/ci
       APP_ENV: development
       NODE_ENV: test
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Checkout
         uses: actions/checkout@v4
