@@ -1,3 +1,21 @@
+import { describe, expect, it } from "vitest";
+import { parseAmount } from "./bank-sheet-sync";
+
+describe("bank sheet amount parsing", () => {
+  it("treats Indonesian dot-separated thousands as whole rupiah", () => {
+    expect(parseAmount("685.170")).toBe(685170);
+    expect(parseAmount("1.234.567")).toBe(1234567);
+  });
+
+  it("preserves decimal values and mixed locale formatting", () => {
+    expect(parseAmount("685,17")).toBe(685.17);
+    expect(parseAmount("1.234,56")).toBe(1234.56);
+    expect(parseAmount("1,234.56")).toBe(1234.56);
+  });
+
+  it("handles currency labels and blank values", () => {
+    expect(parseAmount("Rp 1.234.567")).toBe(1234567);
+    expect(parseAmount("")).toBe(0);
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -233,6 +251,20 @@ describe("Google Sheet bank mutation sync", () => {
 
     await syncOneBankSheetConfig(config.id);
 
+  it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
+      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
+      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
+      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
+      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
+    ]);
+
+    const result = await syncOneBankSheetConfig(config.id);
+
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
     const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
       range: string;
       values: string[][];
@@ -245,6 +277,27 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!I2", values: [["98"]] },
       { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
       { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
+    const generatedCanonicalKey = updates.find(
+      (update) => update.range === "'Mutasi Bank'!E4",
+    )?.values[0]?.[0];
+
+    expect(result).toMatchObject({
+      imported: 2,
+      existing: 2,
+      total: 4,
+    });
+    expect(insertCalls).toHaveLength(2);
+    expect(storedMutations).toHaveLength(2);
+    expect(generatedCanonicalKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!E2", values: [["sheet-key-duplicate"]] },
+      { range: "'Mutasi Bank'!F2", values: [["UNMATCHED"]] },
+      { range: "'Mutasi Bank'!E3", values: [["sheet-key-duplicate"]] },
+      { range: "'Mutasi Bank'!F3", values: [["UNMATCHED"]] },
+      { range: "'Mutasi Bank'!E4", values: [[generatedCanonicalKey]] },
+      { range: "'Mutasi Bank'!F4", values: [["UNMATCHED"]] },
+      { range: "'Mutasi Bank'!E5", values: [[generatedCanonicalKey]] },
+      { range: "'Mutasi Bank'!F5", values: [["UNMATCHED"]] },
     ]));
   });
 });

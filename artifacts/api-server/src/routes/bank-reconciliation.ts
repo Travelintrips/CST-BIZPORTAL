@@ -599,6 +599,930 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function queryString(value: unknown): string | null {
+  if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : null;
+  return typeof value === "string" ? value : null;
+}
+
+const MUTATION_STATUSES = new Set([
+  "unmatched",
+  "matched",
+  "manual_review",
+  "duplicate_need_review",
+  "approved_pending_posting",
+  "approved",
+  "posted",
+  "rejected",
+  "void",
+]);
+
+function buildMutationFilters(req: Request): { where: string; values: unknown[]; companyId: number | null } {
+  const values: unknown[] = [];
+  const filters = ["true"];
+  const rawCompanyId = queryString(req.query.company_id)
+    ?? queryString(req.query.companyId)
+    ?? queryString(req.query.company);
+  const companyId = rawCompanyId === null || rawCompanyId === "" || rawCompanyId === "all"
+    ? null
+    : parsePositiveInt(rawCompanyId);
+
+  if (rawCompanyId !== null && rawCompanyId !== "" && rawCompanyId !== "all" && companyId === null) {
+    throw new Error("INVALID_COMPANY");
+  }
+  if (companyId !== null) {
+    values.push(companyId);
+    filters.push(`bm.company_id = $${values.length}`);
+  }
+
+  const status = queryString(req.query.status);
+  if (status && status !== "all") {
+    if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
+    values.push(status);
+    filters.push(`bm.status = $${values.length}`);
+  }
+
+  const direction = queryString(req.query.direction);
+  if (direction && direction !== "all") {
+    const normalizedDirection = direction.toUpperCase();
+    if (!["IN", "OUT"].includes(normalizedDirection)) throw new Error("INVALID_DIRECTION");
+    values.push(normalizedDirection);
+    filters.push(`bm.direction = $${values.length}`);
+  }
+
+  const provider = queryString(req.query.provider);
+  if (provider && provider !== "all") {
+    values.push(provider);
+    filters.push(`bm.provider_name = $${values.length}`);
+  }
+
+  const bankAccountId = queryString(req.query.bank_account_id);
+  if (bankAccountId && bankAccountId !== "all") {
+    values.push(bankAccountId);
+    filters.push(`bm.bank_account_id::text = $${values.length}`);
+  }
+
+  const from = queryString(req.query.from);
+  if (from) {
+    values.push(from);
+    filters.push(`bm.transaction_date >= $${values.length}::date`);
+  }
+
+  const to = queryString(req.query.to);
+  if (to) {
+    values.push(to);
+    filters.push(`bm.transaction_date <= $${values.length}::date`);
+  }
+
+  const search = queryString(req.query.search)?.trim();
+  if (search) {
+    values.push(`%${search}%`);
+    const placeholder = `$${values.length}`;
+    filters.push(`(
+      bm.description ilike ${placeholder}
+      or bm.mutation_key ilike ${placeholder}
+      or coalesce(bm.provider_order_id, '') ilike ${placeholder}
+      or coalesce(bm.source_account, '') ilike ${placeholder}
+    )`);
+  }
+
+  return { where: filters.join(" and "), values, companyId };
+}
+
+const mutationListColumns = `
+  bm.id,
+  bm.company_id,
+  bm.transaction_date,
+  bm.description,
+  bm.credit_amount,
+  bm.debit_amount,
+  bm.amount,
+  upper(bm.direction) as direction,
+  bm.mutation_key,
+  bm.normalized_description,
+  bm.provider_name,
+  bm.provider_order_id,
+  bm.status,
+  bm.matched_payment_id,
+  bm.matched_order_id,
+  bm.uploaded_proof_url,
+  bm.source,
+  bm.import_batch_id,
+  bm.reconciliation_status,
+  bm.linked_transaction_type,
+  bm.linked_transaction_id,
+  bm.journal_entry_id,
+  (
+    select coalesce(json_agg(json_build_object(
+      'id', match.id,
+      'mutation_id', match.mutation_id,
+      'candidate_type', match.candidate_type,
+      'candidate_id', match.candidate_id,
+      'candidate_source', match.candidate_source,
+      'match_score', match.match_score,
+      'match_reason', match.match_reason,
+      'amount_match', match.amount_match,
+      'date_match', match.date_match,
+      'name_match', match.name_match,
+      'order_id_match', match.order_id_match,
+      'proof_match', match.proof_match,
+      'status', match.status,
+      'customer_name', match.customer_name,
+      'order_ref', match.order_ref
+    ) order by match.match_score desc nulls last, match.id), '[]'::json)
+    from public.bank_reconciliation_matches match
+    where match.mutation_id = bm.id
+  ) as candidates,
+  exists (
+    select 1
+    from public.bank_reconciliation_matches approved_match
+    where approved_match.mutation_id = bm.id
+      and approved_match.status = 'approved'
+  ) as has_approved_match,
+  (
+    select coalesce(json_agg(json_build_object(
+      'id', qris.id,
+      'mutation_id', qris.mutation_id,
+      'company_id', qris.company_id,
+      'provider_code', qris.provider_code,
+      'mutation_source_classification', qris.mutation_source_classification,
+      'source_date', qris.source_date,
+      'estimated_settlement_date', qris.estimated_settlement_date,
+      'gross_amount', qris.gross_amount,
+      'net_amount', qris.net_amount,
+      'observed_deduction', qris.observed_deduction,
+      'effective_deduction_rate', qris.effective_deduction_rate,
+      'reconciliation_status', qris.reconciliation_status,
+      'confidence', qris.confidence,
+      'review_reason', qris.review_reason,
+      'payment_items', qris.payment_items,
+      'candidate_source', qris.candidate_source,
+      'status', qris.status,
+      'auto_post_status', qris.auto_post_status,
+      'auto_post_stage', qris.auto_post_stage,
+      'auto_post_problem', qris.auto_post_problem,
+      'auto_post_revision', qris.auto_post_revision,
+      'auto_post_action', qris.auto_post_action,
+      'auto_post_details', qris.auto_post_details
+    ) order by qris.updated_at desc nulls last, qris.id desc), '[]'::json)
+    from public.qris_mutation_batch_candidates qris
+    where qris.mutation_id = bm.id
+      and lower(coalesce(qris.status, '')) in (
+        'candidate_auto_matched',
+        'candidate_review',
+        'approved',
+        'partial',
+        'completed'
+      )
+  ) as qris_candidate_audits,
+  (
+    select json_build_object(
+      'id', qris.id,
+      'mutation_id', qris.mutation_id,
+      'company_id', qris.company_id,
+      'provider_code', qris.provider_code,
+      'mutation_source_classification', qris.mutation_source_classification,
+      'source_date', qris.source_date,
+      'estimated_settlement_date', qris.estimated_settlement_date,
+      'gross_amount', qris.gross_amount,
+      'net_amount', qris.net_amount,
+      'observed_deduction', qris.observed_deduction,
+      'effective_deduction_rate', qris.effective_deduction_rate,
+      'reconciliation_status', qris.reconciliation_status,
+      'confidence', qris.confidence,
+      'review_reason', qris.review_reason,
+      'payment_items', qris.payment_items,
+      'candidate_source', qris.candidate_source,
+      'status', qris.status,
+      'auto_post_status', qris.auto_post_status,
+      'auto_post_stage', qris.auto_post_stage,
+      'auto_post_problem', qris.auto_post_problem,
+      'auto_post_revision', qris.auto_post_revision,
+      'auto_post_action', qris.auto_post_action,
+      'auto_post_details', qris.auto_post_details
+    )
+    from public.qris_mutation_batch_candidates qris
+    where qris.mutation_id = bm.id
+      and lower(coalesce(qris.status, '')) in (
+        'candidate_auto_matched',
+        'candidate_review',
+        'approved',
+        'partial',
+        'completed'
+      )
+    order by qris.updated_at desc nulls last, qris.id desc
+    limit 1
+  ) as qris_candidate_audit
+`;
+
+const qrisCandidateColumns = `
+  qris.id,
+  qris.mutation_id,
+  qris.company_id,
+  qris.provider_code,
+  qris.mutation_source_classification,
+  qris.source_date,
+  qris.estimated_settlement_date,
+  qris.gross_amount,
+  qris.net_amount,
+  qris.observed_deduction,
+  qris.effective_deduction_rate,
+  qris.reconciliation_status,
+  qris.confidence,
+  qris.review_reason,
+  qris.payment_items,
+  qris.candidate_source,
+  qris.status,
+  qris.auto_post_status,
+  qris.auto_post_stage,
+  qris.auto_post_problem,
+  qris.auto_post_revision,
+  qris.auto_post_action,
+  qris.auto_post_details,
+  qris.generated_at,
+  qris.updated_at
+`;
+
+function qrisCandidateResponse(row: Record<string, unknown>): Record<string, unknown> {
+  const paymentItems = Array.isArray(row.payment_items) ? row.payment_items : [];
+  const paymentIds = paymentItems
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const value = item as Record<string, unknown>;
+      const id = Number(value.paymentId ?? value.payment_id);
+      return Number.isSafeInteger(id) && id > 0 ? id : null;
+    })
+    .filter((id): id is number => id != null);
+
+  return {
+    ...row,
+    payment_items: paymentItems,
+    current_payment_ids: paymentIds,
+    current_payment_amounts: Object.fromEntries(
+      paymentItems.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const value = item as Record<string, unknown>;
+        const id = Number(value.paymentId ?? value.payment_id);
+        const amount = value.grossAmount ?? value.gross_amount;
+        return Number.isSafeInteger(id) && id > 0 && amount != null
+          ? [[String(id), amount]]
+          : [];
+      }),
+    ),
+  };
+}
+
+async function listQrisCanonicalSettlements(
+  companyId: number | null,
+  includeCompleted: boolean,
+  limit: number,
+): Promise<Record<string, unknown>[]> {
+  const values: unknown[] = [];
+  const filters = ["ebs.settlement_status in ('posted', 'reconciled')"];
+  if (companyId !== null) {
+    values.push(companyId);
+    filters.push(`ebs.company_id = $${values.length}`);
+  }
+  if (!includeCompleted) {
+    filters.push("ebs.settlement_status = 'posted'");
+    filters.push("ebs.bank_mutation_id is null");
+  }
+  values.push(Math.min(Math.max(limit, 1), 500));
+
+  const result = await pool.query(
+    `select
+       ebs.settlement_id as id,
+       ebs.settlement_id as "candidateId",
+       'sport_center.payment_settlement_batches' as "candidateSource",
+       ebs.settlement_reference,
+       ebs.settlement_date,
+       ebs.settlement_status,
+       ebs.provider_code,
+       ebs.provider_name,
+       ebs.company_id,
+       ebs.gross_amount,
+       ebs.mdr_amount,
+       ebs.expected_bank_amount,
+       ebs.settlement_journal_id,
+       ebs.bank_mutation_id,
+       case
+         when ebs.settlement_status = 'reconciled' or ebs.bank_mutation_id is not null
+           then 'completed'
+         else 'active'
+       end as queue_status,
+       coalesce((
+         select json_agg(json_build_object(
+           'paymentId', psi.payment_id,
+           'grossAmount', psi.gross_amount,
+           'itemStatus', psi.item_status
+         ) order by psi.payment_id)
+         from sport_center.payment_settlement_items psi
+         where psi.settlement_id = ebs.settlement_id
+       ), '[]'::json) as payment_items,
+       bm.status as bank_status,
+       bm.transaction_date as bank_transaction_date,
+       bm.amount as bank_amount,
+       bm.description as bank_description
+     from sport_center.expected_bank_settlements ebs
+     left join public.bank_mutations bm on bm.id = ebs.bank_mutation_id
+     where ${filters.join(" and ")}
+     order by ebs.settlement_date desc nulls last, ebs.settlement_id desc
+     limit $${values.length}`,
+    values,
+  );
+  return result.rows;
+}
+
+router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<void> => {
+  try {
+    const rawCompanyId = queryString(req.query.companyId)
+      ?? queryString(req.query.company_id)
+      ?? queryString(req.query.company);
+    const companyId = rawCompanyId === null || rawCompanyId === "" || rawCompanyId === "all"
+      ? null
+      : parsePositiveInt(rawCompanyId);
+    if (rawCompanyId !== null && rawCompanyId !== "" && rawCompanyId !== "all" && companyId === null) {
+      res.status(400).json({ error: "companyId tidak valid", code: "INVALID_COMPANY_ID" });
+      return;
+    }
+
+    const requestedLimit = Number(queryString(req.query.limit) ?? 100);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 500)
+      : 100;
+    const includeCompleted = String(queryString(req.query.includeCompleted) ?? "")
+      .toLowerCase() === "true";
+    const requestedStatus = String(queryString(req.query.status) ?? "ALL").toUpperCase();
+    const values: unknown[] = [];
+    const filters = ["true"];
+    if (companyId !== null) {
+      values.push(companyId);
+      filters.push(`qris.company_id = $${values.length}`);
+    }
+    if (requestedStatus !== "ALL") {
+      const allowedStatuses = new Set(["MATCHED", "REVIEW", "UNMATCHED", "APPROVED", "RECONCILED"]);
+      if (!allowedStatuses.has(requestedStatus)) {
+        res.status(400).json({ error: "Status kandidat QRIS tidak valid", code: "INVALID_QRIS_STATUS" });
+        return;
+      }
+      values.push(requestedStatus);
+      filters.push(`upper(coalesce(qris.reconciliation_status, '')) = $${values.length}`);
+    }
+    if (!includeCompleted) {
+      filters.push(`lower(coalesce(qris.status, '')) not in ('approved', 'completed', 'superseded', 'stale')`);
+    }
+    values.push(limit);
+
+    const result = await pool.query(
+      `select ${qrisCandidateColumns}
+         from public.qris_mutation_batch_candidates qris
+        where ${filters.join(" and ")}
+        order by qris.source_date desc nulls last, qris.updated_at desc nulls last, qris.id desc
+        limit $${values.length}`,
+      values,
+    );
+
+    let canonicalSettlements: Record<string, unknown>[] = [];
+    try {
+      canonicalSettlements = await listQrisCanonicalSettlements(
+        companyId,
+        includeCompleted,
+        limit,
+      );
+    } catch (error) {
+      // Older local databases can have the provisional candidate table before
+      // the canonical queue view. Candidate review must still be available;
+      // the queue is additive display data, never an approval fallback.
+      req.log.warn({ error }, "Canonical QRIS settlement queue unavailable");
+    }
+
+    res.json({
+      mode: "local_qris_candidate_review",
+      automaticFinalReconciliation: false,
+      automaticMatch: false,
+      canonicalSettlements,
+      candidates: result.rows.map((row) => qrisCandidateResponse(row)),
+    });
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    req.log.error({ error }, "Failed to load local QRIS candidates");
+    res.status(code === "42P01" ? 503 : 500).json({
+      error: code === "42P01"
+        ? "Schema kandidat QRIS lokal belum tersedia."
+        : "Kandidat QRIS tidak dapat dimuat",
+      code: code === "42P01" ? "QRIS_SCHEMA_UNAVAILABLE" : "QRIS_CANDIDATES_UNAVAILABLE",
+    });
+  }
+});
+
+router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): Promise<void> => {
+  let actor: ApprovalActor | null;
+  try {
+    actor = await getApprovalActor(req);
+  } catch (error) {
+    req.log.error({ error }, "Failed to resolve QRIS generation actor");
+    res.status(503).json({ error: "Authorization service unavailable" });
+    return;
+  }
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const rawCompanyId = req.body?.companyId ?? req.body?.company_id ?? actor.companyId;
+  const companyId = rawCompanyId == null || rawCompanyId === "" ? null : safeInteger(rawCompanyId);
+  const rawMutationId = req.body?.mutationId ?? req.body?.mutation_id;
+  const mutationId = rawMutationId == null || rawMutationId === "" ? null : safeInteger(rawMutationId);
+  if (rawCompanyId != null && companyId == null) {
+    res.status(400).json({ error: "companyId tidak valid", code: "INVALID_COMPANY_ID" });
+    return;
+  }
+  if (rawMutationId != null && mutationId == null) {
+    res.status(400).json({ error: "mutationId kandidat QRIS tidak valid", code: "INVALID_QRIS_MUTATION_ID" });
+    return;
+  }
+  if (actor.companyId != null && companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Company context tidak sesuai", code: "COMPANY_CONTEXT_MISMATCH" });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutationResult = await client.query<{
+      id: number;
+      company_id: number | null;
+      transaction_date: string;
+      amount: string;
+      description: string | null;
+      provider_name: string | null;
+      bank_account_id: number | null;
+    }>(
+      `select id, company_id, transaction_date, amount, description, provider_name, bank_account_id
+         from public.bank_mutations
+        where ($1::int is null or company_id = $1)
+          and ($2::int is null or id = $2)
+          and upper(direction) = 'IN'
+          and (
+            lower(coalesce(provider_name, '')) like '%qris%'
+            or lower(coalesce(description, '')) like '%qris%'
+            or lower(coalesce(description, '')) like '%paylabs%'
+          )
+        order by transaction_date desc, id desc
+        limit 500
+        for update`,
+      [companyId, mutationId],
+    );
+
+    const generated: Record<string, unknown>[] = [];
+    for (const mutation of mutationResult.rows) {
+      const paymentResult = await client.query(
+        `select
+           sp.id,
+           sp.amount,
+           sp.status,
+           sp.paid_at,
+           sp.payment_number,
+           sp.method,
+           coalesce(
+             nullif(to_jsonb(sp)->>'provider_name', ''),
+             nullif(to_jsonb(sp)->>'provider', '')
+           ) as provider_name,
+           case
+             when coalesce(to_jsonb(sp)->>'mdr_amount', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+               then (to_jsonb(sp)->>'mdr_amount')::numeric
+             else 0
+           end as mdr_amount
+         from public.sport_payments sp
+        where sp.company_id = $1
+          and lower(coalesce(sp.method, '')) like '%qris%'
+          and lower(coalesce(sp.status, '')) = 'confirmed'
+          and sp.paid_at::date = $2::date - 1
+        order by sp.id`,
+        [mutation.company_id, mutation.transaction_date],
+      );
+      const payments = paymentResult.rows;
+      const grossAmount = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      const mdrAmount = payments.reduce((sum, payment) => sum + Number(payment.mdr_amount || 0), 0);
+      const netAmount = Number(mutation.amount);
+      const difference = Math.abs(grossAmount - mdrAmount - netAmount);
+      const status = payments.length === 0
+        ? "UNMATCHED"
+        : difference <= 0.5 ? "MATCHED" : "REVIEW";
+      const candidateStatus = status === "MATCHED" ? "candidate_auto_matched" : "candidate_review";
+      const paymentItems = payments.map((payment) => ({
+        paymentId: Number(payment.id),
+        grossAmount: Number(payment.amount),
+        paymentStatus: payment.status,
+        settlementStatus: "unsettled",
+        providerName: payment.provider_name,
+        paymentNumber: payment.payment_number,
+        paidAt: payment.paid_at,
+        expectedSettlementDate: mutation.transaction_date,
+      }));
+      const reviewReason = payments.length === 0
+        ? "Belum ditemukan payment QRIS confirmed dengan paid_at H-1."
+        : status === "MATCHED"
+          ? "Gross payment dikurangi MDR sesuai dengan nominal mutasi bank."
+          : `Selisih gross dikurangi MDR dengan mutasi bank: ${difference.toFixed(2)}.`;
+
+      const existing = await client.query<{ id: number; status: string }>(
+        `select id, status
+           from public.qris_mutation_batch_candidates
+          where mutation_id = $1
+          order by id desc
+          limit 1
+          for update`,
+        [mutation.id],
+      );
+      const existingRow = existing.rows[0];
+      if (existingRow && ["approved", "completed"].includes(String(existingRow.status).toLowerCase())) {
+        generated.push({ id: existingRow.id, mutation_id: mutation.id, status: existingRow.status });
+        continue;
+      }
+
+      const values = [
+        mutation.id,
+        mutation.company_id,
+        mutation.bank_account_id,
+        mutation.transaction_date,
+        mutation.transaction_date,
+        "unknown",
+        "payment_source",
+        "payment-method-h-minus-one-v1",
+        "actual_bank_mutation",
+        grossAmount,
+        mdrAmount,
+        netAmount,
+        JSON.stringify(paymentItems),
+        candidateStatus,
+        status,
+        payments.length > 0 && difference <= 0.5 ? 1 : payments.length > 0 ? 0.6 : 0,
+        Math.max(0, grossAmount - mdrAmount),
+        grossAmount > 0 ? mdrAmount / grossAmount : null,
+        reviewReason,
+      ];
+      let saved;
+      if (existingRow) {
+        saved = await client.query(
+          `update public.qris_mutation_batch_candidates
+              set company_id = $2,
+                  bank_account_id = $3,
+                  source_date = $4,
+                  estimated_settlement_date = $5,
+                  provider_code = $6,
+                  provider_detection_source = $7,
+                  settlement_rule_version = $8,
+                  mutation_source_classification = $9,
+                  gross_amount = $10,
+                  mdr_amount = $11,
+                  net_amount = $12,
+                  payment_items = $13::jsonb,
+                  status = $14,
+                  reconciliation_status = $15,
+                  confidence = $16,
+                  observed_deduction = $17,
+                  effective_deduction_rate = $18,
+                  review_reason = $19,
+                  generated_at = now(),
+                  updated_at = now()
+            where id = $1
+          returning id, mutation_id, status, reconciliation_status`,
+          [existingRow.id, ...values.slice(1)],
+        );
+      } else {
+        saved = await client.query(
+          `insert into public.qris_mutation_batch_candidates
+            (mutation_id, company_id, bank_account_id, source_date,
+             estimated_settlement_date, provider_code, provider_detection_source,
+             settlement_rule_version, mutation_source_classification,
+             gross_amount, mdr_amount, net_amount, payment_items, status,
+             reconciliation_status, confidence, observed_deduction,
+             effective_deduction_rate, review_reason)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                   $13::jsonb, $14, $15, $16, $17, $18, $19)
+           returning id, mutation_id, status, reconciliation_status`,
+          values,
+        );
+      }
+      generated.push(saved.rows[0] ?? { mutation_id: mutation.id, status });
+    }
+    await client.query("commit");
+    res.json({
+      ok: true,
+      mode: "strict_h_minus_one_local",
+      generated: generated.length,
+      persisted: generated.length,
+      reviewable: generated.filter((candidate) =>
+        ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status)),
+      ).length,
+      candidates: generated,
+      actor: actor.email,
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    const code = (error as { code?: string }).code;
+    req.log.error({ error }, "Failed to generate local QRIS candidates");
+    res.status(code === "42P01" ? 503 : 500).json({
+      error: code === "42P01" ? "Schema kandidat QRIS lokal belum tersedia." : "Kandidat QRIS tidak dapat dibuat",
+      code: code === "42P01" ? "QRIS_SCHEMA_UNAVAILABLE" : "QRIS_CANDIDATE_GENERATION_FAILED",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (req, res): Promise<void> => {
+  const candidateId = parsePositiveInt(req.params.candidateId);
+  if (candidateId === null) {
+    res.status(400).json({ error: "candidateId tidak valid", code: "INVALID_CANDIDATE_ID" });
+    return;
+  }
+
+  let actor: ApprovalActor | null;
+  try {
+    actor = await getApprovalActor(req);
+  } catch (error) {
+    req.log.error({ error }, "Failed to resolve QRIS approval actor");
+    res.status(503).json({ error: "Authorization service unavailable" });
+    return;
+  }
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const requestedMutationId = safeInteger(req.body?.mutationId ?? req.body?.mutation_id);
+  const requestedCompanyId = safeInteger(req.body?.companyId ?? req.body?.company_id);
+  const paymentIdsInput = Array.isArray(req.body?.paymentIds) ? req.body.paymentIds : null;
+  const manualOverride = req.body?.manual_override === true;
+  const overrideReason = textValue(req.body?.override_reason);
+  if (paymentIdsInput?.some((value: unknown) => safeInteger(value) === null)) {
+    res.status(422).json({ error: "Payment ID kandidat QRIS tidak valid", code: "INVALID_PAYMENT_SCOPE" });
+    return;
+  }
+  if (manualOverride && (!overrideReason || overrideReason.length < 10)) {
+    res.status(422).json({
+      error: "Alasan manual override minimal 10 karakter.",
+      code: "MANUAL_OVERRIDE_REASON_REQUIRED",
+    });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const candidateResult = await client.query<{
+      id: number;
+      mutation_id: number;
+      company_id: number | null;
+      status: string | null;
+      reconciliation_status: string | null;
+      net_amount: string | null;
+      observed_deduction: string | null;
+      payment_items: unknown;
+      mutation_status: string;
+      mutation_amount: string;
+      mutation_direction: string;
+      mutation_company_id: number | null;
+      mutation_journal_entry_id: number | null;
+    }>(
+      `select qris.id,
+              qris.mutation_id,
+              qris.company_id,
+              qris.status,
+              qris.reconciliation_status,
+              qris.net_amount,
+              qris.observed_deduction,
+              qris.payment_items,
+              bm.status as mutation_status,
+              bm.amount as mutation_amount,
+              bm.direction as mutation_direction,
+              bm.company_id as mutation_company_id,
+              bm.journal_entry_id as mutation_journal_entry_id
+         from public.qris_mutation_batch_candidates qris
+         join public.bank_mutations bm on bm.id = qris.mutation_id
+        where qris.id = $1
+        for update of qris, bm`,
+      [candidateId],
+    );
+    const candidate = candidateResult.rows[0];
+    if (!candidate) {
+      throw new ApprovalError("Kandidat QRIS tidak ditemukan.", 404, "NOT_FOUND");
+    }
+    if (requestedMutationId != null && requestedMutationId !== candidate.mutation_id) {
+      throw new ApprovalError("Kandidat QRIS bukan milik mutasi yang dikirim.", 409, "MUTATION_SCOPE_MISMATCH");
+    }
+    if (requestedCompanyId != null && requestedCompanyId !== candidate.company_id) {
+      throw new ApprovalError("Kandidat QRIS bukan milik company yang dikirim.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+    if (candidate.company_id == null || candidate.mutation_company_id !== candidate.company_id) {
+      throw new ApprovalError("Kandidat QRIS tidak memiliki company scope yang valid.", 422, "COMPANY_SCOPE_REQUIRED");
+    }
+    if (actor.companyId != null && actor.companyId !== candidate.company_id) {
+      throw new ApprovalError("Kandidat QRIS berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+    if (String(candidate.mutation_direction).toUpperCase() !== "IN") {
+      throw new ApprovalError("Settlement QRIS hanya dapat ditautkan ke mutasi IN.", 422, "INVALID_DIRECTION");
+    }
+    if (["approved", "completed"].includes(String(candidate.status ?? "").toLowerCase())) {
+      if (candidate.mutation_journal_entry_id == null) {
+        throw new ApprovalError("Kandidat sudah approved tetapi jurnal mutasi belum tersedia.", 409, "APPROVAL_STATE_INVALID");
+      }
+      await client.query("commit");
+      res.json({
+        ok: true,
+        candidateId,
+        mutationId: candidate.mutation_id,
+        journal_entry_id: candidate.mutation_journal_entry_id,
+        idempotent: true,
+      });
+      return;
+    }
+
+    const reconciliationStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
+    if (reconciliationStatus !== "MATCHED" && !manualOverride) {
+      throw new ApprovalError(
+        "Kandidat QRIS belum MATCHED. Review manual wajib memiliki override eksplisit.",
+        422,
+        "CANDIDATE_NOT_ELIGIBLE",
+      );
+    }
+
+    const rawItems = Array.isArray(candidate.payment_items) ? candidate.payment_items : [];
+    const itemIds = rawItems
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const value = item as Record<string, unknown>;
+        return safeInteger(value.paymentId ?? value.payment_id);
+      })
+      .filter((id): id is number => id != null);
+    if (itemIds.length === 0 || new Set(itemIds).size !== itemIds.length) {
+      throw new ApprovalError("Kandidat QRIS tidak memiliki payment scope yang valid.", 422, "INVALID_PAYMENT_SCOPE");
+    }
+    const requestedPaymentIds: number[] = (paymentIdsInput ?? itemIds)
+      .map((value: unknown) => safeInteger(value)!)
+      .sort((a: number, b: number) => a - b);
+    const expectedPaymentIds = [...itemIds].sort((a: number, b: number) => a - b);
+    if (
+      requestedPaymentIds.length !== expectedPaymentIds.length
+      || requestedPaymentIds.some((id: number, index: number) => id !== expectedPaymentIds[index])
+    ) {
+      throw new ApprovalError(
+        "Approval QRIS parsial diblokir sampai settlement canonical menyediakan scope parsial.",
+        409,
+        "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
+      );
+    }
+
+    const candidateNet = Number(candidate.net_amount);
+    const mutationAmount = Number(candidate.mutation_amount);
+    if (
+      !Number.isFinite(candidateNet)
+      || !Number.isFinite(mutationAmount)
+      || candidateNet < 0
+      || Math.abs(candidateNet - mutationAmount) > 0.5
+    ) {
+      throw new ApprovalError(
+        "Nominal kandidat QRIS tidak sama dengan nominal mutasi bank.",
+        422,
+        "AMOUNT_MISMATCH",
+      );
+    }
+
+    const approval = await approveBankMutation(
+      client,
+      candidate.mutation_id,
+      {
+        candidate_type: "qris_settlement",
+        candidate_id: candidateId,
+        candidate_source: "local.qris_mutation_batch_candidates",
+        note: manualOverride ? overrideReason : "QRIS candidate MATCHED",
+      },
+      actor,
+      textValue(req.header("x-idempotency-key")),
+    );
+    await client.query(
+      `update public.qris_mutation_batch_candidates
+          set status = 'approved',
+              reconciliation_status = 'MATCHED',
+              review_reason = $2,
+              updated_at = now()
+        where id = $1`,
+      [candidateId, manualOverride ? overrideReason : "Kandidat QRIS disetujui melalui approval lokal."],
+    );
+    await client.query("commit");
+    res.status(201).json({
+      ok: true,
+      candidateId,
+      mutationId: candidate.mutation_id,
+      itemCount: itemIds.length,
+      partial: false,
+      ...approval,
+    });
+  } catch (error) {
+    await client.query("rollback").catch((rollbackError) => {
+      req.log.warn({ rollbackError }, "QRIS approval rollback failed");
+    });
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.code === "JOURNAL_MAPPING_REQUIRED" || error.code === "COA_NOT_FOUND"
+          ? { manual_review_required: true }
+          : {}),
+      });
+      return;
+    }
+    const code = (error as { code?: string }).code;
+    req.log.error({ error, candidateId }, "Local QRIS candidate approval failed");
+    res.status(code === "42P01" ? 503 : 500).json({
+      error: code === "42P01"
+        ? "Schema kandidat QRIS lokal belum tersedia."
+        : "Approval kandidat QRIS gagal",
+      code: code === "42P01" ? "QRIS_SCHEMA_UNAVAILABLE" : "QRIS_APPROVAL_FAILED",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => {
+  try {
+    const { where, values } = buildMutationFilters(req);
+    const requestedLimit = parsePositiveInt(queryString(req.query.limit));
+    const requestedOffset = Number(queryString(req.query.offset) ?? 0);
+    const limit = Math.min(requestedLimit ?? 20, 1_000);
+    const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+
+    const countResult = await pool.query<{ total: string }>(
+      `select count(*)::text as total
+         from public.bank_mutations bm
+        where ${where}`,
+      values,
+    );
+    const listValues = [...values, limit, offset];
+    const result = await pool.query(
+      `select ${mutationListColumns}
+         from public.bank_mutations bm
+        where ${where}
+        order by bm.transaction_date desc nulls last, bm.id desc
+        limit $${listValues.length - 1}
+       offset $${listValues.length}`,
+      listValues,
+    );
+
+    res.json({
+      mutations: result.rows,
+      total: Number(countResult.rows[0]?.total ?? 0),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "company_id tidak valid" });
+      return;
+    }
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+      res.status(400).json({ error: "Filter mutasi tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to load bank mutations");
+    res.status(503).json({
+      error: "Mutasi bank tidak dapat dimuat",
+      code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+    });
+  }
+});
+
+router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
+  try {
+    const { where, values } = buildMutationFilters(req);
+    const result = await pool.query(
+      `select bm.status, count(*)::text as count, coalesce(sum(bm.amount), 0)::text as total_amount
+         from public.bank_mutations bm
+        where ${where}
+        group by bm.status
+        order by bm.status`,
+      values,
+    );
+    res.json({ summary: result.rows });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "INVALID_COMPANY") {
+      res.status(400).json({ error: "company_id tidak valid" });
+      return;
+    }
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+      res.status(400).json({ error: "Filter mutasi tidak valid" });
+      return;
+    }
+    req.log.error({ error }, "Failed to load bank mutation summary");
+    res.status(503).json({
+      error: "Ringkasan mutasi bank tidak dapat dimuat",
+      code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+    });
+  }
+});
+
 function normalizeInput(body: unknown): SheetConfigInput {
   if (!body || typeof body !== "object") return {};
   const value = body as Record<string, unknown>;
