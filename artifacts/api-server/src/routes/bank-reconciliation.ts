@@ -186,14 +186,14 @@ async function loadLocalMatchCandidates(
                   )) as normalized_method
              from sport_center.sport_payments sp
              left join sport_center.sport_bookings sb on sb.id = sp.booking_id
-            where sp.company_id = $1
+            where coalesce(sp.company_id, sb.company_id) = $1
               and lower(coalesce(sp.status::text, '')) in
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
          ),
          grouped as (
            select
              min(sp.id)::bigint as id,
-             sum(sp.amount::numeric) as amount,
+             max(sp.amount::numeric) as amount,
              min((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date)::text as paid_date,
              coalesce(
                max(nullif(btrim(sp.provider_order_id::text), '')),
