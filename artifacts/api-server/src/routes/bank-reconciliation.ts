@@ -440,16 +440,31 @@ async function loadLocalMatchCandidates(
         grand_total: string;
         due_date: string | null;
       }>(
-        `select vi.id,
+        `with canonical_invoice_payments as (
+           select pa.invoice_id,
+                  sum(coalesce(pa.allocated_amount, 0))::numeric as canonical_paid
+             from public.payment_allocations pa
+             join public.payment_matching_groups pmg on pmg.id = pa.group_id
+             join public.bank_mutations paid_bm
+               on paid_bm.id = pa.mutation_id
+              and paid_bm.company_id = pa.company_id
+            where pa.company_id = $1
+              and pa.mutation_id is not null
+              and coalesce(pa.is_active, true) = true
+              and lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')
+            group by pa.invoice_id
+         )
+         select vi.id,
                 vi.invoice_number,
                 vi.vendor_invoice_ref,
                 vi.supplier_name,
                 vi.grand_total,
                 vi.due_date
            from public.vendor_invoices vi
+           left join canonical_invoice_payments cip on cip.invoice_id = vi.id
           where vi.company_id = $1
             and vi.status::text = 'posted'
-            and abs(vi.grand_total::numeric - $2::numeric) < 0.01
+            and abs(greatest(vi.grand_total::numeric - coalesce(cip.canonical_paid, 0), 0) - $2::numeric) < 0.01
             and not exists (
               select 1
                 from public.bank_reconciliation_matches brm
