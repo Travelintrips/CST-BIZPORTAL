@@ -1717,7 +1717,11 @@ function isQrisMutation(m: BankMutation): boolean {
 }
 
 export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
-  return canApprove(m) && visibleCandidates(m).length === 0 && !isQrisMutation(m);
+  // Any QRIS-classified mutation is settlement-owned. Even when no canonical
+  // candidate is currently visible, fail closed instead of exposing the
+  // generic manual-COA approval path.
+  if (isQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
+  return canApprove(m) && visibleCandidates(m).length === 0;
 }
 
 export function buildBankApprovalRequestBody(input: {
