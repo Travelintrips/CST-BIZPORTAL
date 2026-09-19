@@ -107,6 +107,7 @@ class ApprovalError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApprovalError";
@@ -2500,10 +2501,21 @@ async function ensureCanonicalQrisSettlement(
       || !Number.isFinite(paymentGross)
       || (Math.abs(journalGross - paymentGross) > 0.01 && !postedLinesProveGross)
     ) {
+      const difference = Number.isFinite(journalGross) && Number.isFinite(paymentGross)
+        ? paymentGross - journalGross
+        : null;
       throw new ApprovalError(
-        `Gross payment ${payment.id} berbeda dengan gross jurnal payment.`,
+        `Gross payment ${payment.id} berbeda dengan gross jurnal payment: source ${Number.isFinite(paymentGross) ? paymentGross : "tidak valid"}, jurnal efektif ${Number.isFinite(journalGross) ? journalGross : "tidak tersedia"}, selisih ${difference == null ? "tidak dapat dihitung" : difference}.`,
         409,
         "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
+        {
+          paymentId: payment.id,
+          paymentGross: Number.isFinite(paymentGross) ? paymentGross : null,
+          journalId: journal?.id ?? null,
+          journalGross: Number.isFinite(journalGross) ? journalGross : null,
+          difference,
+          correctionRequired: true,
+        },
       );
     }
 
@@ -3458,6 +3470,7 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       res.status(error.status).json({
         error: error.message,
         ...(error.code ? { code: error.code } : {}),
+        ...(error.details ? { details: error.details } : {}),
         ...(error.code === "JOURNAL_MAPPING_REQUIRED" || error.code === "COA_NOT_FOUND"
           ? { manual_review_required: true }
           : {}),
