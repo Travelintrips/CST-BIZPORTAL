@@ -2281,7 +2281,7 @@ async function resolveCanonicalQrisSettlement(
   );
   if (result.rows.length === 0) {
     throw new ApprovalError(
-      "Kandidat lokal QRIS belum terhubung ke settlement canonical. Jalankan matching ulang agar batch settlement dibuat terlebih dahulu.",
+      "Settlement canonical belum tersedia untuk seluruh payment scope kandidat QRIS.",
       409,
       "CANONICAL_SETTLEMENT_REQUIRED",
     );
@@ -2305,6 +2305,488 @@ async function resolveCanonicalQrisSettlement(
 
   return settlementId;
 }
+
+async function ensureCanonicalQrisSettlement(
+  client: ApprovalClient,
+  companyId: number,
+  paymentIds: number[],
+  mutationDateValue: unknown,
+  actor: string,
+): Promise<number> {
+  const normalizedPaymentIds = [...new Set(paymentIds)]
+    .filter((paymentId) => Number.isSafeInteger(paymentId) && paymentId > 0)
+    .sort((left, right) => left - right);
+  const mutationDate = calendarDateValue(mutationDateValue);
+  if (normalizedPaymentIds.length === 0 || !mutationDate) {
+    throw new ApprovalError(
+      "Scope payment atau tanggal mutasi QRIS tidak valid.",
+      422,
+      "INVALID_PAYMENT_SCOPE",
+    );
+  }
+
+  // A retry after the owner function committed must reuse the same batch.
+  try {
+    return await resolveCanonicalQrisSettlement(client, companyId, normalizedPaymentIds);
+  } catch (error) {
+    if (!(error instanceof ApprovalError) || error.code !== "CANONICAL_SETTLEMENT_REQUIRED") {
+      throw error;
+    }
+  }
+
+  type PaymentRow = {
+    id: number;
+    amount: string | number | null;
+    company_id: number | null;
+    payment_method: string | null;
+    provider_code: string | null;
+    bank_account_id: string | null;
+    expected_settlement_date: string | null;
+    settlement_rule_version: string | null;
+    settlement_status: string | null;
+    payment_status: string | null;
+  };
+  const paymentResult = await client.query<PaymentRow>(
+    `select p.id,
+            p.amount,
+            p.company_id,
+            p.payment_method::text as payment_method,
+            lower(btrim(p.payment_provider::text)) as provider_code,
+            p.bank_account_id::text as bank_account_id,
+            p.expected_settlement_date::text as expected_settlement_date,
+            p.settlement_rule_version,
+            p.settlement_status::text as settlement_status,
+            p.status::text as payment_status
+       from sport_center.sport_payments p
+      where p.id = any($1::int[])
+      for update`,
+    [normalizedPaymentIds],
+  );
+  const payments = [...paymentResult.rows].sort((left, right) => left.id - right.id);
+  if (payments.length !== normalizedPaymentIds.length) {
+    throw new ApprovalError(
+      "Satu atau lebih payment QRIS tidak ditemukan pada source canonical.",
+      409,
+      "CANONICAL_PAYMENT_NOT_FOUND",
+    );
+  }
+
+  const source = payments[0]!;
+  const groupDate = calendarDateValue(source.expected_settlement_date);
+  const providerCode = String(source.provider_code ?? "").trim().toLowerCase();
+  const bankAccountId = String(source.bank_account_id ?? "").trim();
+  const ruleVersion = String(source.settlement_rule_version ?? "").trim();
+  if (
+    source.company_id !== companyId
+    || !providerCode
+    || !bankAccountId
+    || !groupDate
+    || !ruleVersion
+    || groupDate !== mutationDate
+    || payments.some((payment) =>
+      payment.company_id !== companyId
+      || !String(payment.payment_method ?? "").toLowerCase().includes("qris")
+      || String(payment.provider_code ?? "").trim().toLowerCase() !== providerCode
+      || String(payment.bank_account_id ?? "").trim() !== bankAccountId
+      || calendarDateValue(payment.expected_settlement_date) !== groupDate
+      || String(payment.settlement_rule_version ?? "").trim() !== ruleVersion
+      || String(payment.payment_status ?? "").toLowerCase() !== "confirmed"
+      || String(payment.settlement_status ?? "unsettled").toLowerCase() !== "unsettled",
+    )
+  ) {
+    throw new ApprovalError(
+      "Payment QRIS belum memenuhi satu group settlement canonical yang konsisten.",
+      409,
+      "CANONICAL_SETTLEMENT_GROUP_INVALID",
+    );
+  }
+
+  const journalResult = await client.query<{
+    payment_id: number;
+    id: number;
+    status: string;
+    effective_gross_amount: string | number | null;
+  }>(
+    `select j.payment_id,
+            j.id,
+            j.status,
+            j.gross_amount + coalesce((
+              select sum(case when correction.is_reversal
+                              then -correction.gross_amount
+                              else correction.gross_amount
+                         end)
+                from sport_center.accounting_journals correction
+               where correction.payment_id = j.payment_id
+                 and correction.journal_type = 'payment_amount_correction'
+                 and correction.status = 'posted'
+                 and correction.reversal_of_id = j.id
+            ), 0) as effective_gross_amount
+       from sport_center.accounting_journals j
+      where j.payment_id = any($1::int[])
+        and j.journal_type = 'payment_confirmed'
+        and j.is_reversal = false
+      order by j.payment_id, j.id
+      for update`,
+    [normalizedPaymentIds],
+  );
+  const journalByPayment = new Map<number, {
+    id: number;
+    status: string;
+    effective_gross_amount: string | number | null;
+  }>();
+  for (const journal of journalResult.rows) {
+    if (journalByPayment.has(journal.payment_id)) {
+      throw new ApprovalError(
+        `Payment ${journal.payment_id} memiliki lebih dari satu jurnal payment_confirmed.`,
+        409,
+        "CANONICAL_PAYMENT_JOURNAL_AMBIGUOUS",
+      );
+    }
+    journalByPayment.set(journal.payment_id, journal);
+  }
+  if (
+    normalizedPaymentIds.some((paymentId) =>
+      journalByPayment.get(paymentId)?.status !== "posted",
+    )
+  ) {
+    throw new ApprovalError(
+      "Semua payment QRIS harus memiliki payment_confirmed journal yang sudah posted sebelum settlement dibuat.",
+      409,
+      "CANONICAL_PAYMENT_JOURNAL_NOT_POSTED",
+    );
+  }
+  for (const payment of payments) {
+    const journalGross = Number(journalByPayment.get(payment.id)?.effective_gross_amount);
+    const paymentGross = Number(payment.amount);
+    if (
+      !Number.isFinite(journalGross)
+      || !Number.isFinite(paymentGross)
+      || Math.abs(journalGross - paymentGross) > 0.01
+    ) {
+      throw new ApprovalError(
+        `Gross payment ${payment.id} berbeda dengan gross jurnal payment.`,
+        409,
+        "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
+      );
+    }
+  }
+
+  const activeItemResult = await client.query<{ payment_id: number }>(
+    `select psi.payment_id
+       from sport_center.payment_settlement_items psi
+       join sport_center.payment_settlement_batches psb
+         on psb.id = psi.settlement_id
+      where psi.payment_id = any($1::int[])
+        and psi.item_status = 'active'
+        and lower(coalesce(psb.status::text, '')) in ('draft', 'calculated', 'posted', 'reconciled')
+      for update of psi, psb`,
+    [normalizedPaymentIds],
+  );
+  if (activeItemResult.rows.length > 0) {
+    throw new ApprovalError(
+      "Sebagian payment QRIS sudah berada di settlement canonical lain. Muat ulang kandidat sebelum approval.",
+      409,
+      "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
+    );
+  }
+
+  const configResult = await client.query<{
+    id: number;
+    calculation_method: string | null;
+    rounding_scale: number | string | null;
+    rounding_method: string | null;
+    fixed_provider_fee: number | string | null;
+    fee_tax_rate: number | string | null;
+  }>(
+    `select id,
+            calculation_method,
+            rounding_scale,
+            rounding_method,
+            fixed_provider_fee,
+            fee_tax_rate
+       from sport_center.payment_settlement_configs
+      where company_id = $1
+        and lower(btrim(provider_code)) = $2
+        and btrim(bank_account_id::text) = $3
+        and is_active = true
+        and source = 'OWNER_APPROVED'
+        and rule_version = $4
+        and effective_from <= $5::date
+        and (effective_until is null or $5::date < effective_until)
+      order by id
+      for update`,
+    [companyId, providerCode, bankAccountId, ruleVersion, groupDate],
+  );
+  if (configResult.rows.length !== 1) {
+    throw new ApprovalError(
+      configResult.rows.length === 0
+        ? "Konfigurasi settlement owner-approved untuk payment QRIS belum tersedia."
+        : "Konfigurasi settlement QRIS memiliki lebih dari satu rule aktif.",
+      409,
+      configResult.rows.length === 0
+        ? "CANONICAL_SETTLEMENT_CONFIG_REQUIRED"
+        : "CANONICAL_SETTLEMENT_CONFIG_AMBIGUOUS",
+    );
+  }
+  const settlementConfig = configResult.rows[0]!;
+  if (
+    !settlementConfig.calculation_method
+    || settlementConfig.rounding_scale == null
+    || !settlementConfig.rounding_method
+    || settlementConfig.fixed_provider_fee == null
+    || settlementConfig.fee_tax_rate == null
+  ) {
+    throw new ApprovalError(
+      "Kolom finansial pada konfigurasi settlement owner-approved belum lengkap.",
+      409,
+      "CANONICAL_SETTLEMENT_CONFIG_REQUIRED",
+    );
+  }
+
+  const identityResult = await client.query<{ correlation_id: string }>(
+    `select correlation_id
+       from sport_center.canonical_settlement_group_identity($1, $2, $3, $4::date, $5)`,
+    [companyId, providerCode, bankAccountId, groupDate, ruleVersion],
+  );
+  const settlementReference = identityResult.rows[0]?.correlation_id;
+  if (!settlementReference) {
+    throw new ApprovalError(
+      "Identitas group settlement canonical belum dapat ditentukan.",
+      409,
+      "CANONICAL_SETTLEMENT_IDENTITY_UNAVAILABLE",
+    );
+  }
+
+  const bankCoaResult = await client.query<{ code: string }>(
+    `select sc.code
+       from public.company_bank_accounts cba
+       join public.chart_of_accounts ca
+         on ca.id = cba.coa_id
+        and ca.code = '1-1023-CST'
+        and ca.name = 'Bank Mandiri Ciputat'
+        and ca.account_type::text = 'asset'
+        and ca.is_active = true
+       join sport_center.coa_accounts sc
+         on sc.code = ca.code
+        and sc.name = ca.name
+        and sc.account_type::text = ca.account_type::text
+        and sc.code = '1-1023-CST'
+        and sc.name = 'Bank Mandiri Ciputat'
+        and sc.account_type::text = 'asset'
+        and sc.is_active = true
+      where cba.company_id = $1
+        and cba.account_number::text = $2
+        and cba.is_active = true
+      for update of cba, ca, sc`,
+    [companyId, bankAccountId],
+  );
+  const bankCoaCode = bankCoaResult.rows.length === 1
+    ? bankCoaResult.rows[0]?.code?.trim()
+    : null;
+  if (!bankCoaCode) {
+    throw new ApprovalError(
+      "COA bank canonical tidak terbukti memiliki mapping aktif untuk account settlement QRIS.",
+      409,
+      "CANONICAL_SETTLEMENT_BANK_COA_UNRESOLVED",
+    );
+  }
+
+  await client.query(
+    "set local sport_center.allow_posted_accounting_metadata_correction = 'on'",
+  );
+
+  let batchResult: { rows: Array<{ id: number | string }> };
+  try {
+    batchResult = await client.query(
+      `select sport_center.create_payment_settlement_batch(
+         $1, $2, $3, $4, $5::date, $6::int[], $7
+       ) as id`,
+      [
+        settlementReference,
+        companyId,
+        providerCode,
+        bankAccountId,
+        groupDate,
+        normalizedPaymentIds,
+        actor,
+      ],
+    );
+  } catch (error) {
+    throw new ApprovalError(
+      `Settlement canonical gagal dibuat: ${error instanceof Error ? error.message : String(error)}`,
+      409,
+      "CANONICAL_SETTLEMENT_BUILD_FAILED",
+    );
+  }
+  const settlementId = safeInteger(batchResult.rows[0]?.id);
+  if (settlementId === null) {
+    throw new ApprovalError(
+      "Owner settlement canonical tidak mengembalikan ID batch yang valid.",
+      409,
+      "CANONICAL_SETTLEMENT_BUILD_FAILED",
+    );
+  }
+
+  const calculatedBatch = await client.query<{
+    status: string;
+    bank_mutation_id: number | null;
+    settlement_rule_version: string | null;
+  }>(
+    `select status::text as status,
+            bank_mutation_id,
+            settlement_rule_version
+       from sport_center.payment_settlement_batches
+      where id = $1::bigint
+      for update`,
+    [settlementId],
+  );
+  const calculated = calculatedBatch.rows[0];
+  if (
+    !calculated
+    || calculated.status !== "calculated"
+    || calculated.bank_mutation_id != null
+    || (
+      calculated.settlement_rule_version !== ruleVersion
+      && !String(calculated.settlement_rule_version ?? "").startsWith(`${ruleVersion}:SUPPLEMENTAL-`)
+    )
+  ) {
+    throw new ApprovalError(
+      "Owner settlement canonical mengembalikan batch yang tidak memenuhi kontrak calculated.",
+      409,
+      "CANONICAL_SETTLEMENT_BATCH_CONFLICT",
+    );
+  }
+
+  let settlementJournalId: number | null = null;
+  try {
+    const journalDraft = await client.query<{ id: number | string }>(
+      `select sport_center.create_settlement_journal_draft($1::bigint, $2, $3) as id`,
+      [settlementId, bankCoaCode, actor],
+    );
+    settlementJournalId = safeInteger(journalDraft.rows[0]?.id);
+    if (settlementJournalId === null) {
+      throw new Error("owner journal function did not return a valid journal ID");
+    }
+    await client.query(
+      `select sport_center.finalize_payment_settlement($1::bigint, $2) as id`,
+      [settlementId, actor],
+    );
+  } catch (error) {
+    throw new ApprovalError(
+      `Jurnal settlement canonical gagal diposting: ${error instanceof Error ? error.message : String(error)}`,
+      409,
+      "CANONICAL_SETTLEMENT_FINALIZE_FAILED",
+    );
+  }
+
+  const finalBatchResult = await client.query<{
+    status: string;
+    settlement_journal_id: number | string | null;
+  }>(
+    `select status::text as status, settlement_journal_id
+       from sport_center.payment_settlement_batches
+      where id = $1::bigint
+      for update`,
+    [settlementId],
+  );
+  const finalBatch = finalBatchResult.rows[0];
+  const finalJournalId = safeInteger(finalBatch?.settlement_journal_id);
+  if (
+    !finalBatch
+    || !["posted", "reconciled"].includes(finalBatch.status)
+    || finalJournalId === null
+    || finalJournalId !== settlementJournalId
+  ) {
+    throw new ApprovalError(
+      "Settlement canonical selesai tetapi batch atau jurnal settlement tidak berstatus posted.",
+      409,
+      "CANONICAL_SETTLEMENT_JOURNAL_NOT_POSTED",
+    );
+  }
+
+  const finalJournalResult = await client.query<{
+    status: string;
+    journal_type: string;
+    is_reversal: boolean;
+  }>(
+    `select status,
+            journal_type::text as journal_type,
+            is_reversal
+       from sport_center.accounting_journals
+      where id = $1::bigint
+      for update`,
+    [finalJournalId],
+  );
+  const finalJournal = finalJournalResult.rows[0];
+  const finalJournalBalance = await client.query<{
+    debit: string | number;
+    credit: string | number;
+  }>(
+    `select coalesce(sum(amount) filter (where line_type = 'debit'), 0) as debit,
+            coalesce(sum(amount) filter (where line_type = 'credit'), 0) as credit
+       from sport_center.accounting_journal_lines
+      where journal_id = $1::bigint`,
+    [finalJournalId],
+  );
+  const balance = finalJournalBalance.rows[0];
+  if (
+    !finalJournal
+    || finalJournal.status !== "posted"
+    || finalJournal.journal_type !== "settlement"
+    || finalJournal.is_reversal
+    || !balance
+    || Math.abs(Number(balance.debit) - Number(balance.credit)) > 0.01
+  ) {
+    throw new ApprovalError(
+      "Jurnal settlement canonical tidak posted atau tidak balanced.",
+      409,
+      "CANONICAL_SETTLEMENT_JOURNAL_INVALID",
+    );
+  }
+
+  const finalItems = await client.query<{ payment_id: number }>(
+    `select payment_id
+       from sport_center.payment_settlement_items
+      where settlement_id = $1::bigint
+        and item_status = 'active'
+      order by payment_id
+      for update`,
+    [settlementId],
+  );
+  const finalPaymentIds = finalItems.rows.map((row) => Number(row.payment_id));
+  if (
+    finalPaymentIds.length !== normalizedPaymentIds.length
+    || finalPaymentIds.some((paymentId, index) => paymentId !== normalizedPaymentIds[index])
+  ) {
+    throw new ApprovalError(
+      "Settlement canonical memiliki payment scope yang berbeda dari kandidat.",
+      409,
+      "CANONICAL_SETTLEMENT_IDEMPOTENCY_CONFLICT",
+    );
+  }
+
+  const finalPayments = await client.query<{ id: number; settlement_status: string }>(
+    `select id, settlement_status::text
+       from sport_center.sport_payments
+      where id = any($1::int[])
+      order by id
+      for update`,
+    [normalizedPaymentIds],
+  );
+  if (
+    finalPayments.rows.length !== normalizedPaymentIds.length
+    || finalPayments.rows.some((payment) => payment.settlement_status !== "settled")
+  ) {
+    throw new ApprovalError(
+      "Payment canonical tidak berubah menjadi settled setelah finalisasi.",
+      409,
+      "CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT",
+    );
+  }
+
+  return resolveCanonicalQrisSettlement(client, companyId, normalizedPaymentIds);
+}
+
 async function listQrisCanonicalSettlements(
   companyId: number | null,
   includeCompleted: boolean,
@@ -2763,6 +3245,7 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       mutation_direction: string;
       mutation_company_id: number | null;
       mutation_journal_entry_id: number | null;
+      mutation_transaction_date: string;
     }>(
       `select qris.id,
               qris.mutation_id,
@@ -2776,7 +3259,8 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
               bm.amount as mutation_amount,
               bm.direction as mutation_direction,
               bm.company_id as mutation_company_id,
-              bm.journal_entry_id as mutation_journal_entry_id
+              bm.journal_entry_id as mutation_journal_entry_id,
+              bm.transaction_date::text as mutation_transaction_date
          from public.qris_mutation_batch_candidates qris
          join public.bank_mutations bm on bm.id = qris.mutation_id
         where qris.id = $1
@@ -2852,12 +3336,6 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       );
     }
 
-    const canonicalSettlementId = await resolveCanonicalQrisSettlement(
-      client,
-      candidate.company_id,
-      expectedPaymentIds,
-    );
-
     const candidateNet = Number(candidate.net_amount);
     const mutationAmount = Number(candidate.mutation_amount);
     if (
@@ -2872,6 +3350,14 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
         "AMOUNT_MISMATCH",
       );
     }
+
+    const canonicalSettlementId = await ensureCanonicalQrisSettlement(
+      client,
+      candidate.company_id,
+      expectedPaymentIds,
+      candidate.mutation_transaction_date,
+      actor.email,
+    );
 
     const approval = await approveBankMutation(
       client,

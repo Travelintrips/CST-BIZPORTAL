@@ -29,7 +29,7 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("CANONICAL_SETTLEMENT_REQUIRED");
     expect(source).toContain("result.rows.length > 1");
     expect(source).toContain("CANONICAL_SETTLEMENT_SELECTION_CONFLICT");
-    expect(source).toContain("const canonicalSettlementId = await resolveCanonicalQrisSettlement(");
+    expect(source).toContain("const canonicalSettlementId = await ensureCanonicalQrisSettlement(");
     expect(source).toContain("id::text = $1::text");
     expect(source).toContain('candidate_source: "sport_center.payment_settlement_batches"');
     expect(source).not.toContain('candidate_source: "local.qris_mutation_batch_candidates"');
