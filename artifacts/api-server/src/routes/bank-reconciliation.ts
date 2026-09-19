@@ -890,7 +890,10 @@ async function approveBankMutation(
     if (!match) throw new ApprovalError("Kandidat rekonsiliasi tidak ditemukan untuk mutasi ini.", 409, "MATCH_NOT_FOUND");
     selectedCandidateType = match.candidate_type;
     selectedCandidateId = match.candidate_id;
-    selectedCandidateSource = requestedSource ?? match.candidate_source;
+    if (requestedSource && match.candidate_source && requestedSource !== match.candidate_source) {
+      throw new ApprovalError("candidate_source tidak sama dengan source kandidat tersimpan.", 409, "CANDIDATE_SOURCE_MISMATCH");
+    }
+    selectedCandidateSource = match.candidate_source ?? requestedSource;
   }
 
   const approvedMatch = await client.query<{ id: number }>(
