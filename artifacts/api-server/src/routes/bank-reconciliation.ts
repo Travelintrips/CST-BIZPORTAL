@@ -1048,6 +1048,15 @@ async function approveBankMutation(
   };
 }
 
+router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  res.status(409).json({
+    error: "Aksi legacy ini dinonaktifkan pada CST-BIZPORTAL standalone karena belum memiliki kontrak backend yang aman.",
+    code: "UNSUPPORTED_STANDALONE_RECONCILIATION_ACTION",
+  });
+});
+
 router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
   if (mutationId === null) {
