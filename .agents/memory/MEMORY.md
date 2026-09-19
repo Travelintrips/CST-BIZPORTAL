@@ -73,3 +73,4 @@
 - [Duplicate review resolution](duplicate-review-resolution.md) — duplicate matches need either an explicit candidate choice or a manual COA path, never two blocked actions.
 - [Local tenant candidate contract](local-tenant-candidate-contract.md) — tenant candidates use confirmed tenant payment IDs and canonical detail hydration.
 - [Accounting journal detail endpoint](journal-detail-endpoint.md) — posting confirmation needs a company-scoped journal header/lines endpoint by entry ID.
+- [Supabase array filter casts](supabase-array-filter-cast.md) — use literal status lists for filtered queries; pooler-bound text-array casts can fail as PostgreSQL 42846.

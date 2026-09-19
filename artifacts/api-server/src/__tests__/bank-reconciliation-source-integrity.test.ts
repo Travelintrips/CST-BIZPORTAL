@@ -8,6 +8,11 @@ const source = readFileSync(
 );
 
 describe("bank reconciliation candidate source integrity", () => {
+  it("maps the completed UI filter to final mutation statuses without an array parameter cast", () => {
+    expect(source).toContain('filters.push("bm.status in (\'posted\', \'approved\')")');
+    expect(source).not.toContain("bm.status = any(${values.length}::text[])");
+  });
+
   it("persists canonical source identities for locally generated candidates", () => {
     expect(source).toContain('"sport_center.sport_payments"');
     expect(source).toContain('"public.vendor_invoices"');

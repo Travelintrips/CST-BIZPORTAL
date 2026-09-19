@@ -2183,8 +2183,11 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
   const status = queryString(req.query.status);
   if (status && status !== "all") {
     if (status === "completed") {
-      values.push(["posted", "approved"]);
-      filters.push(`bm.status = any(${values.length}::text[])`);
+      // Keep this as a SQL literal list instead of binding a JavaScript array.
+      // The Supabase pooler rejects the parameter cast used by `ANY($n::text[])`
+      // for this route, which turns an otherwise valid completed filter into a
+      // misleading 503 schema error.
+      filters.push("bm.status in ('posted', 'approved')");
     } else {
       if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
       values.push(status);
