@@ -1645,7 +1645,7 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
     if (mutation.journal_entry_id != null) {
       const journalResult = await client.query<any>(
         `select id, company_id, status, source, source_id,
-                total_debit, total_credit, transaction_date as date
+                total_debit, total_credit, date::text as date
            from public.accounting_entries where id=$1 limit 1`, [mutation.journal_entry_id],
       ).catch(() => ({ rows: [] as any[] }));
       journal = journalResult.rows[0] ?? null;
