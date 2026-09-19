@@ -195,7 +195,7 @@ async function loadLocalMatchCandidates(
              sum(sp.amount::numeric) as amount,
              min((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date)::text as paid_date,
              coalesce(
-               max(nullif(btrim(sp.provider_order_id), '')),
+               max(nullif(btrim(sp.provider_order_id::text), '')),
                max(sp.provider_id::text)
              ) as payment_reference,
              concat_ws(
