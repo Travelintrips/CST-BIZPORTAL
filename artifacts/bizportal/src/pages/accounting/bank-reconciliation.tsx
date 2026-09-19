@@ -9384,7 +9384,7 @@ export default function BankReconciliationPage() {
   const deleteDuplicateCandidateMut = useMutation({
     mutationFn: async ({ mutationId, candidateId }: { mutationId: number; candidateId: number }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/unsupported-standalone-action`,
+        `/api/bank-reconciliation/${mutationId}/candidates/${candidateId}/duplicate`,
         { method: "DELETE", credentials: "include" },
       );
       const body = await response.json().catch(() => ({ error: response.statusText }));
