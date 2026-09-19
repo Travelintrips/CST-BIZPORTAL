@@ -1487,7 +1487,7 @@ function statusLabel(m: BankMutation): string {
   }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
-  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
+  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Settlement QRIS Belum Tertaut";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
@@ -2846,8 +2846,8 @@ function AIActionCenter({
           <p className="mt-0.5 text-indigo-800/80 dark:text-indigo-200/80">
             1. Sync mutasi bank <span className="mx-1">→</span>
             2. Tunggu matching selesai <span className="mx-1">→</span>
-            3. Generate kandidat QRIS <span className="mx-1">→</span>
-            4. Review / approve QRIS
+            3. Review kandidat canonical <span className="mx-1">→</span>
+            4. Approve / posting sesuai kontrak
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
@@ -2912,35 +2912,6 @@ function AIActionCenter({
                   {unmatched > 0 ? "Re-match Belum Final" : "Evaluasi Rule Terbaru"}
                 </Button>
               </div>
-            </div>
-          )}
-
-          {/* Step 3: generate QRIS candidates */}
-          {onGenerateQrisCandidates && (
-            <div className="flex-1 rounded-lg border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20 p-3 space-y-2">
-              <div className="flex items-start gap-2">
-                <CreditCard className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold">Kandidat QRIS</p>
-                  <p className="text-xs text-muted-foreground">
-                    {workflowStage === "candidates"
-                      ? "Matching selesai, kandidat siap dibuat untuk direview"
-                      : "Tombol aktif setelah matching selesai"}
-                  </p>
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="w-full gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-300"
-                onClick={onGenerateQrisCandidates}
-                disabled={qrisGenerationPending || matchingPending || matchingBackgroundPending || workflowStage !== "candidates"}
-              >
-                {qrisGenerationPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <CreditCard className="w-3.5 h-3.5" />}
-                {qrisGenerationPending ? "Membuat kandidat..." : "Generate Kandidat QRIS"}
-              </Button>
             </div>
           )}
 
@@ -3029,7 +3000,7 @@ const QUICK_FILTERS: QuickFilter[] = [
   { label: "Review Manual",      status: "manual_review" },
   { label: "Perlu Diperiksa",    status: "duplicate_need_review" },
   { label: "Menunggu Posting",   status: "approved_pending_posting" },
-  { label: "Selesai",            status: "posted" },
+  { label: "Selesai",            status: "completed" },
   { label: "Dibatalkan",         status: "void" },
   { label: "Uang Masuk (IN)",    direction: "IN" },
   { label: "Uang Keluar (OUT)",  direction: "OUT" },
@@ -7967,7 +7938,12 @@ export default function BankReconciliationPage() {
         offset: String(hasStatusFilter ? 0 : page * PAGE_SIZE),
       });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      if (filterStatus !== "all")   params.set("status",    filterStatus);
+      // "completed" is a UI aggregate (approved + posted), not a DB status.
+      // Fetch the canonical list without a synthetic status and filter it client-side.
+      // Sending status=completed used to make PROD depend on special backend handling.
+      if (filterStatus !== "all" && filterStatus !== "completed") {
+        params.set("status", filterStatus);
+      }
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
       if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
@@ -8073,44 +8049,9 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
-  const qrisDryRunMut = useMutation({
-    mutationFn: async (mutationId?: number) => {
-      if (qrisCompanyId == null) {
-        throw new Error("Pilih satu perusahaan aktif sebelum membuat kandidat review QRIS.");
-      }
-      const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        // Persist only the candidate/review row. This is not final
-        // reconciliation and does not create a journal or consume evidence.
-        body: JSON.stringify({
-          dryRun: false,
-          companyId: qrisCompanyId,
-          ...(mutationId != null ? { mutationId } : {}),
-        }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{
-        generated: number;
-        persisted: number;
-        reviewable: number;
-        candidates: QrisCandidateAudit[];
-      }>;
-    },
-    onSuccess: async (result) => {
-      toast({
-        title: `${result.persisted} pemeriksaan QRIS ditampilkan`,
-        description: result.reviewable > 0
-          ? `${result.reviewable} kandidat memiliki pasangan payment untuk direview.`
-          : "Belum ada pasangan payment yang dapat diverifikasi; hasil ditampilkan sebagai UNMATCHED dan tidak dapat disetujui.",
-      });
-      setWorkflowStage("review");
-      await Promise.all([refetchQrisAudit(), refetch()]);
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-    },
-    onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
-  });
+  // Legacy QRIS candidate generation was removed. Canonical settlements are
+  // discovered/read from GET /qris-candidates and created only by the
+  // canonical settlement owner flow during scoped QRIS approval.
 
   const qrisRepairMut = useMutation({
     mutationFn: async (candidateId: number) => {
@@ -9624,7 +9565,11 @@ export default function BankReconciliationPage() {
   const responseMutations = data?.mutations ?? [];
   const statusFilteredMutations = filterStatus === "all"
     ? responseMutations
-    : responseMutations.filter(mutation => mutation.status === filterStatus);
+    : responseMutations.filter(mutation =>
+        filterStatus === "completed"
+          ? mutation.status === "posted" || mutation.status === "approved"
+          : mutation.status === filterStatus
+      );
   const mutations = filterStatus === "all"
     ? statusFilteredMutations
     : statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -9796,13 +9741,13 @@ export default function BankReconciliationPage() {
             }
              matchMut.mutate(mode);
           }}
-           onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate(undefined) : undefined}
+           onGenerateQrisCandidates={undefined}
           onApproveAll={handleApproveAllMatched}
           onPostAll={handlePostAllPending}
           onSyncSheet={() => sheetSyncMut.mutate()}
           matchingPending={matchMut.isPending}
           matchingBackgroundPending={matchingBackgroundPending}
-          qrisGenerationPending={qrisDryRunMut.isPending}
+          qrisGenerationPending={false}
           syncPending={sheetSyncMut.isPending}
           workflowStage={workflowStage}
         />
@@ -10081,19 +10026,7 @@ export default function BankReconciliationPage() {
                    Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                 onClick={() => qrisDryRunMut.mutate(undefined)}
-                disabled={qrisDryRunMut.isPending || qrisCompanyId == null}
-                title={qrisCompanyId == null ? "Pilih satu perusahaan aktif terlebih dahulu" : undefined}
-              >
-                {qrisDryRunMut.isPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <Play className="w-3.5 h-3.5" />}
-                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
-              </Button>
+              
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -10762,10 +10695,8 @@ export default function BankReconciliationPage() {
                       ? (candidateId) => qrisRepairMut.mutate(candidateId)
                       : undefined
                   }
-          onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
-                       ? (mutationId) => qrisDryRunMut.mutate(mutationId)
-                      : undefined}
-                    qrisGenerationPending={qrisDryRunMut.isPending || qrisRepairMut.isPending}
+          onGenerateQrisCandidates={undefined}
+                    qrisGenerationPending={qrisRepairMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -11052,9 +10983,7 @@ export default function BankReconciliationPage() {
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
             : undefined
         }
-        onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
-          ? (mutationId) => qrisDryRunMut.mutate(mutationId)
-          : undefined}
+        onGenerateQrisCandidates={undefined}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
