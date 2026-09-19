@@ -2878,7 +2878,7 @@ function AIActionCenter({
               <Button
                 size="sm"
                 className="w-full gap-1.5"
-                onClick={() => onRunMatching(unmatched > 0 ? "new" : "rematch_non_final")}
+                onClick={() => onRunMatching("rematch_non_final")}
                 disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
               >
                 {matchingPending || matchingBackgroundPending
