@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+
 vi.mock("@workspace/db", () => ({
   pool: {
     query: mocks.poolQuery,
@@ -299,5 +300,47 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!E5", values: [[generatedCanonicalKey]] },
       { range: "'Mutasi Bank'!F5", values: [["UNMATCHED"]] },
     ]));
+  });
+
+  it("deduplicates equivalent descriptions and amount formats with one canonical mutation", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
+      ["2026-09-06", "  transfer   masuk ", "0", "1.250.000,00", "", ""],
+      ["2026-09-06", "TRANSFER MASUK", "0", "1250000", "", ""],
+    ]);
+
+    const result = await syncOneBankSheetConfig(config.id);
+
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    const rowOneKey = updates.find(
+      (update) => update.range === "'Mutasi Bank'!E2",
+    )?.values[0]?.[0];
+    const rowTwoKey = updates.find(
+      (update) => update.range === "'Mutasi Bank'!E3",
+    )?.values[0]?.[0];
+    const rowOneStatus = updates.find(
+      (update) => update.range === "'Mutasi Bank'!F2",
+    )?.values[0]?.[0];
+    const rowTwoStatus = updates.find(
+      (update) => update.range === "'Mutasi Bank'!F3",
+    )?.values[0]?.[0];
+
+    expect(result).toMatchObject({
+      imported: 1,
+      existing: 1,
+      total: 2,
+    });
+    expect(insertCalls).toHaveLength(1);
+    expect(storedMutations).toHaveLength(1);
+    expect(rowOneKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(rowTwoKey).toBe(rowOneKey);
+    expect(rowOneStatus).toBe("UNMATCHED");
+    expect(rowTwoStatus).toBe(rowOneStatus);
   });
 });
