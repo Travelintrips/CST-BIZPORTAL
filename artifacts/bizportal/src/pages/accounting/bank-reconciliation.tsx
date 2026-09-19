@@ -4375,7 +4375,7 @@ function useCanonicalRepairDiagnosis(mutationId: number, enabled: boolean) {
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: enabled && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
         credentials: "include",
         cache: "no-store",
       });
