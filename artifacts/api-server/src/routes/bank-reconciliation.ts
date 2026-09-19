@@ -2513,8 +2513,8 @@ async function ensureCanonicalQrisSettlement(
           (mutation_id, action, actor, meta)
          values ($1, 'QRIS_JOURNAL_HEADER_DRIFT_ACCEPTED', $2, $3::jsonb)`,
         [
-          mutationId,
-          actor.email,
+          null,
+          actor,
           JSON.stringify({
             payment_id: payment.id,
             journal_id: journal?.id ?? null,
