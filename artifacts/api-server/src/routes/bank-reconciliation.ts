@@ -2140,6 +2140,36 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
 });
 
 
+
+router.post("/bank-reconciliation/:mutationId/recover-canonical-settlement", async (req,res): Promise<void> => {
+  const actor=await getApprovalActor(req).catch(()=>null);
+  if(!actor){res.status(401).json({error:"Unauthorized"});return;}
+  const mutationId=parsePositiveInt(req.params.mutationId);
+  const settlementId=safeInteger(req.body?.settlement_id ?? req.body?.settlementId);
+  const confirmRepair=req.body?.confirm_historical_repair===true;
+  const reason=textValue(req.body?.reason);
+  if(mutationId===null||settlementId===null){res.status(400).json({error:"mutationId/settlementId tidak valid",code:"INVALID_INPUT"});return;}
+  if(!confirmRepair||!reason||reason.length<10){res.status(422).json({error:"Recovery historical membutuhkan konfirmasi dan alasan minimal 10 karakter.",code:"HISTORICAL_REPAIR_CONFIRMATION_REQUIRED"});return;}
+  const client=await pool.connect();
+  try{
+    await client.query("begin");
+    const result=await approveCanonicalQrisSettlementLink(
+      client,
+      mutationId,
+      settlementId,
+      actor,
+      {historicalRepair:true,reason,cleanupDraft:true},
+    );
+    await client.query("commit");
+    res.json(result);
+  }catch(error){
+    await client.query("rollback").catch(()=>{});
+    if(error instanceof ApprovalError){res.status(error.status).json({error:error.message,code:error.code??null,details:error.details??null});return;}
+    req.log.error({error,mutationId,settlementId},"Canonical settlement recovery failed");
+    res.status(503).json({error:"Recovery settlement canonical gagal",code:"CANONICAL_SETTLEMENT_RECOVERY_FAILED"});
+  }finally{client.release();}
+});
+
 router.post("/bank-reconciliation/:mutationId/reject", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
