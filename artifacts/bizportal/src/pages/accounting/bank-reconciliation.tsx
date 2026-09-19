@@ -1655,15 +1655,6 @@ function isManualReviewActionable(m: BankMutation): boolean {
     && !isCanonicalSettlementMutation(m);
 }
 
-const LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED = "REFERENCE_COA_ATTEMPT_NOT_RECORDED";
-
-function isLegacyReferenceCoaRetryable(m: BankMutation): boolean {
-  return m.status === "manual_review"
-    && m.review_code === LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED
-    && !isQrisMutation(m)
-    && !isCanonicalSettlementMutation(m);
-}
-
 function isRuleAutoPostRetryable(m: BankMutation, candidates: Candidate[]): boolean {
   return m.status === "manual_review"
     && m.review_code === "AUTO_POST_GUARD"
@@ -5365,7 +5356,6 @@ function MutationCard({
   m,
   onMapCoa,
   onMatchVendorInvoice,
-  onRetryReferenceCoa,
   onApprove,
   onPost,
   onReject,
@@ -5397,14 +5387,12 @@ function MutationCard({
   onGenerateQrisCandidates,
   onRepairQrisCandidate,
   qrisGenerationPending,
-  retryReferenceCoaPending,
   retryMatchingPending,
   mappingError,
 }: {
   m: BankMutation;
   onMapCoa: (m: BankMutation) => void;
   onMatchVendorInvoice?: (m: BankMutation) => void;
-  onRetryReferenceCoa?: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
@@ -5445,7 +5433,6 @@ function MutationCard({
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   onRepairQrisCandidate?: (candidateId: number) => void;
   qrisGenerationPending?: boolean;
-  retryReferenceCoaPending?: boolean;
   retryMatchingPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
@@ -5949,21 +5936,6 @@ function MutationCard({
                 {retryMatchingPending ? "Recon ulang..." : "Recon Ulang"}
               </Button>
             )}
-            {!isClosedQrisSettlement && isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
-                disabled={retryReferenceCoaPending}
-                onClick={() => onRetryReferenceCoa(m)}
-                title="Menjalankan ulang mapping COA lama. Jurnal hanya dibuat bila semua safeguard lulus."
-              >
-                {retryReferenceCoaPending
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <RotateCcw className="h-3.5 w-3.5" />}
-                {retryReferenceCoaPending ? "Memproses..." : "Proses Ulang COA"}
-              </Button>
-            )}
             {/* One clear primary action per mutation. Backend remains the final guard. */}
             {!isClosedQrisSettlement && isManualReviewActionable(m) && (
               <Button
@@ -6453,8 +6425,9 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: open && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
         credentials: "include",
+        cache: "no-store",
       });
       const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
       if (!response.ok) throw new Error(body.error ?? response.statusText);
@@ -6468,19 +6441,22 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
     refetchOnWindowFocus: true,
   });
   const autoRepairMut = useMutation({
-    mutationFn: async (path: string) => {
-      const response = await fetch(path, {
+    mutationFn: async () => {
+      const response = await fetch("/api/bank-reconciliation/run-matching", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          ids: [mutationId],
+          matching_mode: "rematch_non_final",
+        }),
       });
       const body = await response.json().catch(() => ({ error: "Perbaikan otomatis gagal" }));
       if (!response.ok) throw new Error(body.error ?? response.statusText);
       return body;
     },
     onSuccess: () => {
-      toast({ title: "Perbaikan otomatis berhasil", description: "State rekonsiliasi sudah diperbarui dan diverifikasi oleh endpoint posting." });
+      toast({ title: "Evaluasi ulang selesai", description: "Mutasi sudah dievaluasi ulang melalui matching canonical dengan safeguard yang berlaku." });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
       qc.invalidateQueries({ queryKey: ["bank-repair-diagnosis", mutationId] });
     },
@@ -6601,10 +6577,10 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
               size="sm"
               className="mt-3 gap-1.5 bg-green-700 text-white hover:bg-green-800"
               disabled={autoRepairMut.isPending}
-              onClick={() => autoRepairMut.mutate(diagnosis.autoRepair!.path)}
+              onClick={() => autoRepairMut.mutate()}
             >
               {autoRepairMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {autoRepairMut.isPending ? "Memperbaiki…" : diagnosis.autoRepair.label}
+              {autoRepairMut.isPending ? "Mengevaluasi…" : "Evaluasi ulang matching canonical"}
             </Button>
           )}
 
@@ -8914,53 +8890,6 @@ export default function BankReconciliationPage() {
     }),
   });
 
-  const retryReferenceCoaMut = useMutation({
-    mutationFn: async (mutationId: number) => {
-      const r = await fetch("/api/bank-reconciliation/run-matching", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ids: [mutationId],
-          legacy_reference_coa_retry: true,
-        }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{
-        processed: number;
-        auto_matched: number;
-        manual_review: number;
-      }>;
-    },
-    onSuccess: async (result, mutationId) => {
-      await invalidate();
-      await refreshMutationDetail(mutationId);
-      if (result.auto_matched > 0) {
-        toast({
-          title: "Referensi COA berhasil diproses",
-          description: "Jurnal dibuat otomatis setelah seluruh safeguard lulus.",
-        });
-      } else if (result.manual_review > 0) {
-        toast({
-          title: "Masih perlu review manual",
-          description: "Safeguard jurnal menahan transaksi. Alasan terbaru sudah ditampilkan.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Tidak dapat diproses ulang",
-          description: "Transaksi ini bukan kasus Referensi COA legacy yang dapat dicoba ulang.",
-          variant: "destructive",
-        });
-      }
-    },
-    onError: (e: Error) => toast({
-      title: "Gagal memproses ulang Referensi COA",
-      description: e.message,
-      variant: "destructive",
-    }),
-  });
-
   const approveQrisBatchMut = useMutation({
     mutationFn: async ({
       candidateId,
@@ -10760,7 +10689,6 @@ export default function BankReconciliationPage() {
                   m={m}
                   onMapCoa={setCoaReferenceTarget}
                   onMatchVendorInvoice={setVendorPaymentTarget}
-                  onRetryReferenceCoa={mutation => retryReferenceCoaMut.mutate(mutation.id)}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
@@ -10819,7 +10747,6 @@ export default function BankReconciliationPage() {
                        ? (mutationId) => qrisDryRunMut.mutate(mutationId)
                       : undefined}
                     qrisGenerationPending={qrisDryRunMut.isPending || qrisRepairMut.isPending}
-                  retryReferenceCoaPending={retryReferenceCoaMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}

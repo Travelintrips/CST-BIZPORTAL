@@ -1,0 +1,59 @@
+Screenshot kedua memperjelas bahwa masalahnya berasal dari jalur legacy repair di CST-BIZPORTAL, bukan dari seed rule COA. Saya cari kode diagnosis/repair dan kontrak backend yang dinonaktifkan, lalu perbaiki jalur aman yang seharusnya dipakai atau tampilkan error backend sebenarnya.
+
+
+
+9 actions
+Screenshot kedua menunjukkan bahwa error berasal dari diagnostic repair lama, bukan dari database atau seed COA:
+
+Aksi legacy dinonaktifkan pada CST-BIZPORTAL karena belum memiliki kontrak backend yang aman.
+
+Artinya:
+
+UI production sedang memanggil jalur repair legacy.
+Jalur tersebut sengaja ditolak oleh backend untuk mencegah perubahan jurnal/mutasi tanpa validasi company, tenant, dan ownership.
+Backend saat ini hanya memiliki alur rekonsiliasi baru melalui endpoint /api/bank-reconciliation/....
+Source workspace sekarang tidak memiliki kode diagnostic repair, modal “Pilih COA”, maupun teks error tersebut.
+Deployment Replit untuk workspace ini juga terdeteksi belum aktif, sehingga production yang digunakan kemungkinan berasal dari build lama atau deployment eksternal.
+Saya tidak mengaktifkan kembali aksi legacy secara paksa karena itu dapat memungkinkan perubahan jurnal tanpa kontrak keamanan yang jelas.
+
+Perbaikan yang benar adalah salah satu dari dua pilihan:
+
+Migrasikan UI production ke alur baru /api/bank-reconciliation/....
+Buat endpoint repair baru dengan validasi eksplisit untuk:
+company_id
+tenant_id
+ownership mutasi
+akun COA debit/kredit
+status draft sebelum posting
+idempotency dan audit log
+Tanpa source build yang menampilkan diagnostic repair tersebut, perubahan di workspace ini tidak akan mengubah layar pada screenshot.
+
+
+
+Worked for 32 seconds
+
+Checkpoint made
+13 minutes ago
+apakah deployment juga memakai kuota
+
+Free
+10 minutes ago
+Evaluating Replit platform usage
+
+Evaluating Replit platform usage
+Saya cek dokumentasi resmi Replit tentang kuota deployment dan penggunaan compute supaya jawabannya sesuai paket dan jenis deployment yang berlaku saat ini.
+
+
+
+2 actions
+Ya, deployment Replit dapat memakai kuota/kredit, tergantung jenisnya:
+
+Autoscale Deployment: memakai kredit berdasarkan CPU dan RAM yang digunakan.
+Reserved VM: biaya bulanan tetap.
+Scheduled Deployment: memakai kredit selama job berjalan.
+Static Deployment: hosting gratis, tetapi transfer data di atas batas tertentu dapat dikenakan biaya.
+Database dan storage dapat memiliki penggunaan/biaya terpisah.
+Penggunaan bisa dipantau di Settings → Account usage. Untuk aplikasi API seperti project ini, jika dipublish sebagai Autoscale, pemakaian akan bergantung pada durasi dan beban request, bukan hanya karena deployment aktif.
+
+Dokumentasi resmi: Publishing costs dan Deployment types.
+
