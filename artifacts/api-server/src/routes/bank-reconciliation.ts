@@ -2808,6 +2808,152 @@ router.post("/bank-reconciliation/:mutationId/void-journal", async (req, res): P
   }
 });
 
+
+router.delete("/bank-reconciliation/dev/reset", async (req, res): Promise<void> => {
+  if (process.env.APP_ENV !== "development") {
+    res.status(404).json({ error: "Endpoint reset hanya tersedia di development." });
+    return;
+  }
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const idsResult = await client.query<{ id: number; journal_entry_id: number | null }>(
+      `select bm.id,bm.journal_entry_id
+         from public.bank_mutations bm
+         left join public.accounting_entries ae on ae.id=bm.journal_entry_id
+        where ($1::int is null or bm.company_id=$1)
+          and bm.status not in ('posted','approved','void')
+          and not exists (
+            select 1 from public.bank_reconciliation_matches m
+             where m.mutation_id=bm.id and m.status in ('approved','posted')
+          )
+          and (bm.journal_entry_id is null or (ae.status='draft' and ae.source='bank_reconciliation'))
+        for update of bm`,
+      [actor.companyId],
+    );
+    const ids = idsResult.rows.map((row)=>row.id);
+    const journalIds = idsResult.rows.map((row)=>row.journal_entry_id).filter((id): id is number => id != null);
+    let linesDeleted=0, entriesDeleted=0, matchesDeleted=0;
+    if (journalIds.length) {
+      const lineDelete=await client.query(`delete from public.accounting_entry_lines where entry_id=any($1::int[])`,[journalIds]);
+      linesDeleted=Number(lineDelete.rowCount??0);
+      const entryDelete=await client.query(`delete from public.accounting_entries where id=any($1::int[]) and status='draft'`,[journalIds]);
+      entriesDeleted=Number(entryDelete.rowCount??0);
+    }
+    if(ids.length){
+      const matchDelete=await client.query(`delete from public.bank_reconciliation_matches where mutation_id=any($1::int[]) and status not in ('approved','posted')`,[ids]);
+      matchesDeleted=Number(matchDelete.rowCount??0);
+      await client.query(`delete from public.qris_mutation_batch_candidates where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_reconciliation_audit where mutation_id=any($1::int[])`,[ids]);
+      await client.query(
+        `update public.bank_mutations
+            set status='unmatched',reconciliation_status='unmatched',journal_entry_id=null,
+                accounting_posted=false,approved_by=null,approved_at=null,posted_at=null,
+                review_code=null,review_reason=null,updated_at=now()
+          where id=any($1::int[])`,
+        [ids],
+      );
+    }
+    await client.query("commit");
+    res.json({
+      ok:true,
+      accounting_entries_deleted:entriesDeleted,
+      accounting_lines_deleted:linesDeleted,
+      matches_deleted:matchesDeleted,
+      mutations_reset:ids.length,
+    });
+  } catch(error) {
+    await client.query("rollback").catch(()=>{});
+    req.log.error({error},"Development reconciliation reset failed");
+    res.status(503).json({error:"Reset rekonsiliasi development gagal"});
+  } finally { client.release(); }
+});
+
+router.delete("/bank-reconciliation/dev/purge-mutations", async (req, res): Promise<void> => {
+  if (process.env.APP_ENV !== "development") {
+    res.status(404).json({ error: "Endpoint purge DEV hanya tersedia di development." });
+    return;
+  }
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const client=await pool.connect();
+  try{
+    await client.query("begin");
+    const eligible=await client.query<{id:number}>(
+      `select bm.id
+         from public.bank_mutations bm
+        where ($1::int is null or bm.company_id=$1)
+          and bm.journal_entry_id is null
+          and bm.status not in ('posted','approved','void')
+          and not exists(select 1 from public.bank_reconciliation_matches m where m.mutation_id=bm.id and m.status in ('approved','posted'))
+          and not exists(select 1 from public.payment_allocations pa where pa.mutation_id=bm.id)
+          and not exists(select 1 from sport_center.payment_settlement_batches s where s.bank_mutation_id=bm.id or s.canonical_bank_mutation_id=bm.id)
+        for update`,
+      [actor.companyId],
+    );
+    const ids=eligible.rows.map(r=>r.id);
+    if(ids.length){
+      await client.query(`delete from public.qris_mutation_batch_candidates where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_reconciliation_matches where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_reconciliation_audit where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_mutations where id=any($1::int[])`,[ids]);
+    }
+    await client.query("commit");
+    res.json({ok:true,mutations_deleted:ids.length,imports_deleted:0,mutations_preserved:0});
+  }catch(error){
+    await client.query("rollback").catch(()=>{});
+    req.log.error({error},"Development mutation purge failed");
+    res.status(503).json({error:"Purge mutasi development gagal"});
+  }finally{client.release();}
+});
+
+router.delete("/bank-reconciliation/purge-synced", async (req, res): Promise<void> => {
+  const actor=await getApprovalActor(req).catch(()=>null);
+  if(!actor){res.status(401).json({error:"Unauthorized"});return;}
+  const companyId=safeInteger(req.body?.company_id ?? req.body?.companyId);
+  const confirmation=textValue(req.body?.confirmation);
+  if(companyId===null||confirmation!=="HAPUS MUTASI SYNC PROD"){
+    res.status(422).json({error:"Company dan confirmation purge tidak valid.",code:"PURGE_CONFIRMATION_REQUIRED"});
+    return;
+  }
+  if(actor.companyId!=null&&actor.companyId!==companyId){
+    res.status(403).json({error:"Company context tidak sesuai.",code:"COMPANY_SCOPE_FORBIDDEN"});
+    return;
+  }
+  const client=await pool.connect();
+  try{
+    await client.query("begin");
+    const eligible=await client.query<{id:number}>(
+      `select bm.id
+         from public.bank_mutations bm
+        where bm.company_id=$1
+          and bm.source='google_sheet'
+          and bm.journal_entry_id is null
+          and bm.status in ('unmatched','matched','manual_review','duplicate_need_review','rejected')
+          and not exists(select 1 from public.bank_reconciliation_matches m where m.mutation_id=bm.id and m.status in ('candidate','approved','posted'))
+          and not exists(select 1 from public.payment_allocations pa where pa.mutation_id=bm.id)
+          and not exists(select 1 from sport_center.payment_settlement_batches s where s.bank_mutation_id=bm.id or s.canonical_bank_mutation_id=bm.id)
+        for update`,
+      [companyId],
+    );
+    const ids=eligible.rows.map(r=>r.id);
+    if(ids.length){
+      await client.query(`delete from public.qris_mutation_batch_candidates where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_reconciliation_matches where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_reconciliation_audit where mutation_id=any($1::int[])`,[ids]);
+      await client.query(`delete from public.bank_mutations where id=any($1::int[])`,[ids]);
+    }
+    await client.query("commit");
+    res.json({ok:true,mutations_deleted:ids.length,mutations_preserved:0});
+  }catch(error){
+    await client.query("rollback").catch(()=>{});
+    req.log.error({error,companyId},"Production synced mutation purge failed");
+    res.status(503).json({error:"Purge mutasi sync gagal",code:"PURGE_SYNC_FAILED"});
+  }finally{client.release();}
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
