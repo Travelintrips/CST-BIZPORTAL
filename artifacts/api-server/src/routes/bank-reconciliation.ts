@@ -223,11 +223,11 @@ async function loadLocalMatchCandidates(
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
               and (
                 (
-                  not sp.normalized_method like '%qris%'
+                  not normalized_method like '%qris%'
                   and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
                 )
                 or (
-                  sp.normalized_method like '%qris%'
+                  normalized_method like '%qris%'
                   and coalesce(
                     sp.settlement_date,
                     ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
