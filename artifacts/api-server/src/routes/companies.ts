@@ -24,7 +24,7 @@ interface CompanyRow {
 
 const router: IRouter = Router();
 
-router.use(async (req, res, next) => {
+const authorizeCompanyRoutes = async (req: any, res: any, next: any) => {
   try {
     if (isDevelopmentEnvironment()) {
       if (!getDevSession(req)) {
@@ -48,7 +48,9 @@ router.use(async (req, res, next) => {
     req.log.error({ error }, "Company authorization failed");
     res.status(503).json({ error: "Authorization service unavailable." });
   }
-});
+};
+
+router.use(["/companies", "/companies/list", "/accounting/companies"], authorizeCompanyRoutes);
 
 router.get(["/companies", "/companies/list", "/accounting/companies"], async (req, res) => {
   try {
