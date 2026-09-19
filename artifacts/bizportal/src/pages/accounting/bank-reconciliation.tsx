@@ -7929,7 +7929,6 @@ export default function BankReconciliationPage() {
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
   const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
   const [showPurgeSyncedProd, setShowPurgeSyncedProd] = useState(false);
-  const [purgeCreatedAfter, setPurgeCreatedAfter] = useState("");
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
     error: string;
@@ -9499,7 +9498,6 @@ export default function BankReconciliationPage() {
         body: JSON.stringify({
           scope: "unprocessed_google_sheet",
           company_id: activeCompanyId,
-          created_after: purgeCreatedAfter,
           confirmation: "HAPUS MUTASI SYNC PROD",
         }),
       });
@@ -11714,25 +11712,11 @@ export default function BankReconciliationPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Hapus Mutasi Sync Perusahaan Aktif?</AlertDialogTitle>
             <AlertDialogDescription>
-              Hanya mutasi dari Google Sheet pada perusahaan yang sedang dipilih yang akan dihapus.
-              Waktu mulai sync di bawah menjadi batas bawah <code>created_at</code>, sehingga mutasi lama tidak ikut terhapus.
-              Mutasi yang sudah memiliki jurnal, posting, atau settlement tidak akan disentuh.
+              Hanya mutasi Google Sheet pada perusahaan yang sedang dipilih dan belum dicocokkan yang akan dihapus.
+              Mutasi yang sudah memiliki pencocokan, jurnal, posting, atau settlement tidak akan disentuh.
               Data di Google Sheet tetap utuh sehingga dapat di-sync ulang setelah proses ini selesai.
               Jangan jalankan jika matching atau posting sedang berlangsung.
             </AlertDialogDescription>
-            <div className="space-y-1.5">
-              <Label htmlFor="purge-created-after">Hapus hanya baris yang dibuat setelah</Label>
-              <Input
-                id="purge-created-after"
-                value={purgeCreatedAfter}
-                onChange={(event) => setPurgeCreatedAfter(event.target.value)}
-                placeholder="2026-09-13T15:00:00+07:00"
-                autoComplete="off"
-              />
-              <p className="text-xs text-muted-foreground">
-                Gunakan waktu mulai sync terakhir dengan zona waktu, misalnya Asia/Jakarta (+07:00).
-              </p>
-            </div>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Batal</AlertDialogCancel>
@@ -11743,7 +11727,6 @@ export default function BankReconciliationPage() {
                 purgeSyncedProdMutations.isPending
                 || activeCompanyId == null
                 || activeCompanyId <= 0
-                || !purgeCreatedAfter.trim()
               }
             >
               {purgeSyncedProdMutations.isPending ? "Menghapus..." : "Ya, Hapus Mutasi Sync"}
