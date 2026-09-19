@@ -264,7 +264,7 @@ async function loadLocalMatchCandidates(
          grouped as (
            select
              min(sp.id)::bigint as id,
-             max(sp.amount::numeric) as amount,
+             sum(sp.amount::numeric) as amount,
              min((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date)::text as paid_date,
              coalesce(
                max(nullif(btrim(sp.provider_order_id::text), '')),
@@ -320,6 +320,7 @@ async function loadLocalMatchCandidates(
                 from public.bank_reconciliation_matches brm
                where brm.candidate_type = 'sport_payment'
                  and brm.candidate_id = c.id
+                 and brm.candidate_source = 'sport_center.sport_payments'
                  and brm.status in ('approved', 'posted')
             )
           order by c.id`,
@@ -394,6 +395,7 @@ async function loadLocalMatchCandidates(
                 from public.bank_reconciliation_matches brm
                where brm.candidate_type = 'tenant_invoice'
                  and brm.candidate_id = tp.id
+                 and brm.candidate_source = 'public.tenant_payments'
                  and brm.status in ('approved', 'posted')
             )
           order by tp.id`,
@@ -453,6 +455,7 @@ async function loadLocalMatchCandidates(
                 from public.bank_reconciliation_matches brm
                where brm.candidate_type = 'vendor_invoice'
                  and brm.candidate_id = vi.id
+                 and brm.candidate_source = 'public.vendor_invoices'
                  and brm.status in ('approved', 'posted')
             )
           order by vi.due_date nulls last, vi.id
