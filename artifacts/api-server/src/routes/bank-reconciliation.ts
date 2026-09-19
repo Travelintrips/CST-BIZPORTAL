@@ -2182,9 +2182,14 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
 
   const status = queryString(req.query.status);
   if (status && status !== "all") {
-    if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
-    values.push(status);
-    filters.push(`bm.status = $${values.length}`);
+    if (status === "completed") {
+      values.push(["posted", "approved"]);
+      filters.push(`bm.status = any(${values.length}::text[])`);
+    } else {
+      if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
+      values.push(status);
+      filters.push(`bm.status = ${values.length}`);
+    }
   }
 
   const direction = queryString(req.query.direction);
