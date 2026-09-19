@@ -81,7 +81,7 @@ interface MatchingMutation {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "vendor_invoice";
+  candidateType: "sport_payment" | "tenant_invoice" | "vendor_invoice";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -89,6 +89,17 @@ interface LocalMatchCandidate {
   referenceMatch: boolean;
   nameMatch: boolean;
   reason: string;
+}
+
+function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"]): string {
+  switch (candidateType) {
+    case "sport_payment":
+      return "sport_center.sport_payments";
+    case "tenant_invoice":
+      return "public.tenant_payments";
+    case "vendor_invoice":
+      return "public.vendor_invoices";
+  }
 }
 
 class ApprovalError extends Error {
@@ -210,6 +221,19 @@ async function loadLocalMatchCandidates(
             where coalesce(sp.company_id, 1) = $1
               and lower(coalesce(sp.status::text, '')) in
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
+              and (
+                (
+                  not sp.normalized_method like '%qris%'
+                  and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
+                )
+                or (
+                  sp.normalized_method like '%qris%'
+                  and coalesce(
+                    sp.settlement_date,
+                    ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
+                  ) = $3::date
+                )
+              )
          ),
          grouped as (
            select
@@ -305,6 +329,79 @@ async function loadLocalMatchCandidates(
       const code = (error as { code?: string }).code;
       if (code !== "42P01" && code !== "42703") throw error;
     }
+
+    try {
+      const tenantPayments = await client.query<{
+        id: number;
+        amount: string;
+        paid_date: string | null;
+        payment_reference: string | null;
+        description: string | null;
+      }>(
+        `select tp.id,
+                tp.amount,
+                coalesce(
+                  (tp.paid_at at time zone 'Asia/Jakarta')::date,
+                  (tp.created_at at time zone 'Asia/Jakarta')::date
+                )::text as paid_date,
+                tp.payment_number as payment_reference,
+                concat_ws(
+                  ' ',
+                  t.business_name,
+                  tb.order_number,
+                  tp.payment_number,
+                  tp.method
+                ) as description
+           from public.tenant_payments tp
+           left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
+           left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
+          where tp.company_id = $1
+            and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid')
+            and lower(coalesce(tp.method::text, '')) not like '%qris%'
+            and abs(tp.amount::numeric - $2::numeric) < 0.01
+            and coalesce(
+                  (tp.paid_at at time zone 'Asia/Jakarta')::date,
+                  (tp.created_at at time zone 'Asia/Jakarta')::date
+                ) = $3::date
+            and not exists (
+              select 1
+                from public.bank_reconciliation_matches brm
+               where brm.candidate_type = 'tenant_invoice'
+                 and brm.candidate_id = tp.id
+                 and brm.status in ('approved', 'posted')
+            )
+          order by tp.id`,
+        [mutation.company_id, amount, date],
+      );
+
+      for (const payment of tenantPayments.rows) {
+        const referenceMatch =
+          Boolean(mutation.provider_order_id) &&
+          normalizeMatchText(mutation.provider_order_id) === normalizeMatchText(payment.payment_reference);
+        const nameMatch = tokenOverlap(mutation.description, payment.description);
+        const dateMatch = payment.paid_date === date;
+        const score = 60 + (dateMatch ? 25 : 0) + (referenceMatch ? 15 : nameMatch ? 8 : 0);
+        candidates.push({
+          candidateType: "tenant_invoice",
+          candidateId: payment.id,
+          score,
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: referenceMatch
+            ? "Nominal, tanggal, dan referensi pembayaran tenant cocok."
+            : dateMatch
+              ? "Nominal dan tanggal pembayaran tenant cocok."
+              : "Nominal pembayaran tenant cocok; konfirmasi tenant sebelum approve.",
+        });
+      }
+    } catch (error) {
+      // Tenant is optional on installations that only use Sport Center and
+      // vendor invoices.
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
   } else if (direction === "OUT") {
     try {
       const invoices = await client.query<{
@@ -395,7 +492,7 @@ async function matchLocalMutation(
   const rules = await loadActiveRuleAi(client, mutation.company_id);
   const ruleResult = evaluateReconRules(rules,{description:mutation.description??'',reference:mutation.bank_reference??mutation.provider_order_id??null,amount:Number(mutation.amount),direction:String(mutation.direction).toUpperCase() as 'IN'|'OUT',bankAccountId:mutation.bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)?Number(mutation.bank_account_id):null,bank:mutation.provider_name??null,normalizedDescription:mutation.normalized_description??null,hasDocumentUpload:Boolean(mutation.uploaded_proof_url),companyId:mutation.company_id});
   if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
-  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib dipilih.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);return 'manual_review';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,realCandidate.candidateType==='sport_payment'?'sport_center.sport_payments':'public.vendor_invoices']);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);
+  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib dipilih.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);return 'manual_review';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,localCandidateSource(realCandidate.candidateType)]);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
     const autoPostEligible = confidence === 100
       && matchedRule.candidateRequirement !== 'required'
@@ -455,7 +552,7 @@ async function matchLocalMutation(
         best.dateMatch,
         best.nameMatch,
         best.referenceMatch,
-        best.candidateType === "sport_payment" ? "sport_center.sport_payments" : "public.vendor_invoices",
+        localCandidateSource(best.candidateType),
       ],
     );
   }
@@ -869,6 +966,20 @@ async function assertApprovalCandidateExists(
       `select id from public.accounting_payments where id = $1 and company_id = $2 limit 1 for update`,
       [candidateId, companyId],
     );
+  } else if (candidateType === "tenant_invoice") {
+    if (candidateSource && candidateSource !== "public.tenant_payments") {
+      throw new ApprovalError("Sumber kandidat pembayaran tenant tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id
+         from public.tenant_payments
+        where id = $1
+          and company_id = $2
+          and lower(coalesce(status::text, '')) in ('confirmed', 'paid')
+        limit 1
+        for update`,
+      [candidateId, companyId],
+    );
   } else if (candidateType === "recon_rule") {
     if (candidateSource !== "public.recon_rules") {
       throw new ApprovalError("Sumber Rule AI tidak valid.", 409, "STALE_CANDIDATE");
@@ -1007,6 +1118,8 @@ async function approveBankMutation(
         ? "public.vendor_invoices"
         : selectedCandidateType === "accounting_payment"
           ? "public.accounting_payments"
+            : selectedCandidateType === "tenant_invoice"
+              ? "public.tenant_payments"
           : selectedCandidateType === "recon_rule"
             ? "public.recon_rules"
             : null;
@@ -1576,6 +1689,37 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
     filters.push(`bm.provider_name = $${values.length}`);
   }
 
+  const paymentType = queryString(req.query.payment_type);
+  if (paymentType && paymentType !== "all") {
+    if (!["bank_transfer", "qris", "paylabs"].includes(paymentType)) {
+      throw new Error("INVALID_PAYMENT_TYPE");
+    }
+    const compactEvidence = `
+      upper(regexp_replace(
+        concat_ws(' ', bm.provider_name, bm.provider_order_id, bm.description, bm.normalized_description),
+        '[^A-Za-z0-9]', '', 'g'
+      ))
+    `;
+    if (paymentType === "bank_transfer") {
+      filters.push(`(
+        ${compactEvidence} not like '%QRIS%'
+        and ${compactEvidence} not like '%PAYLABS%'
+        and ${compactEvidence} not like '%QRTRAVELI%'
+        or ${compactEvidence} like '%INHOUSETRF%'
+      )`);
+    } else if (paymentType === "paylabs") {
+      filters.push(`lower(concat_ws(' ', bm.provider_name, bm.provider_order_id, bm.description, bm.normalized_description)) like '%paylabs%'`);
+    } else {
+      filters.push(`(
+        ${compactEvidence} like '%QRIS%'
+        or ${compactEvidence} like '%QRTRAVELI%'
+        or lower(concat_ws(' ', bm.provider_name, bm.provider_order_id, bm.description, bm.normalized_description)) like '%paylabs%'
+        or concat_ws(' ', bm.provider_name, bm.provider_order_id, bm.description, bm.normalized_description) ~* 'QR[A-Z0-9]{4,}'
+        or concat_ws(' ', bm.provider_name, bm.provider_order_id, bm.description, bm.normalized_description) ~* '\\mQR\\s*(CODE|PAY|PAYMENT)\\M'
+      )`);
+    }
+  }
+
   const bankAccountId = queryString(req.query.bank_account_id);
   if (bankAccountId && bankAccountId !== "all") {
     values.push(bankAccountId);
@@ -1648,7 +1792,8 @@ const mutationListColumns = `
       'proof_match', match.proof_match,
       'status', match.status,
       'customer_name', match.customer_name,
-      'order_ref', match.order_ref
+       'order_ref', match.order_ref,
+       'details', null
     ) order by match.match_score desc nulls last, match.id), '[]'::json)
     from public.bank_reconciliation_matches match
     where match.mutation_id = bm.id
@@ -1734,6 +1879,165 @@ const mutationListColumns = `
     limit 1
   ) as qris_candidate_audit
 `;
+
+type MutationCandidateRow = {
+  candidates?: Array<Record<string, unknown>> | null;
+  [key: string]: unknown;
+};
+
+function candidateDetailKey(candidateType: unknown, candidateId: unknown): string {
+  return `${String(candidateType ?? "")}:${String(candidateId ?? "")}`;
+}
+
+async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Promise<void> {
+  const candidateIds = new Map<string, number[]>();
+  for (const row of rows) {
+    for (const candidate of Array.isArray(row.candidates) ? row.candidates : []) {
+      const candidateType = String(candidate.candidate_type ?? "");
+      const candidateId = Number(candidate.candidate_id);
+      if (!Number.isSafeInteger(candidateId) || candidateId <= 0) continue;
+      const ids = candidateIds.get(candidateType) ?? [];
+      ids.push(candidateId);
+      candidateIds.set(candidateType, ids);
+    }
+  }
+
+  const details = new Map<string, Record<string, unknown>>();
+  const idsFor = (candidateType: string): number[] =>
+    [...new Set(candidateIds.get(candidateType) ?? [])];
+
+  const sportIds = idsFor("sport_payment");
+  if (sportIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select sp.id,
+                sp.amount,
+                (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date::text as date,
+                coalesce(
+                  nullif(to_jsonb(sp)->>'payment_number', ''),
+                  nullif(to_jsonb(sp)->>'provider_order_id', ''),
+                  nullif(to_jsonb(sp)->>'provider_id', '')
+                ) as reference,
+                concat_ws(
+                  ' ',
+                  nullif(to_jsonb(sb)->>'customer_name', ''),
+                  nullif(to_jsonb(sp)->>'payment_type', ''),
+                  nullif(to_jsonb(sp)->>'payment_provider', ''),
+                  nullif(to_jsonb(sp)->>'provider_order_id', '')
+                ) as name,
+                coalesce(to_jsonb(sp)->>'payment_method', to_jsonb(sp)->>'method') as method,
+                to_jsonb(sp)->>'payment_type' as payment_type,
+                to_jsonb(sp)->>'payment_provider' as payment_provider,
+                sp.status::text as status,
+                sp.booking_id
+           from sport_center.sport_payments sp
+           left join sport_center.sport_bookings sb on sb.id = sp.booking_id
+          where sp.id = any($1::bigint[])`,
+        [sportIds],
+      );
+      for (const row of result.rows) {
+        const method = String(row.method ?? "").toLowerCase();
+        const provider = String(row.payment_provider ?? "").toLowerCase();
+        const paymentType = String(row.payment_type ?? "").toLowerCase();
+        const sportPaymentType =
+          provider.includes("paylabs") ? "paylabs" :
+          method.includes("qris") || paymentType.includes("qris") ? "qris" :
+          "bank_transfer";
+        details.set(candidateDetailKey("sport_payment", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          method: row.method,
+          paymentMethod: row.method,
+          paymentType: row.payment_type,
+          paymentProvider: row.payment_provider,
+          sportPaymentType,
+          sourceType: "sport_payment",
+          status: row.status,
+          bookingId: row.booking_id,
+        });
+      }
+    } catch {
+      // The Sport Center schema is optional for bank-only installations.
+    }
+  }
+
+  const tenantIds = idsFor("tenant_invoice");
+  if (tenantIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select tp.id,
+                tp.amount,
+                coalesce(
+                  (tp.paid_at at time zone 'Asia/Jakarta')::date,
+                  (tp.created_at at time zone 'Asia/Jakarta')::date
+                )::text as date,
+                tp.payment_number as reference,
+                t.business_name as name,
+                tp.method,
+                tp.status::text as status,
+                tp.tenant_booking_id as booking_id
+           from public.tenant_payments tp
+           left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
+           left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
+          where tp.id = any($1::bigint[])`,
+        [tenantIds],
+      );
+      for (const row of result.rows) {
+        details.set(candidateDetailKey("tenant_invoice", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          paymentNumber: row.reference,
+          method: row.method,
+          paymentMethod: row.method,
+          sourceType: "tenant_payment",
+          status: row.status,
+          bookingId: row.booking_id,
+        });
+      }
+    } catch {
+      // Tenant is optional and should not make the mutation list unavailable.
+    }
+  }
+
+  const invoiceIds = idsFor("vendor_invoice");
+  if (invoiceIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select id, grand_total as amount, due_date::text as date,
+                supplier_name as name, invoice_number as reference,
+                vendor_invoice_ref as memo, status::text as status
+           from public.vendor_invoices
+          where id = any($1::bigint[])`,
+        [invoiceIds],
+      );
+      for (const row of result.rows) {
+        details.set(candidateDetailKey("vendor_invoice", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          memo: row.memo,
+          documentType: "vendor_invoice",
+          status: row.status,
+        });
+      }
+    } catch {
+      // Vendor invoice details are additive to the core match response.
+    }
+  }
+
+  for (const row of rows) {
+    for (const candidate of Array.isArray(row.candidates) ? row.candidates : []) {
+      candidate.details = details.get(
+        candidateDetailKey(candidate.candidate_type, candidate.candidate_id),
+      ) ?? null;
+    }
+  }
+}
 
 const qrisCandidateColumns = `
   qris.id,
@@ -1975,10 +2279,13 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
       transaction_date: string;
       amount: string;
       description: string | null;
+       normalized_description: string | null;
+       provider_order_id: string | null;
       provider_name: string | null;
       bank_account_id: number | null;
     }>(
-      `select id, company_id, transaction_date, amount, description, provider_name, bank_account_id
+       `select id, company_id, transaction_date, amount, description,
+               normalized_description, provider_order_id, provider_name, bank_account_id
          from public.bank_mutations
         where ($1::int is null or company_id = $1)
           and ($2::int is null or id = $2)
@@ -1988,7 +2295,14 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
             or lower(coalesce(description, '')) like '%qris%'
             or lower(coalesce(description, '')) like '%paylabs%'
             or lower(coalesce(description, '')) like '%qrtraveli%'
+             or lower(coalesce(provider_order_id, '')) like '%qris%'
+             or lower(coalesce(normalized_description, '')) like '%qris%'
+             or lower(coalesce(normalized_description, '')) like '%paylabs%'
+             or lower(coalesce(normalized_description, '')) like '%qrtraveli%'
+             or concat_ws(' ', provider_name, provider_order_id, description, normalized_description) ~* 'QR[A-Z0-9]{4,}'
+             or concat_ws(' ', provider_name, provider_order_id, description, normalized_description) ~* '\mQR\s*(CODE|PAY|PAYMENT)\M'
           )
+           and concat_ws(' ', provider_name, provider_order_id, description, normalized_description) !~* 'INHOUSETRF'
         order by transaction_date desc, id desc
         limit 500
         for update`,
@@ -2417,6 +2731,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
        offset $${listValues.length}`,
       listValues,
     );
+    await hydrateMutationCandidateDetails(result.rows as MutationCandidateRow[]);
 
     res.json({
       mutations: result.rows,
@@ -2428,7 +2743,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
       res.status(400).json({ error: "company_id tidak valid" });
       return;
     }
-    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION" || message === "INVALID_PAYMENT_TYPE") {
       res.status(400).json({ error: "Filter mutasi tidak valid" });
       return;
     }
@@ -2458,7 +2773,7 @@ router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
       res.status(400).json({ error: "company_id tidak valid" });
       return;
     }
-    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION") {
+    if (message === "INVALID_STATUS" || message === "INVALID_DIRECTION" || message === "INVALID_PAYMENT_TYPE") {
       res.status(400).json({ error: "Filter mutasi tidak valid" });
       return;
     }
