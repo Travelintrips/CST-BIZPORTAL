@@ -2192,6 +2192,55 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/repair", async (r
   }
 });
 
+
+router.post("/bank-reconciliation/:mutationId/recover-qris-settlement", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const settlementId = safeInteger(req.body?.settlement_id ?? req.body?.settlementId);
+  const confirmed = req.body?.confirm_historical_repair === true;
+  const reason = textValue(req.body?.reason);
+  if (mutationId === null || settlementId === null) {
+    res.status(400).json({ error: "mutationId atau settlementId tidak valid", code: "INVALID_CANONICAL_RECOVERY_INPUT" });
+    return;
+  }
+  if (!confirmed || !reason || reason.length < 10) {
+    res.status(422).json({
+      error: "Recovery historical membutuhkan konfirmasi eksplisit dan alasan minimal 10 karakter.",
+      code: "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
+    });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await approveCanonicalQrisSettlementLink(
+      client,
+      mutationId,
+      settlementId,
+      actor,
+      { historicalRepair: true, cleanupDraft: true, reason },
+    );
+    await client.query("commit");
+    res.json(result);
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({
+        error: error.message,
+        code: error.code ?? null,
+        ...(error.details ? { details: error.details } : {}),
+      });
+      return;
+    }
+    req.log.error({ error, mutationId, settlementId }, "Canonical QRIS historical recovery failed");
+    res.status(503).json({ error: "Recovery settlement canonical gagal", code: "CANONICAL_RECOVERY_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
