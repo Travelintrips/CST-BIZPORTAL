@@ -177,7 +177,7 @@ async function loadLocalMatchCandidates(
       }>(
         `select sp.id,
                 sp.amount,
-                coalesce(sp.paid_at, sp.created_at)::date::text as paid_date,
+                (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date::text as paid_date,
                 coalesce(sp.provider_order_id, sp.provider_id::text) as payment_reference,
                 concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description
            from sport_center.sport_payments sp
@@ -186,8 +186,27 @@ async function loadLocalMatchCandidates(
                 ('confirmed', 'paid', 'completed', 'success', 'settled')
             and abs(sp.amount::numeric - $2::numeric) < 0.01
             and (
-              coalesce(sp.paid_at, sp.created_at)::date = $3::date
-              or coalesce(sp.settlement_date, (coalesce(sp.paid_at, sp.created_at)::date + 1)) = $3::date
+              (
+                lower(coalesce(
+                  to_jsonb(sp)->>'payment_method',
+                  to_jsonb(sp)->>'method',
+                  sp.payment_type::text,
+                  ''
+                )) not like '%qris%'
+                and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
+              )
+              or (
+                lower(coalesce(
+                  to_jsonb(sp)->>'payment_method',
+                  to_jsonb(sp)->>'method',
+                  sp.payment_type::text,
+                  ''
+                )) like '%qris%'
+                and coalesce(
+                  sp.settlement_date,
+                  ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
+                ) = $3::date
+              )
             )
             and not exists (
               select 1
