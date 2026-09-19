@@ -4101,21 +4101,6 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
     if (String(candidate.mutation_direction).toUpperCase() !== "IN") {
       throw new ApprovalError("Settlement QRIS hanya dapat ditautkan ke mutasi IN.", 422, "INVALID_DIRECTION");
     }
-    if (["approved", "completed"].includes(String(candidate.status ?? "").toLowerCase())) {
-      if (candidate.mutation_journal_entry_id == null) {
-        throw new ApprovalError("Kandidat sudah approved tetapi jurnal mutasi belum tersedia.", 409, "APPROVAL_STATE_INVALID");
-      }
-      await client.query("commit");
-      res.json({
-        ok: true,
-        candidateId,
-        mutationId: candidate.mutation_id,
-        journal_entry_id: candidate.mutation_journal_entry_id,
-        idempotent: true,
-      });
-      return;
-    }
-
     const reconciliationStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
     if (reconciliationStatus !== "MATCHED" && !manualOverride) {
       throw new ApprovalError(
