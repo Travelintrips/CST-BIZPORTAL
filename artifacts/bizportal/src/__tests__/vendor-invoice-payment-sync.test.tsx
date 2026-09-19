@@ -38,8 +38,8 @@ const postedInvoice = {
   totalAmount: "100000",
   taxAmount: "0",
   grandTotal: "100000",
-  reconciledAmountPaid: "100000",
-  amountPaid: "100000",
+  reconciledAmountPaid: "0",
+  amountPaid: "0",
   journalStatus: "posted",
   journalEntryNumber: "JRNL-042",
   threeWayMatchStatus: "matched",
@@ -102,7 +102,7 @@ describe("Vendor invoice payment synchronization", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps sync available for a fully paid posted invoice and updates status after sync", async () => {
+  it("keeps sync available for a posted invoice until canonical reconciliation updates status", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
