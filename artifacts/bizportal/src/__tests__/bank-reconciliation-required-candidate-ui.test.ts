@@ -14,7 +14,6 @@ type CandidateFixture = {
 };
 
 const realTransactionCandidateTypes = new Set([
-  "accounting_payment",
   "logistic_order",
   "invoice",
   "expense",
@@ -42,11 +41,11 @@ describe("Rule AI required-candidate approval UI", () => {
   it("keeps a real transaction candidate visible while hiding the Rule AI hint", () => {
     const candidates = [
       { candidate_type: "recon_rule" },
-      { candidate_type: "accounting_payment" },
+      { candidate_type: "sport_payment" },
     ];
 
     expect(displayableCandidates(candidates)).toEqual([
-      { candidate_type: "accounting_payment" },
+      { candidate_type: "sport_payment" },
     ]);
   });
 
