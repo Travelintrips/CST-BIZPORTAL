@@ -1717,10 +1717,12 @@ function isQrisMutation(m: BankMutation): boolean {
 }
 
 export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
-  // Any QRIS-classified mutation is settlement-owned. Even when no canonical
-  // candidate is currently visible, fail closed instead of exposing the
-  // generic manual-COA approval path.
-  if (isQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
+  // QRIS is settlement-owned even when its H-1 audit is stale/empty. Raw QRIS
+  // audit metadata or a canonical settlement candidate is enough to fail
+  // closed; never fall back to generic manual COA approval.
+  const hasQrisAuditMetadata = Boolean(m.qris_candidate_audit)
+    || (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0);
+  if (hasQrisAuditMetadata || isQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
   return canApprove(m) && visibleCandidates(m).length === 0;
 }
 
