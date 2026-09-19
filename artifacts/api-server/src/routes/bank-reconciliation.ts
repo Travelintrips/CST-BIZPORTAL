@@ -102,6 +102,136 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
   }
 }
 
+
+type UploadedProofFile = {
+  filename: string;
+  contentType: string;
+  buffer: Buffer;
+};
+
+function readSingleMultipartFile(
+  request: Request,
+  fieldName = "file",
+  maxBytes = 10 * 1024 * 1024,
+): Promise<UploadedProofFile> {
+  const contentType = String(request.headers["content-type"] ?? "");
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) return Promise.reject(new ApprovalError("Multipart boundary tidak tersedia.", 400, "INVALID_MULTIPART"));
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    request.on("data", (chunk: Buffer | string) => {
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += data.length;
+      if (size > maxBytes + 1024 * 1024) {
+        fail(new ApprovalError("File bukti maksimal 10 MB.", 413, "PROOF_FILE_TOO_LARGE"));
+        request.destroy();
+        return;
+      }
+      chunks.push(data);
+    });
+    request.on("error", fail);
+    request.on("end", () => {
+      if (settled) return;
+      try {
+        const body = Buffer.concat(chunks);
+        const delimiter = Buffer.from(`--${boundary}`);
+        const nextDelimiter = Buffer.from(`\r\n--${boundary}`);
+        let cursor = 0;
+        while (cursor < body.length) {
+          const boundaryAt = body.indexOf(delimiter, cursor);
+          if (boundaryAt < 0) break;
+          const headersStart = boundaryAt + delimiter.length + 2;
+          const headersEnd = body.indexOf(Buffer.from("\r\n\r\n"), headersStart);
+          if (headersEnd < 0) break;
+          const headers = body.slice(headersStart, headersEnd).toString("utf8");
+          const disposition = headers.match(/content-disposition:\s*form-data;([^\r\n]+)/i)?.[1] ?? "";
+          const name = disposition.match(/name="([^"]+)"/i)?.[1] ?? "";
+          const filename = disposition.match(/filename="([^"]*)"/i)?.[1] ?? "proof";
+          const partContentType = headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? "application/octet-stream";
+          const dataStart = headersEnd + 4;
+          const dataEnd = body.indexOf(nextDelimiter, dataStart);
+          if (name === fieldName && dataEnd >= dataStart) {
+            const buffer = body.slice(dataStart, dataEnd);
+            if (buffer.length > maxBytes) throw new ApprovalError("File bukti maksimal 10 MB.", 413, "PROOF_FILE_TOO_LARGE");
+            settled = true;
+            resolve({ filename, contentType: partContentType, buffer });
+            return;
+          }
+          cursor = dataEnd >= 0 ? dataEnd + 2 : body.length;
+        }
+        fail(new ApprovalError("File bukti tidak ditemukan pada request.", 400, "PROOF_FILE_REQUIRED"));
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
+}
+
+function proofStorageConfig(): { url: string; key: string } {
+  const appEnv = process.env.APP_ENV;
+  const url = appEnv === "development"
+    ? (process.env.SUPABASE_URL_DEV ?? process.env.SUPABASE_URL ?? "")
+    : (process.env.SUPABASE_URL ?? "");
+  const key = appEnv === "development"
+    ? (process.env.SUPABASE_SERVICE_ROLE_KEY_DEV ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "")
+    : (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "");
+  if (!["development", "production"].includes(String(appEnv)) || !url || !key) {
+    throw new ApprovalError("Supabase Storage belum dikonfigurasi untuk environment ini.", 503, "PROOF_STORAGE_UNAVAILABLE");
+  }
+  const normalized = url.replace(/\/+$/, "");
+  const parsed = new URL(normalized);
+  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".supabase.co")) {
+    throw new ApprovalError("Origin Supabase Storage tidak valid.", 503, "PROOF_STORAGE_INVALID_ORIGIN");
+  }
+  return { url: normalized, key };
+}
+
+async function uploadBankProofToSupabase(
+  mutationId: number,
+  file: UploadedProofFile,
+): Promise<string> {
+  const allowed: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "application/pdf": "pdf",
+  };
+  const ext = allowed[file.contentType.toLowerCase()];
+  if (!ext) throw new ApprovalError("Hanya JPG, PNG, WEBP, GIF, atau PDF yang diizinkan.", 400, "PROOF_FILE_TYPE_INVALID");
+  const { url, key } = proofStorageConfig();
+  const path = `bank-proof/${mutationId}/${Date.now()}.${ext}`;
+  const objectPath = path.split("/").map(encodeURIComponent).join("/");
+  const response = await fetch(`${url}/storage/v1/object/public-assets/${objectPath}`, {
+    method: "POST",
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      "content-type": file.contentType,
+      "x-upsert": "true",
+    },
+    body: file.buffer as any,
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new ApprovalError(
+      `Upload bukti ke Supabase Storage gagal (${response.status})${body ? `: ${body.slice(0, 200)}` : ""}`,
+      503,
+      "PROOF_STORAGE_UPLOAD_FAILED",
+    );
+  }
+  return `${url}/storage/v1/object/public/public-assets/${objectPath}`;
+}
+
 class ApprovalError extends Error {
   constructor(
     message: string,
