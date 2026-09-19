@@ -1899,7 +1899,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
            sp.paid_at,
            'SCPAY-SC-' || sp.id::text as payment_number,
            sp.payment_method as method,
-           coalesce(nullif(sp.payment_provider, ''), nullif(sp.provider_name, '')) as provider_name,
+           coalesce(nullif(sp.payment_provider::text, ''), nullif(sp.provider_name::text, '')) as provider_name,
            coalesce(
              nullif(sp.mdr_amount, 0),
              round(sp.amount * coalesce(cfg.mdr_rate, 0), coalesce(cfg.rounding_scale, 2))
@@ -1915,7 +1915,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
               and psc.is_active = true
               and psc.source = 'OWNER_APPROVED'
               and lower(btrim(psc.provider_code)) =
-                  lower(btrim(coalesce(sp.payment_provider, sp.provider_name, '')))
+                  lower(btrim(coalesce(sp.payment_provider::text, sp.provider_name::text, '')))
               and (
                 btrim(psc.bank_account_id::text) = btrim(coalesce(sp.bank_account_id::text, ''))
                 or sp.bank_account_id is null
