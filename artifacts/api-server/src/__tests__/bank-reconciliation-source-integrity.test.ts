@@ -88,4 +88,12 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("set status = 'superseded'");
   });
 
+  it("prefers the posted payment_confirmed journal over one stale draft duplicate", () => {
+    expect(source).toContain('const existingPosted = existing.status === "posted"');
+    expect(source).toContain('const incomingPosted = journal.status === "posted"');
+    expect(source).toContain("if (existingPosted !== incomingPosted)");
+    expect(source).toContain("if (incomingPosted) journalByPayment.set(journal.payment_id, journal)");
+    expect(source).toContain("lebih dari satu jurnal payment_confirmed dengan status finansial yang sama");
+  });
+
 });
