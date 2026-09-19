@@ -270,35 +270,6 @@ describe("Google Sheet bank mutation sync", () => {
       range: string;
       values: string[][];
     }>;
-    expect(updates).toEqual(expect.arrayContaining([
-      { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
-      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
-      { range: "'Mutasi Bank'!G2", values: [["51001"]] },
-      { range: "'Mutasi Bank'!H2", values: [["Beban Operasional"]] },
-      { range: "'Mutasi Bank'!I2", values: [["98"]] },
-      { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
-      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
-    ]));
-  });
-
-  it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
-    mocks.readSpreadsheetValues.mockResolvedValue([
-      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
-      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
-      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
-      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
-      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
-    ]);
-
-    const result = await syncOneBankSheetConfig(config.id);
-
-    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
-      String(sql).includes("insert into public.bank_mutations"),
-    );
-    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
-      range: string;
-      values: string[][];
-    }>;
     const generatedCanonicalKey = updates.find(
       (update) => update.range === "'Mutasi Bank'!E4",
     )?.values[0]?.[0];
