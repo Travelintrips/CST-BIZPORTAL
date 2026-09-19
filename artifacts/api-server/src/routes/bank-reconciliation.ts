@@ -696,7 +696,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
   const client = await pool.connect();
   try {
     const result = await client.query<MatchingMutation>(
-      `select bm.id, bm.amount, bm.direction, bm.transaction_date,
+      `select bm.id, bm.amount, bm.direction, bm.transaction_date::text as transaction_date,
               bm.description, bm.normalized_description, bm.provider_order_id,
               bm.company_id, bm.status, bm.bank_account_id, bm.bank_reference,
               bm.provider_name, bm.uploaded_proof_url, bm.review_code
@@ -1042,7 +1042,7 @@ async function approveBankMutation(
     bank_account_id: string | number | null;
     journal_entry_id: number | null;
   }>(
-    `select id, status, amount, direction, transaction_date, description,
+    `select id, status, amount, direction, transaction_date::text as transaction_date, description,
             mutation_key, bank_reference, canonical_key, provider_order_id,
             company_id, bank_account_id, journal_entry_id
        from public.bank_mutations
@@ -2461,7 +2461,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
       provider_name: string | null;
       bank_account_id: number | null;
     }>(
-       `select id, company_id, transaction_date, amount, description,
+       `select id, company_id, transaction_date::text as transaction_date, amount, description,
                normalized_description, provider_order_id, provider_name, bank_account_id
          from public.bank_mutations
         where ($1::int is null or company_id = $1)
