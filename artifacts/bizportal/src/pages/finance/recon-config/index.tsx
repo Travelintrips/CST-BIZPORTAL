@@ -1148,7 +1148,7 @@ function AiRulesTab() {
 
   const deactivate = async (row: any) => {
     if (!confirm(`Nonaktifkan rule "${row.name}"?`)) return;
-    await fetch(`${API}/recon-classification/ai-rules/${row.id}`, { method: "DELETE", credentials: "include" });
+    await fetch(`${API}/recon-classification/ai-rules/${row.id}?company_id=${activeCompanyId}`, { method: "DELETE", credentials: "include" });
     load();
   };
 
