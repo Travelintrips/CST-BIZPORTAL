@@ -10021,19 +10021,7 @@ export default function BankReconciliationPage() {
                    Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                 onClick={() => qrisDryRunMut.mutate(undefined)}
-                disabled={qrisDryRunMut.isPending || qrisCompanyId == null}
-                title={qrisCompanyId == null ? "Pilih satu perusahaan aktif terlebih dahulu" : undefined}
-              >
-                {qrisDryRunMut.isPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <Play className="w-3.5 h-3.5" />}
-                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
-              </Button>
+              
             </div>
           </CardHeader>
           <CardContent className="pt-0">
