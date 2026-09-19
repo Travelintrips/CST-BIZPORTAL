@@ -72,4 +72,12 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).not.toContain("vendor_invoices.amount_paid");
   });
 
+  it("repairs a missing approved match only from one deterministic source-qualified candidate", () => {
+    expect(source).toContain("APPROVED_MATCH_REPAIRED");
+    expect(source).toContain("candidate_source is not null");
+    expect(source).toContain("status in ('candidate','matched','selected')");
+    expect(source).toContain('entry?.source !== "bank_reconciliation"');
+    expect(source).toContain("recoverableMatch.rows.length !== 1");
+  });
+
 });
