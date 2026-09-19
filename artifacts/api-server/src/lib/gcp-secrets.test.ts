@@ -7,6 +7,7 @@ const originalEnvironment = {
   BIZPORTAL_API_ORIGIN_PROD: process.env.BIZPORTAL_API_ORIGIN_PROD,
   BIZPORTAL_BACKEND_API_ORIGIN: process.env.BIZPORTAL_BACKEND_API_ORIGIN,
   BIZPORTAL_API_ORIGIN: process.env.BIZPORTAL_API_ORIGIN,
+  SUPABASE_DATABASE_URL_DEV: process.env.SUPABASE_DATABASE_URL_DEV,
   GCP_SECRET_MANAGER_BOOTSTRAP_JSON: process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON,
 };
 
@@ -24,6 +25,11 @@ afterEach(() => {
 beforeEach(() => {
   delete process.env.BIZPORTAL_BACKEND_API_ORIGIN;
   delete process.env.BIZPORTAL_API_ORIGIN;
+  // gcp-secrets imports the proxy policy, which imports dev-auth and its database
+  // pool. Keep this origin-only test independent from runtime Secret Manager
+  // credentials by providing a non-network fixture for that eager initialization.
+  process.env.SUPABASE_DATABASE_URL_DEV =
+    "postgresql://test_user:test_password@db.example.test:5432/test";
 });
 
 describe("configured BizPortal API origin", () => {
