@@ -2241,6 +2241,160 @@ router.post("/bank-reconciliation/:mutationId/recover-qris-settlement", async (r
   }
 });
 
+
+router.delete("/bank-reconciliation/:mutationId/candidates/:candidateId/duplicate", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const candidateId = parsePositiveInt(req.params.candidateId);
+  if (mutationId === null || candidateId === null) {
+    res.status(400).json({ error: "ID mutasi/kandidat tidak valid" });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = await client.query<{ company_id: number | null }>(
+      `select company_id from public.bank_mutations where id=$1 for update`,
+      [mutationId],
+    );
+    if (!mutation.rows[0]) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+    if (actor.companyId != null && mutation.rows[0].company_id !== actor.companyId) {
+      throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+
+    const targetResult = await client.query<{
+      id: number;
+      candidate_type: string;
+      candidate_id: number;
+      candidate_source: string | null;
+      status: string;
+    }>(
+      `select id,candidate_type,candidate_id,candidate_source,status
+         from public.bank_reconciliation_matches
+        where id=$1 and mutation_id=$2
+        for update`,
+      [candidateId, mutationId],
+    );
+    const target = targetResult.rows[0];
+    if (!target || target.status !== "candidate") {
+      throw new ApprovalError("Kandidat aktif tidak ditemukan.", 409, "CANDIDATE_NOT_ACTIVE");
+    }
+
+    const peers = await client.query<{ id: number }>(
+      `select id
+         from public.bank_reconciliation_matches
+        where mutation_id=$1
+          and candidate_type=$2
+          and candidate_id=$3
+          and candidate_source is not distinct from $4
+          and status='candidate'
+        order by id
+        for update`,
+      [mutationId, target.candidate_type, target.candidate_id, target.candidate_source],
+    );
+    if (peers.rows.length < 2) {
+      throw new ApprovalError("Kandidat ini bukan duplikat aktif.", 409, "NOT_A_DUPLICATE");
+    }
+    const keeper = peers.rows.find((row) => row.id !== candidateId);
+    if (!keeper) throw new ApprovalError("Kandidat utama tidak dapat ditentukan.", 409, "DUPLICATE_KEEPER_NOT_FOUND");
+
+    await client.query(
+      `update public.bank_reconciliation_matches set status='superseded' where id=$1 and status='candidate'`,
+      [candidateId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'DUPLICATE_CANDIDATE_SUPERSEDED',$2,$3::jsonb)`,
+      [mutationId, actor.email, JSON.stringify({ candidate_id: candidateId, keeper_candidate_id: keeper.id })],
+    );
+    await client.query("commit");
+    res.json({ ok: true, candidate_id: candidateId, keeper_candidate_id: keeper.id });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code ?? null }); return; }
+    req.log.error({ error, mutationId, candidateId }, "Duplicate candidate supersede failed");
+    res.status(503).json({ error: "Kandidat duplikat gagal disupersede" });
+  } finally {
+    client.release();
+  }
+});
+
+router.delete("/bank-reconciliation/:mutationId", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const locked = await client.query<{
+      id: number;
+      company_id: number | null;
+      status: string;
+      journal_entry_id: number | null;
+      source: string | null;
+    }>(
+      `select id,company_id,status,journal_entry_id,source
+         from public.bank_mutations
+        where id=$1
+        for update`,
+      [mutationId],
+    );
+    const mutation = locked.rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+    if (actor.companyId != null && mutation.company_id !== actor.companyId) {
+      throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+    if (!["unmatched","matched","manual_review","duplicate_need_review","rejected"].includes(mutation.status)) {
+      throw new ApprovalError(`Mutasi berstatus "${mutation.status}" tidak boleh dihapus.`, 409, "DELETE_FINAL_MUTATION_BLOCKED");
+    }
+    if (mutation.journal_entry_id != null) {
+      throw new ApprovalError("Mutasi sudah memiliki jurnal dan tidak boleh dihapus.", 409, "DELETE_JOURNAL_LINKED");
+    }
+
+    const finalMatch = await client.query<{ id: number }>(
+      `select id from public.bank_reconciliation_matches where mutation_id=$1 and status in ('approved','posted') limit 1 for update`,
+      [mutationId],
+    );
+    if (finalMatch.rows[0]) throw new ApprovalError("Mutasi memiliki final match.", 409, "DELETE_FINAL_MATCH_BLOCKED");
+
+    const allocation = await client.query<{ id: number }>(
+      `select id from public.payment_allocations where mutation_id=$1 limit 1 for update`,
+      [mutationId],
+    ).catch(() => ({ rows: [] as { id: number }[] }));
+    if (allocation.rows[0]) throw new ApprovalError("Mutasi digunakan oleh payment allocation.", 409, "DELETE_ALLOCATION_BLOCKED");
+
+    const settlement = await client.query<{ id: number }>(
+      `select id from sport_center.payment_settlement_batches
+        where bank_mutation_id=$1 or canonical_bank_mutation_id=$1
+        limit 1 for update`,
+      [mutationId],
+    );
+    if (settlement.rows[0]) throw new ApprovalError("Mutasi digunakan oleh settlement canonical.", 409, "DELETE_SETTLEMENT_BLOCKED");
+
+    await client.query(`delete from public.qris_mutation_batch_candidates where mutation_id=$1`, [mutationId]);
+    await client.query(`delete from public.bank_reconciliation_matches where mutation_id=$1 and status not in ('approved','posted')`, [mutationId]);
+    await client.query(`delete from public.bank_reconciliation_audit where mutation_id=$1`, [mutationId]);
+    const deleted = await client.query<{ id: number }>(
+      `delete from public.bank_mutations where id=$1 returning id`,
+      [mutationId],
+    );
+    if (!deleted.rows[0]) throw new ApprovalError("Mutasi gagal dihapus karena state berubah.", 409, "DELETE_RACE_CONFLICT");
+    await client.query("commit");
+    res.json({ ok: true, mutation_id: mutationId });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code ?? null }); return; }
+    req.log.error({ error, mutationId }, "Bank mutation delete failed");
+    res.status(503).json({ error: "Mutasi gagal dihapus", code: "BANK_MUTATION_DELETE_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
