@@ -2399,6 +2399,9 @@ export async function approveAndCreateJournal(
   candidateSource: ReconciliationCandidateSource | null = null,
   autoPost = false,
   ruleAi?: AtomicRuleAiInput | null,
+  /** Active company context supplied by the authenticated approval request.
+   * Imported bank rows can legitimately have a NULL company_id. */
+  companyContextId?: number | null,
 ): Promise<{ ok: boolean; journalEntryId: number | null; ruleAiId?: number; error?: string; manual_review_required?: true; code?: string }> {
 
   let journalEntryId: number | null = null;
@@ -2425,7 +2428,9 @@ export async function approveAndCreateJournal(
       }
       const mut = locked[0] as Record<string, unknown>;
 
-      const companyId   = normalizeCompanyId(mut["company_id"]);
+       const companyId   =
+         normalizeCompanyId(mut["company_id"]) ??
+         normalizeCompanyId(companyContextId);
       const bankAccountReference = String(mut["bank_account_reference"] ?? "").trim();
       // bank_account_id historically contains either the internal
       // company_bank_accounts.id or the external account number from a

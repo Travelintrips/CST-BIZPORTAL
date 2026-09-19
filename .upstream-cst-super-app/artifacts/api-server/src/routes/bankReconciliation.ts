@@ -8254,6 +8254,16 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     }
   }
 
+  // Imported bank rows may have no company_id even though the reviewer is
+  // operating inside a valid company context. resolveCompanyId applies the
+  // existing admin/allowed-company guard to the request body or session.
+  let approvalCompanyId: number | null = null;
+  try {
+    approvalCompanyId = resolveCompanyId(req);
+  } catch {
+    // The mutation's own company_id remains the fallback for legacy rows.
+  }
+
   const result = await approveAndCreateJournal(
     resolvedMutId,
     match_id ? Number(match_id) : null,
@@ -8268,6 +8278,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
       : null,
     false,
     atomicRuleAi,
+    approvalCompanyId,
   );
 
   if (!result.ok) {

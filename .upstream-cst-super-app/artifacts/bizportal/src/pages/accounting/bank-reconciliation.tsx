@@ -1859,6 +1859,7 @@ export function buildBankApprovalRequestBody(input: {
   candidate_type?: string;
   candidate_id?: number;
   candidate_source?: string | null;
+  company_id?: number | null;
   manual_coa_code?: string;
   manual_override?: boolean;
   override_reason?: string;
@@ -1868,6 +1869,7 @@ export function buildBankApprovalRequestBody(input: {
     candidate_type: input.candidate_type,
     candidate_id: input.candidate_id,
     candidate_source: input.candidate_source ?? null,
+    company_id: input.company_id ?? undefined,
     manual_coa_code: input.manual_coa_code,
     manual_override: input.manual_override === true,
     override_reason: input.override_reason,
@@ -3903,6 +3905,7 @@ function CoaReferenceDialog({
             "x-idempotency-key": approvalKey,
           },
           body: JSON.stringify({
+            company_id: companyId,
             manual_coa_code: selectedAccount.code,
             note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
           }),
