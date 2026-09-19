@@ -557,6 +557,11 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       )`);
   } else {
     filters.push("bm.status in ('unmatched', 'matched', 'manual_review', 'duplicate_need_review')");
+    filters.push(`not exists (
+      select 1 from public.bank_reconciliation_matches final_match
+       where final_match.mutation_id = bm.id
+         and final_match.status in ('approved', 'posted')
+    )`);
   }
 
   const client = await pool.connect();
