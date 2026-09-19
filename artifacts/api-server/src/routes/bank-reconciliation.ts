@@ -988,14 +988,6 @@ async function assertApprovalCandidateExists(
       `select id from public.vendor_invoices where id = $1 and company_id = $2 limit 1 for update`,
       [candidateId, companyId],
     );
-  } else if (candidateType === "accounting_payment") {
-    if (candidateSource && candidateSource !== "public.accounting_payments") {
-      throw new ApprovalError("Sumber kandidat accounting payment tidak valid.", 409, "STALE_CANDIDATE");
-    }
-    result = await client.query(
-      `select id from public.accounting_payments where id = $1 and company_id = $2 limit 1 for update`,
-      [candidateId, companyId],
-    );
   } else if (candidateType === "tenant_invoice") {
     if (candidateSource && candidateSource !== "public.tenant_payments") {
       throw new ApprovalError("Sumber kandidat pembayaran tenant tidak valid.", 409, "STALE_CANDIDATE");
@@ -1130,7 +1122,14 @@ async function approveBankMutation(
     if (requestedSource && match.candidate_source && requestedSource !== match.candidate_source) {
       throw new ApprovalError("candidate_source tidak sama dengan source kandidat tersimpan.", 409, "CANDIDATE_SOURCE_MISMATCH");
     }
-    selectedCandidateSource = match.candidate_source ?? requestedSource;
+    selectedCandidateSource = match.candidate_source;
+    if (!selectedCandidateSource) {
+      throw new ApprovalError(
+        "Kandidat lama tanpa candidate_source canonical tidak dapat di-approve. Jalankan matching ulang.",
+        409,
+        "STALE_CANDIDATE",
+      );
+    }
   }
 
   const approvedMatch = await client.query<{ id: number }>(
@@ -1151,10 +1150,8 @@ async function approveBankMutation(
       ? "sport_center.sport_payments"
       : selectedCandidateType === "vendor_invoice"
         ? "public.vendor_invoices"
-        : selectedCandidateType === "accounting_payment"
-          ? "public.accounting_payments"
-            : selectedCandidateType === "tenant_invoice"
-              ? "public.tenant_payments"
+        : selectedCandidateType === "tenant_invoice"
+          ? "public.tenant_payments"
           : selectedCandidateType === "recon_rule"
             ? "public.recon_rules"
             : null;
