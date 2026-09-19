@@ -1032,6 +1032,111 @@ async function assertApprovalCandidateExists(
   }
 }
 
+async function approveCanonicalSettlementLink(
+  client: ApprovalClient,
+  mutationId: number,
+  settlementId: number,
+  matchId: number | null,
+  actor: ApprovalActor,
+  idempotencyKey: string | null,
+): Promise<Record<string, unknown>> {
+  const mutationResult = await client.query<{ id: number; status: string; company_id: number | null; journal_entry_id: number | null }>(
+    `select id,status,company_id,journal_entry_id from public.bank_mutations where id=$1 for update`,
+    [mutationId],
+  );
+  const mutation = mutationResult.rows[0];
+  if (!mutation || mutation.company_id == null) throw new ApprovalError("Mutasi tidak ditemukan atau tidak memiliki company.", 404, "NOT_FOUND");
+  if (actor.companyId != null && actor.companyId !== mutation.company_id) throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+
+  const batchResult = await client.query<{ id: number; status: string; bank_mutation_id: number | null; settlement_journal_id: number | null }>(
+    `select id,status::text as status,bank_mutation_id,settlement_journal_id
+       from sport_center.payment_settlement_batches
+      where id=$1 and company_id=$2
+      for update`,
+    [settlementId, mutation.company_id],
+  );
+  const batch = batchResult.rows[0];
+  if (!batch) throw new ApprovalError("Settlement canonical tidak ditemukan.", 409, "STALE_CANDIDATE");
+  if (batch.status === "reconciled" && batch.bank_mutation_id === mutationId) {
+    return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: true };
+  }
+  if (batch.status !== "posted" || batch.bank_mutation_id != null || batch.settlement_journal_id == null) {
+    throw new ApprovalError("Settlement canonical tidak lagi eligible untuk reconciliation.", 409, "CANONICAL_SETTLEMENT_NOT_ELIGIBLE");
+  }
+
+  const journalResult = await client.query<{ status: string; journal_type: string; is_reversal: boolean }>(
+    `select status,journal_type::text as journal_type,is_reversal
+       from sport_center.accounting_journals
+      where id=$1 for update`,
+    [batch.settlement_journal_id],
+  );
+  const journal = journalResult.rows[0];
+  if (!journal || journal.status !== "posted" || journal.journal_type !== "settlement" || journal.is_reversal) {
+    throw new ApprovalError("Jurnal settlement canonical tidak valid atau belum posted.", 409, "CANONICAL_SETTLEMENT_JOURNAL_INVALID");
+  }
+
+  const otherMutationLink = await client.query<{ id: number }>(
+    `select id from sport_center.payment_settlement_batches
+      where bank_mutation_id=$1 and id<>$2 limit 1 for update`,
+    [mutationId, settlementId],
+  );
+  if (otherMutationLink.rows[0]) throw new ApprovalError("Mutasi sudah tertaut ke settlement canonical lain.", 409, "CONFLICT");
+
+  const otherApproved = await client.query<{ id: number }>(
+    `select id from public.bank_reconciliation_matches
+      where mutation_id=$1 and status='approved' and ($2::bigint is null or id<>$2) limit 1 for update`,
+    [mutationId, matchId],
+  );
+  if (otherApproved.rows[0]) throw new ApprovalError("Mutasi sudah memiliki approved match lain.", 409, "CONFLICT");
+
+  await client.query(
+    `update sport_center.payment_settlement_batches
+        set status='reconciled',bank_mutation_id=$2,reconciled_at=now(),reconciled_by=$3
+      where id=$1 and status='posted' and bank_mutation_id is null`,
+    [settlementId, mutationId, actor.email],
+  );
+
+  if (matchId != null) {
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status='approved',candidate_source='sport_center.payment_settlement_batches'
+        where id=$1 and mutation_id=$2 and candidate_type='qris_settlement' and candidate_id=$3`,
+      [matchId, mutationId, settlementId],
+    );
+    await client.query(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and id<>$2 and status not in ('approved','posted')`,
+      [mutationId, matchId],
+    );
+  } else {
+    await client.query(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and status not in ('approved','posted')`,
+      [mutationId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_matches
+        (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source)
+       values($1,'qris_settlement',$2,100,'canonical settlement link-only approval',true,true,false,false,false,'approved','sport_center.payment_settlement_batches')`,
+      [mutationId, settlementId],
+    );
+  }
+
+  await client.query(
+    `update public.bank_mutations
+        set status='approved',reconciliation_status='approved',journal_entry_id=null,
+            approved_by=$2,approved_at=coalesce(approved_at,now()),updated_at=now()
+      where id=$1`,
+    [mutationId, actor.email],
+  );
+  await client.query(
+    `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+     values($1,'CANONICAL_SETTLEMENT_LINK_APPROVED',$2,$3::jsonb)`,
+    [mutationId, actor.email, JSON.stringify({ settlement_id: settlementId, candidate_source: "sport_center.payment_settlement_batches", link_only: true, idempotency_key: idempotencyKey })],
+  );
+  return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: false };
+}
+
 async function approveBankMutation(
   client: ApprovalClient,
   mutationId: number,
@@ -1163,6 +1268,20 @@ async function approveBankMutation(
     selectedCandidateSource,
     companyId,
   );
+  if (
+    selectedCandidateType === "qris_settlement"
+    && selectedCandidateId != null
+    && selectedCandidateSource === "sport_center.payment_settlement_batches"
+  ) {
+    return approveCanonicalSettlementLink(
+      client,
+      mutationId,
+      selectedCandidateId,
+      matchId,
+      actor,
+      idempotencyKey,
+    );
+  }
   const bankCoaId = await resolveApprovalBankAccount(
     client,
     companyId,
