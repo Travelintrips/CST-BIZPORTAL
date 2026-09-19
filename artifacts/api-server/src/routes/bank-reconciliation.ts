@@ -1439,8 +1439,22 @@ router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promis
       return;
     }
 
+    const dbError = error as { code?: string; message?: string; detail?: string; constraint?: string };
     req.log.error({ error, mutationId }, "Bank reconciliation approval failed");
-    res.status(503).json({ error: "Approval mutasi dan pembuatan draft jurnal gagal" });
+    const knownDatabaseCodes = new Set(["23503", "23505", "23514", "22P02", "P0001"]);
+    if (dbError.code && knownDatabaseCodes.has(dbError.code)) {
+      res.status(409).json({
+        error: dbError.message ?? "Draft jurnal ditolak oleh validasi database.",
+        code: "ACCOUNTING_VALIDATION_FAILED",
+        detail: dbError.detail ?? null,
+        constraint: dbError.constraint ?? null,
+      });
+      return;
+    }
+    res.status(503).json({
+      error: dbError.message ?? "Approval mutasi dan pembuatan draft jurnal gagal",
+      code: dbError.code ?? "BANK_RECONCILIATION_APPROVAL_FAILED",
+    });
   } finally {
     client.release();
   }
