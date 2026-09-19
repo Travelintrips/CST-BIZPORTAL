@@ -36,6 +36,22 @@ type ExistingMutation = {
   status: string | null;
   reconciliation_status: string | null;
   journal_entry_id: number | null;
+  match_score: number | null;
+  match_reason: string | null;
+  match_status: string | null;
+  match_result: string | null;
+  coa_code: string | null;
+  coa_name: string | null;
+};
+
+type SheetMutationMetadata = {
+  key: string;
+  status: string;
+  coaCode: string | null;
+  coaName: string | null;
+  matchScore: number | null;
+  matchResult: string | null;
+  lastSync: string;
 };
 
 function normalizeDescription(value: string): string {
@@ -145,9 +161,8 @@ function statusLabel(mutation: {
 }): string {
   const reconciliationStatus = String(mutation.reconciliation_status ?? "").toLowerCase();
   const status = String(mutation.status ?? "").toLowerCase();
-  if (["posted", "reconciled"].includes(reconciliationStatus) || status === "posted") {
-    return "POSTED";
-  }
+  if (reconciliationStatus === "reconciled") return "RECONCILED";
+  if (reconciliationStatus === "posted" || status === "posted") return "POSTED";
   if (["approved", "approved_pending_posting"].includes(status)) return "APPROVED";
   if (reconciliationStatus === "matched" || status === "matched") return "MATCHED";
   if (["void", "voided"].includes(status)) return "VOID";
@@ -159,6 +174,11 @@ function parseRows(rows: string[][]): {
   headers: string[];
   keyColumn: number;
   statusColumn: number;
+  coaCodeColumn: number;
+  coaNameColumn: number;
+  matchScoreColumn: number;
+  matchResultColumn: number;
+  lastSyncColumn: number;
   headerRow: number;
 } {
   if (rows.length < 2) {
@@ -167,6 +187,11 @@ function parseRows(rows: string[][]): {
       headers: rows[0] ?? [],
       keyColumn: -1,
       statusColumn: -1,
+      coaCodeColumn: -1,
+      coaNameColumn: -1,
+      matchScoreColumn: -1,
+      matchResultColumn: -1,
+      lastSyncColumn: -1,
       headerRow: rows.length === 1 ? 1 : 0,
     };
   }
@@ -186,10 +211,17 @@ function parseRows(rows: string[][]): {
     "kunci mutasi",
   ]);
   let statusColumn = findColumn(headers, [
+    "status_recon",
+    "status recon",
     "status rekonsiliasi",
     "reconciliation status",
     "status",
   ]);
+  let coaCodeColumn = findColumn(headers, ["coa_code", "kode coa", "coa"]);
+  let coaNameColumn = findColumn(headers, ["nama_coa", "nama coa", "coa name"]);
+  let matchScoreColumn = findColumn(headers, ["match_score", "match score", "confidence score"]);
+  let matchResultColumn = findColumn(headers, ["match_result", "match result", "hasil match"]);
+  let lastSyncColumn = findColumn(headers, ["last_sync", "last sync", "last synced", "sync terakhir"]);
   let start = 1;
   let headerRow = 1;
 
@@ -204,6 +236,11 @@ function parseRows(rows: string[][]): {
       creditColumn = 3;
       keyColumn = -1;
       statusColumn = -1;
+      coaCodeColumn = -1;
+      coaNameColumn = -1;
+      matchScoreColumn = -1;
+      matchResultColumn = -1;
+      lastSyncColumn = -1;
     }
   }
 
@@ -230,13 +267,24 @@ function parseRows(rows: string[][]): {
         statusColumn >= 0 ? String(row[statusColumn] ?? "").trim() || null : null,
     });
   }
-  return { mutations: result, headers, keyColumn, statusColumn, headerRow };
+  return {
+    mutations: result,
+    headers,
+    keyColumn,
+    statusColumn,
+    coaCodeColumn,
+    coaNameColumn,
+    matchScoreColumn,
+    matchResultColumn,
+    lastSyncColumn,
+    headerRow,
+  };
 }
 
 function addSheetStatusUpdates(
   config: SheetConfig,
   parsed: ReturnType<typeof parseRows>,
-  mutationStatuses: Map<number, { key: string; status: string }>,
+  mutationStatuses: Map<number, SheetMutationMetadata>,
 ): SpreadsheetValueUpdate[] {
   if (parsed.mutations.length === 0) return [];
 
@@ -256,8 +304,29 @@ function addSheetStatusUpdates(
     statusColumn = nextColumn++;
     updates.push({
       range: spreadsheetCellRange(config.tab_name, statusColumn, parsed.headerRow),
-      values: [["status"]],
+      values: [["status_recon"]],
     });
+  }
+  const metadataColumns = [
+    ["coaCodeColumn", "coa"],
+    ["coaNameColumn", "nama_coa"],
+    ["matchScoreColumn", "match_score"],
+    ["matchResultColumn", "match_result"],
+    ["lastSyncColumn", "last_sync"],
+  ] as const;
+  const resolvedColumns = new Map<string, number>();
+  for (const [property, header] of metadataColumns) {
+    const current = parsed[property];
+    if (current >= 0) {
+      resolvedColumns.set(property, current);
+    } else if (parsed.headerRow > 0) {
+      const column = nextColumn++;
+      resolvedColumns.set(property, column);
+      updates.push({
+        range: spreadsheetCellRange(config.tab_name, column, parsed.headerRow),
+        values: [[header]],
+      });
+    }
   }
 
   if (parsed.headerRow <= 0) return updates;
@@ -274,6 +343,21 @@ function addSheetStatusUpdates(
       updates.push({
         range: spreadsheetCellRange(config.tab_name, statusColumn, row.rowNumber),
         values: [[status.status]],
+      });
+    }
+    const valuesByColumn = [
+      ["coaCodeColumn", status.coaCode ?? ""],
+      ["coaNameColumn", status.coaName ?? ""],
+      ["matchScoreColumn", status.matchScore == null ? "" : String(status.matchScore)],
+      ["matchResultColumn", status.matchResult ?? ""],
+      ["lastSyncColumn", status.lastSync],
+    ] as const;
+    for (const [property, value] of valuesByColumn) {
+      const column = resolvedColumns.get(property);
+      if (column == null) continue;
+      updates.push({
+        range: spreadsheetCellRange(config.tab_name, column, row.rowNumber),
+        values: [[value]],
       });
     }
   }
@@ -326,18 +410,68 @@ async function syncConfig(config: SheetConfig): Promise<{
     const canonicalKeys = [...new Set(prepared.map((item) => item.canonical))];
     let imported = 0;
     let existing = 0;
-    const mutationStatuses = new Map<number, { key: string; status: string }>();
+    const lastSync = new Date().toISOString();
+    const mutationStatuses = new Map<number, SheetMutationMetadata>();
+
+    const toSheetMetadata = (
+      mutation: Partial<ExistingMutation>,
+      fallbackKey: string,
+    ): SheetMutationMetadata => ({
+      key: mutation.mutation_key ?? fallbackKey,
+      status: statusLabel(mutation as ExistingMutation),
+      coaCode: mutation.coa_code ?? null,
+      coaName: mutation.coa_name ?? null,
+      matchScore: mutation.match_score == null ? null : Number(mutation.match_score),
+      matchResult: mutation.match_result ?? mutation.match_reason ?? null,
+      lastSync,
+    });
 
     await client.query("begin");
     await client.query("select pg_advisory_xact_lock(hashtext($1))", [
       `google-sheet-sync:${config.id}`,
     ]);
     const existingResult = await client.query<ExistingMutation>(
-      `select id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id
-         from public.bank_mutations
-        where source = 'google_sheet'
-          and company_id is not distinct from $1
-          and (mutation_key = any($2::text[]) or canonical_key = any($3::text[]))`,
+      `select bm.id, bm.mutation_key, bm.canonical_key, bm.status,
+              bm.reconciliation_status, bm.journal_entry_id,
+              matched.match_score,
+              matched.match_reason,
+              matched.match_status,
+              matched.match_result,
+              contra.coa_code,
+              contra.coa_name
+         from public.bank_mutations bm
+         left join lateral (
+           select m.match_score,
+                  m.match_reason,
+                  m.status as match_status,
+                  coalesce(
+                    nullif(trim(m.match_reason), ''),
+                    nullif(concat_ws(' | ', m.candidate_type, m.candidate_id::text, m.status), '')
+                  ) as match_result
+             from public.bank_reconciliation_matches m
+            where m.mutation_id = bm.id
+            order by case
+              when lower(coalesce(m.status, '')) in ('posted', 'approved', 'reconciled') then 0
+              when lower(coalesce(m.status, '')) = 'candidate' then 1
+              else 2
+            end, m.created_at desc nulls last, m.id desc
+            limit 1
+         ) matched on true
+         left join lateral (
+           select coa.code as coa_code, coa.name as coa_name
+             from public.accounting_entry_lines line
+             join public.chart_of_accounts coa on coa.id = line.account_id
+            where line.entry_id = bm.journal_entry_id
+              and (
+                (upper(coalesce(bm.direction, '')) = 'IN' and coalesce(line.credit, 0) > 0)
+                or (upper(coalesce(bm.direction, '')) = 'OUT' and coalesce(line.debit, 0) > 0)
+              )
+            order by line.id
+            limit 1
+         ) contra on true
+        where bm.source = 'google_sheet'
+          and bm.company_id is not distinct from $1
+          and (bm.mutation_key = any($2::text[]) or bm.canonical_key = any($3::text[]))`,
       [config.company_id, mutationKeys, canonicalKeys],
     );
     const byMutationKey = new Map<string, ExistingMutation>();
@@ -351,10 +485,7 @@ async function syncConfig(config: SheetConfig): Promise<{
       const found = byMutationKey.get(item.key) ?? byCanonicalKey.get(item.canonical);
       if (found) {
         existing += 1;
-        mutationStatuses.set(item.row.rowNumber, {
-          key: found.mutation_key ?? item.key,
-          status: statusLabel(found),
-        });
+        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, item.key));
         continue;
       }
 
@@ -372,7 +503,10 @@ async function syncConfig(config: SheetConfig): Promise<{
                    order by id limit 1),
                  'actual_bank_mutation', 'unmatched', 'google_sheet', $12, $10, $13)
          on conflict do nothing
-         returning id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id`,
+          returning id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id,
+                    null::int as match_score, null::text as match_reason,
+                    null::text as match_status, null::text as match_result,
+                    null::text as coa_code, null::text as coa_name`,
         [
           item.key,
           item.canonical,
@@ -394,10 +528,18 @@ async function syncConfig(config: SheetConfig): Promise<{
         imported += 1;
         byMutationKey.set(item.key, mutation);
         byCanonicalKey.set(item.canonical, mutation);
-        mutationStatuses.set(item.row.rowNumber, { key: item.key, status: "UNMATCHED" });
+        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(mutation, item.key));
       } else {
         existing += 1;
-        mutationStatuses.set(item.row.rowNumber, { key: item.key, status: "UNMATCHED" });
+        mutationStatuses.set(item.row.rowNumber, {
+          key: item.key,
+          status: "UNMATCHED",
+          coaCode: null,
+          coaName: null,
+          matchScore: null,
+          matchResult: null,
+          lastSync,
+        });
       }
     }
     await client.query("commit");
@@ -447,7 +589,7 @@ export async function syncOneBankSheetConfig(configId: number) {
   return {
     ok: true,
     ...stats,
-    message: `Sync selesai: ${stats.imported} mutasi baru, ${stats.existing} sudah ada dari ${stats.total} baris`,
+    message: `Sync 2 arah selesai: ${stats.imported} mutasi baru, ${stats.existing} sudah ada dari ${stats.total} baris; ${stats.sheetUpdates} pembaruan metadata dikirim ke Sheet`,
   };
 }
 

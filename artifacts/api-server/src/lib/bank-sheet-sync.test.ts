@@ -51,6 +51,12 @@ type StoredMutation = {
   reconciliation_status: string | null;
   journal_entry_id: number | null;
   company_id: number | null;
+  match_score?: number | null;
+  match_reason?: string | null;
+  match_status?: string | null;
+  match_result?: string | null;
+  coa_code?: string | null;
+  coa_name?: string | null;
 };
 
 const config = {
@@ -85,7 +91,7 @@ beforeEach(() => {
     if (/^(begin|commit|rollback)$/i.test(sql.trim())) return { rows: [] };
     if (sql.includes("pg_advisory_xact_lock")) return { rows: [] };
 
-    if (sql.includes("select id, mutation_key, canonical_key")) {
+    if (sql.includes("from public.bank_mutations bm")) {
       const mutationKeys = (params?.[1] as string[]) ?? [];
       const canonicalKeys = (params?.[2] as string[]) ?? [];
       return {
@@ -146,13 +152,13 @@ describe("Google Sheet bank mutation sync", () => {
 
     const first = await syncOneBankSheetConfig(config.id);
     const firstExistingLookup = mocks.clientQuery.mock.calls.find(([sql]) =>
-      String(sql).includes("select id, mutation_key, canonical_key"),
+      String(sql).includes("from public.bank_mutations bm"),
     )?.[1] as unknown[];
     const firstCanonicalKeys = [...((firstExistingLookup?.[2] as string[]) ?? [])];
 
     const second = await syncOneBankSheetConfig(config.id);
     const existingLookups = mocks.clientQuery.mock.calls.filter(([sql]) =>
-      String(sql).includes("select id, mutation_key, canonical_key"),
+      String(sql).includes("from public.bank_mutations bm"),
     );
     const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
       String(sql).includes("insert into public.bank_mutations"),
@@ -188,9 +194,57 @@ describe("Google Sheet bank mutation sync", () => {
     const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1];
     expect(updates).toEqual([
       { range: "'Mutasi Bank'!E1", values: [["mutation_key"]] },
-      { range: "'Mutasi Bank'!F1", values: [["status"]] },
+      { range: "'Mutasi Bank'!F1", values: [["status_recon"]] },
+      { range: "'Mutasi Bank'!G1", values: [["coa"]] },
+      { range: "'Mutasi Bank'!H1", values: [["nama_coa"]] },
+      { range: "'Mutasi Bank'!I1", values: [["match_score"]] },
+      { range: "'Mutasi Bank'!J1", values: [["match_result"]] },
+      { range: "'Mutasi Bank'!K1", values: [["last_sync"]] },
       { range: "'Mutasi Bank'!E2", values: [[expect.stringMatching(/^[a-f0-9]{64}$/)]] },
       { range: "'Mutasi Bank'!F2", values: [["UNMATCHED"]] },
+      { range: "'Mutasi Bank'!G2", values: [[""]] },
+      { range: "'Mutasi Bank'!H2", values: [[""]] },
+      { range: "'Mutasi Bank'!I2", values: [[""]] },
+      { range: "'Mutasi Bank'!J2", values: [[""]] },
+      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
     ]);
+  });
+
+  it("writes the reconciled status and match metadata back to existing sheet columns", async () => {
+    storedMutations.push({
+      id: 9,
+      mutation_key: "reconciled-key",
+      canonical_key: "reconciled-canonical",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: 11,
+      company_id: 42,
+      match_score: 98,
+      match_reason: "Nominal dan vendor cocok",
+      match_status: "approved",
+      match_result: "Nominal dan vendor cocok",
+      coa_code: "51001",
+      coa_name: "Beban Operasional",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
+      ["2026-09-05", "Pembayaran vendor", "250000", "0", "reconciled-key", "", "", "", "", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
+      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["51001"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Beban Operasional"]] },
+      { range: "'Mutasi Bank'!I2", values: [["98"]] },
+      { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
+      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
+    ]));
   });
 });

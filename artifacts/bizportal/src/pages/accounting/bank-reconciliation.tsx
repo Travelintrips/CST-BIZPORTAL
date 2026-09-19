@@ -7553,6 +7553,8 @@ function SheetConfigCollapsed() {
       const d = await r.json();
       toast({ title: d.ok ? `${cfg.label}: ${d.message}` : (d.error ?? "Sync gagal"), variant: d.ok ? "default" : "destructive" });
       qc.invalidateQueries({ queryKey: ["sheet-configs"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     } catch (e: any) {
       toast({ title: e.message, variant: "destructive" });
     } finally {
@@ -7684,7 +7686,7 @@ function SheetConfigCollapsed() {
                         {testing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Wifi className="w-2.5 h-2.5" />} Test
                       </Button>
                       <Button size="sm" variant="outline" className="h-6 text-xs gap-1" onClick={() => syncOne(cfg)} disabled={syncing[cfg.id] || !cfg.is_active}>
-                        {syncing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />} Sync
+                        {syncing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />} Sync 2 Arah
                       </Button>
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => openEdit(cfg)}>Edit</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => toggleActive(cfg)}>{cfg.is_active ? "Nonaktifkan" : "Aktifkan"}</Button>
