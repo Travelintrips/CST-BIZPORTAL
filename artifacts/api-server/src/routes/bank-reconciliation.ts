@@ -177,7 +177,7 @@ async function loadLocalMatchCandidates(
       }>(
         `with eligible as (
            select sp.*,
-                  nullif(btrim(sp.group_id::text), '') as normalized_group_id,
+                  nullif(btrim(sb.group_ref::text), '') as normalized_group_id,
                   lower(coalesce(
                     to_jsonb(sp)->>'payment_method',
                     to_jsonb(sp)->>'method',
@@ -185,6 +185,7 @@ async function loadLocalMatchCandidates(
                     ''
                   )) as normalized_method
              from sport_center.sport_payments sp
+             left join sport_center.sport_bookings sb on sb.id = sp.booking_id
             where sp.company_id = $1
               and lower(coalesce(sp.status::text, '')) in
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
