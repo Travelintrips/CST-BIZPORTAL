@@ -4125,19 +4125,16 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       actor.email,
     );
 
-    const approval = await approveBankMutation(
+    const approval = await approveCanonicalQrisSettlementLink(
       client,
       candidate.mutation_id,
+      canonicalSettlementId,
+      actor,
       {
-        candidate_type: "qris_settlement",
-        candidate_id: canonicalSettlementId,
-        candidate_source: "sport_center.payment_settlement_batches",
-        note: manualOverride
+        reason: manualOverride
           ? `${overrideReason} (local QRIS candidate ${candidateId} ditautkan ke canonical settlement ${canonicalSettlementId})`
           : `Local QRIS candidate ${candidateId} ditautkan ke canonical settlement ${canonicalSettlementId}`,
       },
-      actor,
-      textValue(req.header("x-idempotency-key")),
     );
     await client.query(
       `update public.qris_mutation_batch_candidates
