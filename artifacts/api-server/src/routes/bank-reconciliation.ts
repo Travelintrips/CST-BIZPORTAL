@@ -550,6 +550,7 @@ async function matchLocalMutation(
           confidence,
           coa_code: matchedRule.targetCoaCode,
           reason: 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name,
+          review_code: 'RULE_AI_AUTO_POSTED',
         });
          return "auto_posted";
       }
@@ -1418,9 +1419,14 @@ async function postBankMutationCanonical(
     `update public.bank_mutations
         set status='posted',reconciliation_status='reconciled',accounting_posted=true,
             journal_entry_id=$2,posted_at=coalesce(posted_at,now()),approved_at=coalesce(approved_at,now()),
-            review_code='RULE_AI_AUTO_POSTED',review_reason=$3,updated_at=now()
+            review_code=$4,review_reason=$3,updated_at=now()
       where id=$1`,
-    [mutationId, entryId, String(meta.reason ?? "Canonical bank reconciliation posting")],
+    [
+      mutationId,
+      entryId,
+      String(meta.reason ?? "Canonical bank reconciliation posting"),
+      String(meta.review_code ?? "CANONICAL_POSTED"),
+    ],
   );
   await client.query(
     `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
@@ -1429,6 +1435,186 @@ async function postBankMutationCanonical(
   );
   return { journal_entry_id: entryId, status: "posted", idempotent: false };
 }
+
+
+router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+
+  try {
+    const mutationResult = await pool.query<{
+      journal_entry_id: number | null;
+      company_id: number | null;
+    }>(
+      `select journal_entry_id, company_id
+         from public.bank_mutations
+        where id=$1 and ($2::int is null or company_id=$2)
+        limit 1`,
+      [mutationId, actor.companyId],
+    );
+    const mutation = mutationResult.rows[0];
+    if (!mutation) { res.status(404).json({ error: "Mutasi tidak ditemukan" }); return; }
+    if (mutation.journal_entry_id == null) {
+      res.status(404).json({ error: "Mutasi belum memiliki journal entry" });
+      return;
+    }
+
+    const entryResult = await pool.query<{
+      id: number;
+      status: string;
+      ref: string | null;
+      total_debit: string;
+      total_credit: string;
+    }>(
+      `select id,status::text status,ref,total_debit::text total_debit,total_credit::text total_credit
+         from public.accounting_entries
+        where id=$1 and company_id=$2 and source='bank_reconciliation' and source_id=$3
+        limit 1`,
+      [mutation.journal_entry_id, mutation.company_id, mutationId],
+    );
+    const entry = entryResult.rows[0];
+    if (!entry) { res.status(404).json({ error: "Journal entry mutasi tidak ditemukan" }); return; }
+
+    const linesResult = await pool.query<{
+      id: number;
+      account_id: number;
+      account_code: string | null;
+      account_name: string | null;
+      debit: string;
+      credit: string;
+      description: string | null;
+    }>(
+      `select l.id,l.account_id,a.code account_code,a.name account_name,
+              l.debit::text debit,l.credit::text credit,l.description
+         from public.accounting_entry_lines l
+         left join public.chart_of_accounts a on a.id=l.account_id
+        where l.entry_id=$1
+        order by l.id`,
+      [mutation.journal_entry_id],
+    );
+
+    res.json({
+      id: entry.id,
+      status: entry.status,
+      ref: entry.ref,
+      totalDebit: Number(entry.total_debit ?? 0),
+      totalCredit: Number(entry.total_credit ?? 0),
+      lines: linesResult.rows.map((line) => ({
+        id: line.id,
+        accountId: line.account_id,
+        accountCode: line.account_code,
+        accountName: line.account_name,
+        debit: line.debit,
+        credit: line.credit,
+        description: line.description,
+      })),
+    });
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Failed to load reconciliation journal entry");
+    res.status(503).json({ error: "Journal entry rekonsiliasi tidak dapat dimuat" });
+  }
+});
+
+router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const mutationResult = await client.query<{
+      status: string;
+      journal_entry_id: number | null;
+    }>(
+      `select status,journal_entry_id
+         from public.bank_mutations
+        where id=$1
+        for update`,
+      [mutationId],
+    );
+    const mutation = mutationResult.rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+
+    if (mutation.status === "posted" && mutation.journal_entry_id != null) {
+      await client.query("commit");
+      res.json({ ok: true, status: "posted", journal_entry_id: mutation.journal_entry_id, idempotent: true });
+      return;
+    }
+    if (mutation.status !== "approved_pending_posting" || mutation.journal_entry_id == null) {
+      throw new ApprovalError("Mutasi belum berada pada status menunggu posting.", 409, "INVALID_STATUS");
+    }
+
+    const approvedMatchResult = await client.query<{
+      id: number;
+      candidate_type: string;
+      candidate_source: string | null;
+    }>(
+      `select id,candidate_type,candidate_source
+         from public.bank_reconciliation_matches
+        where mutation_id=$1 and status='approved'
+        order by id desc
+        limit 2
+        for update`,
+      [mutationId],
+    );
+    if (approvedMatchResult.rows.length !== 1) {
+      throw new ApprovalError(
+        approvedMatchResult.rows.length === 0
+          ? "Approved match tidak ditemukan untuk mutasi ini."
+          : "Lebih dari satu approved match ditemukan; posting diblokir.",
+        409,
+        approvedMatchResult.rows.length === 0 ? "MATCH_NOT_FOUND" : "CONFLICT",
+      );
+    }
+    const approvedMatch = approvedMatchResult.rows[0]!;
+    if (
+      approvedMatch.candidate_type === "qris_settlement"
+      && approvedMatch.candidate_source === "sport_center.payment_settlement_batches"
+    ) {
+      throw new ApprovalError(
+        "Settlement QRIS canonical harus direconcile melalui lifecycle settlement, bukan generic bank journal posting.",
+        409,
+        "CANONICAL_SETTLEMENT_GENERIC_POST_BLOCKED",
+      );
+    }
+
+    const result = await postBankMutationCanonical(
+      client,
+      mutationId,
+      mutation.journal_entry_id,
+      approvedMatch.id,
+      actor,
+      {
+        reason: "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",
+        review_code: "CANONICAL_POSTED",
+        trigger: "manual-post",
+      },
+    );
+
+    await client.query("commit");
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({ error: error.message, code: error.code ?? null });
+      return;
+    }
+    const dbError = error as { code?: string; message?: string; detail?: string };
+    req.log.error({ error, mutationId }, "Canonical bank posting failed");
+    res.status(dbError.code === "P0001" ? 409 : 503).json({
+      error: dbError.message ?? "Posting jurnal rekonsiliasi gagal",
+      code: dbError.code ?? "BANK_RECONCILIATION_POST_FAILED",
+      detail: dbError.detail ?? null,
+    });
+  } finally {
+    client.release();
+  }
+});
 
 router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
