@@ -36,3 +36,4 @@
 - [Bank reconciliation candidate explanation](candidate-explanation-contract.md) — render persisted match flags and reasons even when optional source details are absent.
 - [Duplicate review resolution](duplicate-review-resolution.md) — duplicate matches need either an explicit candidate choice or a manual COA path, never two blocked actions.
 - [Local tenant candidate contract](local-tenant-candidate-contract.md) — tenant candidates use confirmed tenant payment IDs and canonical detail hydration.
+- [Accounting journal detail endpoint](journal-detail-endpoint.md) — posting confirmation needs a company-scoped journal header/lines endpoint by entry ID.
