@@ -3100,7 +3100,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -6249,7 +6249,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       return;
     }
     let cancelled = false;
-    fetch(`/api/bank-reconciliation/unsupported-standalone-action`, { credentials: "include" })
+    fetch(`/api/bank-reconciliation/${mutationId}/proof-ocr`, { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) return null;
         return response.json();
@@ -6271,7 +6271,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -6297,7 +6297,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     if (!confirm("Hapus bukti transfer ini?")) return;
     setBusy(true);
     try {
-      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
         method: "DELETE", credentials: "include",
       });
       if (!r.ok) throw new Error("Gagal hapus");
@@ -9260,7 +9260,7 @@ export default function BankReconciliationPage() {
   // Void/Reverse → POST /:id/void-journal → status becomes void (creates reversal entry)
   const voidMut = useMutation({
     mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
-      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason || null }),
       });
@@ -9301,7 +9301,7 @@ export default function BankReconciliationPage() {
         return body;
       }
 
-      const voidResponse = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const voidResponse = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
