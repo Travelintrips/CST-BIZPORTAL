@@ -2525,6 +2525,122 @@ router.delete("/bank-reconciliation/:mutationId", async (req, res): Promise<void
   }
 });
 
+
+router.post("/bank-reconciliation/:mutationId/upload-proof", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  try {
+    const mutation = await pool.query<{ company_id: number | null }>(
+      `select company_id from public.bank_mutations where id=$1 limit 1`,
+      [mutationId],
+    );
+    if (!mutation.rows[0]) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+    if (actor.companyId != null && mutation.rows[0].company_id !== actor.companyId) {
+      throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+    const file = await readSingleMultipartFile(req);
+    const url = await uploadBankProofToSupabase(mutationId, file);
+    await pool.query(
+      `update public.bank_mutations
+          set uploaded_proof_url=$2,
+              proof_ocr_status='not_started',
+              proof_ocr_result=null,
+              proof_ocr_error=null,
+              proof_ocr_completed_at=null,
+              updated_at=now()
+        where id=$1`,
+      [mutationId, url],
+    );
+    await pool.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'PROOF_UPLOADED',$2,$3::jsonb)`,
+      [mutationId, actor.email, JSON.stringify({ storage: "supabase", content_type: file.contentType, filename: file.filename })],
+    );
+    res.json({ ok: true, url, ocr: { status: "not_started", data: null, error: null } });
+  } catch (error) {
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code ?? null }); return; }
+    req.log.error({ error, mutationId }, "Bank proof upload failed");
+    res.status(503).json({ error: "Upload bukti transfer gagal", code: "PROOF_UPLOAD_FAILED" });
+  }
+});
+
+router.get("/bank-reconciliation/:mutationId/proof-ocr", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  try {
+    const result = await pool.query<{
+      company_id: number | null;
+      uploaded_proof_url: string | null;
+      proof_ocr_status: string | null;
+      proof_ocr_result: unknown;
+      proof_ocr_error: string | null;
+      proof_ocr_completed_at: string | null;
+    }>(
+      `select company_id,uploaded_proof_url,proof_ocr_status,proof_ocr_result,proof_ocr_error,
+              proof_ocr_completed_at::text as proof_ocr_completed_at
+         from public.bank_mutations where id=$1 limit 1`,
+      [mutationId],
+    );
+    const row = result.rows[0];
+    if (!row) { res.status(404).json({ error: "Mutasi tidak ditemukan" }); return; }
+    if (actor.companyId != null && row.company_id !== actor.companyId) {
+      res.status(403).json({ error: "Mutasi berada di perusahaan yang berbeda." }); return;
+    }
+    res.json({
+      ok: true,
+      hasProof: Boolean(row.uploaded_proof_url),
+      status: row.proof_ocr_status ?? "not_started",
+      data: row.proof_ocr_result ?? null,
+      error: row.proof_ocr_error ?? null,
+      completedAt: row.proof_ocr_completed_at ?? null,
+    });
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Bank proof OCR state read failed");
+    res.status(503).json({ error: "Status bukti transfer tidak dapat dimuat" });
+  }
+});
+
+router.delete("/bank-reconciliation/:mutationId/upload-proof", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  try {
+    const result = await pool.query<{ company_id: number | null }>(
+      `select company_id from public.bank_mutations where id=$1 limit 1`,
+      [mutationId],
+    );
+    if (!result.rows[0]) { res.status(404).json({ error: "Mutasi tidak ditemukan" }); return; }
+    if (actor.companyId != null && result.rows[0].company_id !== actor.companyId) {
+      res.status(403).json({ error: "Mutasi berada di perusahaan yang berbeda." }); return;
+    }
+    await pool.query(
+      `update public.bank_mutations
+          set uploaded_proof_url=null,
+              proof_ocr_status='not_started',
+              proof_ocr_result=null,
+              proof_ocr_error=null,
+              proof_ocr_completed_at=null,
+              updated_at=now()
+        where id=$1`,
+      [mutationId],
+    );
+    await pool.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'PROOF_REMOVED',$2,'{}'::jsonb)`,
+      [mutationId, actor.email],
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Bank proof removal failed");
+    res.status(503).json({ error: "Bukti transfer gagal dihapus" });
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
