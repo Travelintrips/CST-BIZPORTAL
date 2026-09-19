@@ -2007,16 +2007,26 @@ router.post("/bank-reconciliation/:mutationId/unmatch", async (req, res): Promis
       "matched",
       "manual_review",
       "duplicate_need_review",
+      "approved_pending_posting",
+      "approved",
     ]);
     if (!resettableStatuses.has(status)) {
       const message =
         status === "posted"
           ? "Mutasi sudah posted. Gunakan alur Unmatch & Reverse agar ledger tetap immutable."
-          : status === "approved_pending_posting" || status === "approved"
-            ? "Mutasi masih memiliki draft approval. Gunakan Batalkan Draft terlebih dahulu."
-            : `Mutasi berstatus '${mutation.status}' tidak dapat di-unmatch melalui alur ini.`;
+          : `Mutasi berstatus '${mutation.status}' tidak dapat di-unmatch melalui alur ini.`;
       const error = new Error(message) as Error & { code?: string };
       error.code = "INVALID_STATUS";
+      throw error;
+    }
+    if (
+      (status === "approved_pending_posting" || status === "approved")
+      && (mutation.journal_entry_id == null || String(mutation.journal_status ?? "").toLowerCase() !== "draft")
+    ) {
+      const error = new Error(
+        "Approval hanya dapat dibatalkan bila jurnal terkait masih berstatus draft.",
+      ) as Error & { code?: string };
+      error.code = "JOURNAL_LINKED";
       throw error;
     }
 
