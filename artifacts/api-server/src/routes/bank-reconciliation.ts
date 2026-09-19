@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
+import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
 import { inspectSpreadsheet } from "../lib/google-sheets";
 import {
   syncAllBankSheetConfigs,
@@ -72,6 +73,11 @@ interface MatchingMutation {
   provider_order_id: string | null;
   company_id: number | null;
   status: string;
+  bank_account_id: string | null;
+  bank_reference: string | null;
+  provider_name: string | null;
+  uploaded_proof_url: string | null;
+  review_code: string | null;
 }
 
 interface LocalMatchCandidate {
@@ -285,6 +291,11 @@ async function loadLocalMatchCandidates(
   return candidates.sort((left, right) => right.score - left.score || left.candidateId - right.candidateId);
 }
 
+async function loadActiveRuleAi(client: ApprovalClient, companyId: number): Promise<ReconRule[]> {
+  const result = await client.query<any>("select * from public.recon_rules where company_id=$1 and is_active=true order by priority desc, specificity desc nulls last, confidence_score desc, id", [companyId]);
+  return result.rows.map((r:any)=>({id:Number(r.id),companyId:Number(r.company_id),name:String(r.name),description:r.description??null,priority:Number(r.priority??0),isActive:Boolean(r.is_active),direction:r.direction==='IN'||r.direction==='OUT'?r.direction:null,bankAccountId:r.bank_account_id==null?null:Number(r.bank_account_id),conditionType:String(r.condition_type??'single'),conditionField:r.condition_field,conditionOperator:r.condition_operator,conditionValue:String(r.condition_value??''),conditionsJson:Array.isArray(r.conditions_json)?r.conditions_json:null,logic:String(r.logic??'AND').toUpperCase()==='OR'?'OR':'AND',specificity:Number(r.specificity??1),amountTolerance:r.amount_tolerance==null?null:Number(r.amount_tolerance),referenceAmount:r.reference_amount==null?null:Number(r.reference_amount),candidateRequirement:r.candidate_requirement==='required'?'required':'not_required',requiresDocumentUpload:Boolean(r.requires_document_upload),taxType:r.tax_type==='ppn_input'||r.tax_type==='ppn_output'?r.tax_type:'none',aiClassificationRuleId:r.ai_classification_rule_id==null?null:Number(r.ai_classification_rule_id),targetType:r.target_type,targetId:r.target_id==null?null:Number(r.target_id),targetCoaCode:r.target_coa_code??null,confidenceScore:Number(r.confidence_score??100),stopProcessing:Boolean(r.stop_processing),matchCount:Number(r.match_count??0),lastMatchedAt:r.last_matched_at??null,createdBy:r.created_by??null,createdAt:String(r.created_at??''),updatedAt:String(r.updated_at??'')})) as ReconRule[];
+}
+
 async function matchLocalMutation(
   client: ApprovalClient,
   mutation: MatchingMutation,
@@ -300,6 +311,10 @@ async function matchLocalMutation(
   );
 
   const candidates = await loadLocalMatchCandidates(client, mutation);
+  const rules = await loadActiveRuleAi(client, mutation.company_id);
+  const ruleResult = evaluateReconRules(rules,{description:mutation.description??'',reference:mutation.bank_reference??mutation.provider_order_id??null,amount:Number(mutation.amount),direction:String(mutation.direction).toUpperCase() as 'IN'|'OUT',bankAccountId:mutation.bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)?Number(mutation.bank_account_id):null,bank:mutation.provider_name??null,normalizedDescription:mutation.normalized_description??null,hasDocumentUpload:Boolean(mutation.uploaded_proof_url),companyId:mutation.company_id});
+  if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
+  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib dipilih.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);return 'manual_review';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,realCandidate.candidateType==='sport_payment'?'sport_center.sport_payments':'public.vendor_invoices']);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);return 'matched';}
   const best = candidates[0];
   const isDuplicate = candidates.length > 1 && candidates[1]!.score >= best!.score - 5;
   const nextStatus = !best
@@ -464,7 +479,8 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     const result = await client.query<MatchingMutation>(
       `select bm.id, bm.amount, bm.direction, bm.transaction_date,
               bm.description, bm.normalized_description, bm.provider_order_id,
-              bm.company_id, bm.status
+              bm.company_id, bm.status, bm.bank_account_id, bm.bank_reference,
+              bm.provider_name, bm.uploaded_proof_url, bm.review_code
          from public.bank_mutations bm
         where ${filters.join(" and ")}
         order by bm.transaction_date desc, bm.id
@@ -477,6 +493,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     let manualReview = 0;
     let unmatched = 0;
     let failed = 0;
+    let ruleMatched = 0;
 
     for (const mutation of result.rows) {
       try {
@@ -485,6 +502,8 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
         await client.query("commit");
         processed++;
         if (outcome === "matched") autoMatched++;
+        const marker = await client.query<{ review_code: string | null }>("select review_code from public.bank_mutations where id=$1", [mutation.id]);
+        if (marker.rows[0]?.review_code === "RULE_AI_MATCH") ruleMatched++;
         else if (outcome === "manual_review") manualReview++;
         else unmatched++;
       } catch (error) {
@@ -506,7 +525,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       auto_matched: autoMatched,
       manual_review: manualReview,
       unmatched,
-      rule_matched: 0,
+      rule_matched: ruleMatched,
       ecf_matched: 0,
     });
   } catch (error) {
