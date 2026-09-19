@@ -299,7 +299,7 @@ async function loadActiveRuleAi(client: ApprovalClient, companyId: number): Prom
 async function matchLocalMutation(
   client: ApprovalClient,
   mutation: MatchingMutation,
-  actor: string,
+  actor: ApprovalActor,
 ): Promise<"matched" | "manual_review" | "unmatched"> {
   if (mutation.company_id == null) return "unmatched";
 
@@ -314,7 +314,38 @@ async function matchLocalMutation(
   const rules = await loadActiveRuleAi(client, mutation.company_id);
   const ruleResult = evaluateReconRules(rules,{description:mutation.description??'',reference:mutation.bank_reference??mutation.provider_order_id??null,amount:Number(mutation.amount),direction:String(mutation.direction).toUpperCase() as 'IN'|'OUT',bankAccountId:mutation.bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)?Number(mutation.bank_account_id):null,bank:mutation.provider_name??null,normalizedDescription:mutation.normalized_description??null,hasDocumentUpload:Boolean(mutation.uploaded_proof_url),companyId:mutation.company_id});
   if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
-  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib dipilih.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);return 'manual_review';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,realCandidate.candidateType==='sport_payment'?'sport_center.sport_payments':'public.vendor_invoices']);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);return 'matched';}
+  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib dipilih.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);return 'manual_review';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,realCandidate.candidateType==='sport_payment'?'sport_center.sport_payments':'public.vendor_invoices']);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);
+    const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
+    const autoPostEligible = confidence === 100
+      && matchedRule.candidateRequirement !== 'required'
+      && !matchedRule.requiresDocumentUpload
+      && Boolean(matchedRule.targetCoaCode)
+      && !ruleResult.ambiguityCode;
+    if (autoPostEligible) {
+      const ruleMatch = await client.query<{ id: number }>(
+        "select id from public.bank_reconciliation_matches where mutation_id=$1 and candidate_type='recon_rule' and candidate_id=$2 and status='candidate' order by id desc limit 1 for update",
+        [mutation.id, ruleResult.ruleId],
+      );
+      const matchId = ruleMatch.rows[0]?.id;
+      if (matchId != null) {
+        const approval = await approveBankMutation(client, mutation.id, {
+          match_id: matchId,
+          candidate_type: 'recon_rule',
+          candidate_id: ruleResult.ruleId,
+          candidate_source: 'public.recon_rules',
+          manual_coa_code: matchedRule.targetCoaCode,
+          note: 'Auto-approved by Rule AI 100%',
+        }, actor, `rule-ai:${mutation.id}:${ruleResult.ruleId}`);
+        const entryId = safeInteger(approval.journal_entry_id);
+        if (entryId == null) throw new ApprovalError('Rule AI approval tidak menghasilkan jurnal.', 409, 'AUTO_POST_JOURNAL_MISSING');
+        await client.query("update public.accounting_entries set status='posted', posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'", [entryId]);
+        await client.query("update public.bank_reconciliation_matches set status='approved' where id=$1", [matchId]);
+        await client.query("update public.bank_reconciliation_matches set status='superseded' where mutation_id=$1 and id<>$2 and status='candidate'", [mutation.id, matchId]);
+        await client.query("update public.bank_mutations set status='posted', reconciliation_status='reconciled', accounting_posted=true, journal_entry_id=$2, posted_at=coalesce(posted_at,now()), approved_at=coalesce(approved_at,now()), review_code='RULE_AI_AUTO_POSTED', review_reason=$3, updated_at=now() where id=$1", [mutation.id, entryId, 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name]);
+        await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'AUTO_POSTED',$2,$3::jsonb)", [mutation.id, actor.email, JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence,coa_code:matchedRule.targetCoaCode,journal_entry_id:entryId})]);
+      }
+    }
+    return 'matched';}
   const best = candidates[0];
   const isDuplicate = candidates.length > 1 && candidates[1]!.score >= best!.score - 5;
   const nextStatus = !best
@@ -370,7 +401,7 @@ async function matchLocalMutation(
      values ($1, 'MATCH_CREATED', $2, $3::jsonb)`,
     [
       mutation.id,
-      actor,
+      actor.email,
       JSON.stringify({
         engine: "bizportal-local-matching",
         candidate_count: candidates.length,
@@ -498,7 +529,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     for (const mutation of result.rows) {
       try {
         await client.query("begin");
-        const outcome = await matchLocalMutation(client, mutation, actor.email);
+        const outcome = await matchLocalMutation(client, mutation, actor);
         await client.query("commit");
         processed++;
         if (outcome === "matched") autoMatched++;
@@ -747,7 +778,15 @@ async function assertApprovalCandidateExists(
       `select id from public.accounting_payments where id = $1 and company_id = $2 limit 1 for update`,
       [candidateId, companyId],
     );
-  } else if (candidateType === "qris_settlement") {
+  } else if (candidateType === "recon_rule") {
+    if (candidateSource !== "public.recon_rules") {
+      throw new ApprovalError("Sumber Rule AI tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id from public.recon_rules where id = $1 and company_id = $2 and is_active = true limit 1 for update`,
+      [candidateId, companyId],
+    );
+    } else if (candidateType === "qris_settlement") {
     if (candidateSource !== "sport_center.payment_settlement_batches") {
       throw new ApprovalError("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.", 409, "STALE_CANDIDATE");
     }
@@ -851,7 +890,10 @@ async function approveBankMutation(
     if (!match) throw new ApprovalError("Kandidat rekonsiliasi tidak ditemukan untuk mutasi ini.", 409, "MATCH_NOT_FOUND");
     selectedCandidateType = match.candidate_type;
     selectedCandidateId = match.candidate_id;
-    selectedCandidateSource = requestedSource ?? match.candidate_source;
+    if (requestedSource && match.candidate_source && requestedSource !== match.candidate_source) {
+      throw new ApprovalError("candidate_source tidak sama dengan source kandidat tersimpan.", 409, "CANDIDATE_SOURCE_MISMATCH");
+    }
+    selectedCandidateSource = match.candidate_source ?? requestedSource;
   }
 
   const approvedMatch = await client.query<{ id: number }>(
@@ -874,7 +916,9 @@ async function approveBankMutation(
         ? "public.vendor_invoices"
         : selectedCandidateType === "accounting_payment"
           ? "public.accounting_payments"
-          : null;
+          : selectedCandidateType === "recon_rule"
+            ? "public.recon_rules"
+            : null;
   }
   await assertApprovalCandidateExists(
     client,
