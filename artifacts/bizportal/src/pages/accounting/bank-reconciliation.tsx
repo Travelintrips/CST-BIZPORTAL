@@ -8073,44 +8073,9 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
-  const qrisDryRunMut = useMutation({
-    mutationFn: async (mutationId?: number) => {
-      if (qrisCompanyId == null) {
-        throw new Error("Pilih satu perusahaan aktif sebelum membuat kandidat review QRIS.");
-      }
-      const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        // Persist only the candidate/review row. This is not final
-        // reconciliation and does not create a journal or consume evidence.
-        body: JSON.stringify({
-          dryRun: false,
-          companyId: qrisCompanyId,
-          ...(mutationId != null ? { mutationId } : {}),
-        }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{
-        generated: number;
-        persisted: number;
-        reviewable: number;
-        candidates: QrisCandidateAudit[];
-      }>;
-    },
-    onSuccess: async (result) => {
-      toast({
-        title: `${result.persisted} pemeriksaan QRIS ditampilkan`,
-        description: result.reviewable > 0
-          ? `${result.reviewable} kandidat memiliki pasangan payment untuk direview.`
-          : "Belum ada pasangan payment yang dapat diverifikasi; hasil ditampilkan sebagai UNMATCHED dan tidak dapat disetujui.",
-      });
-      setWorkflowStage("review");
-      await Promise.all([refetchQrisAudit(), refetch()]);
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-    },
-    onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
-  });
+  // Legacy QRIS candidate generation was removed. Canonical settlements are
+  // discovered/read from GET /qris-candidates and created only by the
+  // canonical settlement owner flow during scoped QRIS approval.
 
   const qrisRepairMut = useMutation({
     mutationFn: async (candidateId: number) => {
@@ -9796,13 +9761,13 @@ export default function BankReconciliationPage() {
             }
              matchMut.mutate(mode);
           }}
-           onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate(undefined) : undefined}
+           onGenerateQrisCandidates={undefined}
           onApproveAll={handleApproveAllMatched}
           onPostAll={handlePostAllPending}
           onSyncSheet={() => sheetSyncMut.mutate()}
           matchingPending={matchMut.isPending}
           matchingBackgroundPending={matchingBackgroundPending}
-          qrisGenerationPending={qrisDryRunMut.isPending}
+          qrisGenerationPending={false}
           syncPending={sheetSyncMut.isPending}
           workflowStage={workflowStage}
         />
@@ -10762,10 +10727,8 @@ export default function BankReconciliationPage() {
                       ? (candidateId) => qrisRepairMut.mutate(candidateId)
                       : undefined
                   }
-          onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
-                       ? (mutationId) => qrisDryRunMut.mutate(mutationId)
-                      : undefined}
-                    qrisGenerationPending={qrisDryRunMut.isPending || qrisRepairMut.isPending}
+          onGenerateQrisCandidates={undefined}
+                    qrisGenerationPending={qrisRepairMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -11052,9 +11015,7 @@ export default function BankReconciliationPage() {
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
             : undefined
         }
-        onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
-          ? (mutationId) => qrisDryRunMut.mutate(mutationId)
-          : undefined}
+        onGenerateQrisCandidates={undefined}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
