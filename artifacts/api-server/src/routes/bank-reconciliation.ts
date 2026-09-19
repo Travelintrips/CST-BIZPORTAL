@@ -2110,6 +2110,62 @@ function qrisCandidateResponse(row: Record<string, unknown>): Record<string, unk
   };
 }
 
+async function resolveCanonicalQrisSettlement(
+  client: ApprovalClient,
+  companyId: number,
+  paymentIds: number[],
+): Promise<number> {
+  const normalizedPaymentIds = [...new Set(paymentIds)]
+    .filter((paymentId) => Number.isSafeInteger(paymentId) && paymentId > 0)
+    .sort((left, right) => left - right);
+
+  if (normalizedPaymentIds.length === 0) {
+    throw new ApprovalError(
+      "Kandidat lokal QRIS tidak memiliki payment scope yang valid.",
+      422,
+      "INVALID_PAYMENT_SCOPE",
+    );
+  }
+
+  // The local qris_mutation_batch_candidates table is only a review snapshot.
+  // Journal approval must resolve the same complete payment scope to the
+  // canonical Sport Center settlement batch first. Requiring the full scope
+  // prevents a larger canonical batch from being partially approved through
+  // the generic bank journal path.
+  const result = await client.query<{ id: number }>(
+    `with matching_batches as (
+       select psb.id
+         from sport_center.payment_settlement_batches psb
+         join sport_center.payment_settlement_items psi
+           on psi.settlement_id = psb.id
+        where psb.company_id = $1
+        group by psb.id
+       having count(distinct psi.payment_id) = cardinality($2::bigint[])
+          and count(distinct psi.payment_id) filter (
+            where psi.payment_id = any($2::bigint[])
+          ) = cardinality($2::bigint[])
+     )
+     select psb.id
+       from sport_center.payment_settlement_batches psb
+       join matching_batches mb on mb.id = psb.id
+      where psb.company_id = $1
+      order by psb.id desc
+      limit 1
+      for update of psb`,
+    [companyId, normalizedPaymentIds],
+  );
+  const settlementId = result.rows[0]?.id;
+  if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+    throw new ApprovalError(
+      "Kandidat lokal QRIS belum terhubung ke settlement canonical. Jalankan matching ulang agar batch settlement dibuat terlebih dahulu.",
+      409,
+      "CANONICAL_SETTLEMENT_REQUIRED",
+    );
+  }
+
+  return settlementId;
+}
+
 async function listQrisCanonicalSettlements(
   companyId: number | null,
   includeCompleted: boolean,
@@ -2649,6 +2705,12 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       );
     }
 
+    const canonicalSettlementId = await resolveCanonicalQrisSettlement(
+      client,
+      candidate.company_id,
+      expectedPaymentIds,
+    );
+
     const candidateNet = Number(candidate.net_amount);
     const mutationAmount = Number(candidate.mutation_amount);
     if (
@@ -2669,9 +2731,11 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
       candidate.mutation_id,
       {
         candidate_type: "qris_settlement",
-        candidate_id: candidateId,
-        candidate_source: "local.qris_mutation_batch_candidates",
-        note: manualOverride ? overrideReason : "QRIS candidate MATCHED",
+        candidate_id: canonicalSettlementId,
+        candidate_source: "sport_center.payment_settlement_batches",
+        note: manualOverride
+          ? `${overrideReason} (local QRIS candidate ${candidateId} ditautkan ke canonical settlement ${canonicalSettlementId})`
+          : `Local QRIS candidate ${candidateId} ditautkan ke canonical settlement ${canonicalSettlementId}`,
       },
       actor,
       textValue(req.header("x-idempotency-key")),
@@ -2679,6 +2743,7 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
     await client.query(
       `update public.qris_mutation_batch_candidates
           set status = 'approved',
+              candidate_source = 'sport_center.payment_settlement_batches',
               reconciliation_status = 'MATCHED',
               review_reason = $2,
               updated_at = now()

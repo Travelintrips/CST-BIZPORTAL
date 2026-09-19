@@ -27,6 +27,15 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.");
   });
 
+  it("resolves local QRIS payment scope to a canonical settlement before journal approval", () => {
+    expect(source).toContain("async function resolveCanonicalQrisSettlement(");
+    expect(source).toContain("sport_center.payment_settlement_items");
+    expect(source).toContain("CANONICAL_SETTLEMENT_REQUIRED");
+    expect(source).toContain("const canonicalSettlementId = await resolveCanonicalQrisSettlement(");
+    expect(source).toContain('candidate_source: "sport_center.payment_settlement_batches"');
+    expect(source).not.toContain('candidate_source: "local.qris_mutation_batch_candidates"');
+  });
+
   it("supersedes competing non-final candidates before approving the selected match", () => {
     expect(source).toContain("set status = 'superseded'");
     expect(source).toContain("and id <> $2");
