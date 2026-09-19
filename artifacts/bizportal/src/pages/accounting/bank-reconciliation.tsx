@@ -49,6 +49,12 @@ import {
   resetQrisPaymentsSequentially,
 } from "@/lib/qrisSettlementReset";
 
+const STANDALONE_SAFE_CAPABILITIES = {
+  fileImport: false,
+  vendorInvoiceBatch: false,
+  qrisAmountCorrection: false,
+} as const;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9738,36 +9744,42 @@ export default function BankReconciliationPage() {
                  </SelectContent>
                </Select>
              </div>
-            <label>
-              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileUpload} />
-              <Button variant="outline" size="sm" asChild>
-                <span className="cursor-pointer gap-1.5 flex items-center">
-                  <Upload className="w-3.5 h-3.5" />
-                  {importMut.isPending ? "Importing..." : "Import Excel"}
-                </span>
-              </Button>
-            </label>
+            {STANDALONE_SAFE_CAPABILITIES.fileImport && (
+              <label>
+                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileUpload} />
+                <Button variant="outline" size="sm" asChild>
+                  <span className="cursor-pointer gap-1.5 flex items-center">
+                    <Upload className="w-3.5 h-3.5" />
+                    {importMut.isPending ? "Importing..." : "Import Excel"}
+                  </span>
+                </Button>
+              </label>
+            )}
             <Button variant="ghost" size="icon" onClick={() => refetch()} title="Refresh" className="h-8 w-8">
               <RefreshCw className="w-4 h-4" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => setShowDeleteAll(true)}
-              title="Reset hasil rekonsiliasi development tanpa menghapus mutasi sumber"
-            >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset Rekonsiliasi DEV
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-red-600 hover:text-red-700 h-8 text-xs"
-              onClick={() => setShowPurgeMutations(true)}
-              title="Hapus permanen mutasi development yang tidak terhubung ke posting atau settlement"
-            >
-              <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi DEV
-            </Button>
+            {import.meta.env.DEV && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setShowDeleteAll(true)}
+                  title="Reset hasil rekonsiliasi development tanpa menghapus mutasi sumber"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset Rekonsiliasi DEV
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red-600 hover:text-red-700 h-8 text-xs"
+                  onClick={() => setShowPurgeMutations(true)}
+                  title="Hapus permanen mutasi development yang tidak terhubung ke posting atau settlement"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi DEV
+                </Button>
+              </>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -10228,7 +10240,8 @@ export default function BankReconciliationPage() {
                                           ).map(Number),
                                         ).has(numericPaymentId);
                                       const canEditPaymentAmount =
-                                        canEditPaymentDate
+                                        STANDALONE_SAFE_CAPABILITIES.qrisAmountCorrection
+                                        && canEditPaymentDate
                                         && Number.isFinite(numericGrossAmount)
                                         && numericGrossAmount > 0
                                         && paymentSettlementStatus === "unsettled"
@@ -10705,7 +10718,7 @@ export default function BankReconciliationPage() {
                   key={m.id}
                   m={m}
                   onMapCoa={setCoaReferenceTarget}
-                  onMatchVendorInvoice={setVendorPaymentTarget}
+                  onMatchVendorInvoice={STANDALONE_SAFE_CAPABILITIES.vendorInvoiceBatch ? setVendorPaymentTarget : undefined}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
