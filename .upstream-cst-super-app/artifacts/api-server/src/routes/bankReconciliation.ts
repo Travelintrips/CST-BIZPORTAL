@@ -10296,9 +10296,6 @@ router.delete("/purge-mutations", async (req, res) => {
   const scopedSheetPurge = requestedScope === "unprocessed_google_sheet";
   const productionScopedPurge = process.env.APP_ENV === "production" && scopedSheetPurge;
   const requestedCompanyId = scopedSheetPurge ? Number(req.body?.company_id) : null;
-  const requestedCreatedAfter = scopedSheetPurge
-    ? new Date(String(req.body?.created_after ?? ""))
-    : null;
 
   if (
     process.env.APP_ENV !== "development"
@@ -10314,13 +10311,11 @@ router.delete("/purge-mutations", async (req, res) => {
       requestedCompanyId == null
       || !Number.isSafeInteger(requestedCompanyId)
       || requestedCompanyId <= 0
-      || !requestedCreatedAfter
-      || Number.isNaN(requestedCreatedAfter.getTime())
       || String(req.body?.confirmation ?? "") !== "HAPUS MUTASI SYNC PROD"
     )
   ) {
     return res.status(400).json({
-      error: "Untuk purge scoped wajib memilih company, mengisi waktu mulai sync yang valid, dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
+      error: "Untuk purge scoped wajib memilih company dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
     });
   }
   if (process.env.APP_ENV === "production" && !scopedSheetPurge) {
@@ -10363,7 +10358,9 @@ router.delete("/purge-mutations", async (req, res) => {
           ${scopedSheetPurge ? sql`
             AND bm.source = 'google_sheet'
             AND bm.company_id = ${requestedCompanyId}
-            AND bm.created_at >= ${requestedCreatedAfter?.toISOString() ?? null}::timestamptz
+          ` : sql``}
+          ${scopedSheetPurge ? sql`
+            AND LOWER(COALESCE(bm.status::text, 'unmatched')) = 'unmatched'
           ` : sql``}
           AND bm.journal_entry_id IS NULL
           AND COALESCE(bm.accounting_posted, false) = false
