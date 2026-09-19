@@ -258,6 +258,11 @@ describe("Google Sheet bank mutation sync", () => {
       values: string[][];
     }>;
     expect(reconciledUpdates).toEqual(expect.arrayContaining([
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
       { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
       { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
       { range: "'Mutasi Bank'!G2", values: [["51001"]] },

@@ -1306,6 +1306,7 @@ export default router;
  * out of the module until it can be reconciled with the canonical router. */
 /*
 import { Router, type IRouter, type Request } from "express";
+export default router; /*
 import { pool } from "@workspace/db";
 import {
   getDevSession,
