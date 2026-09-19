@@ -3000,7 +3000,7 @@ const QUICK_FILTERS: QuickFilter[] = [
   { label: "Review Manual",      status: "manual_review" },
   { label: "Perlu Diperiksa",    status: "duplicate_need_review" },
   { label: "Menunggu Posting",   status: "approved_pending_posting" },
-  { label: "Selesai",            status: "posted" },
+  { label: "Selesai",            status: "completed" },
   { label: "Dibatalkan",         status: "void" },
   { label: "Uang Masuk (IN)",    direction: "IN" },
   { label: "Uang Keluar (OUT)",  direction: "OUT" },
@@ -9560,7 +9560,11 @@ export default function BankReconciliationPage() {
   const responseMutations = data?.mutations ?? [];
   const statusFilteredMutations = filterStatus === "all"
     ? responseMutations
-    : responseMutations.filter(mutation => mutation.status === filterStatus);
+    : responseMutations.filter(mutation =>
+        filterStatus === "completed"
+          ? mutation.status === "posted" || mutation.status === "approved"
+          : mutation.status === filterStatus
+      );
   const mutations = filterStatus === "all"
     ? statusFilteredMutations
     : statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
