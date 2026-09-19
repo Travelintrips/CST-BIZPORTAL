@@ -90,16 +90,7 @@ describe("COA picker Rule AI metadata", () => {
   });
 
   it("wires the dialog serializer and edit-form loader into the rendered pages", () => {
-    expect(reconciliationSource).toContain(
-      "return buildManualRuleAiPayload(mutation, selected, ruleMetadata, companyId);",
-    );
-    expect(reconciliationSource).toContain("setRuleMetadata(defaultRuleAiMetadata(mutation));");
-    expect(reconciliationSource).toContain('id="coa-rule-name"');
-    expect(reconciliationSource).toContain('id="coa-rule-description"');
-    expect(reconciliationSource).toContain('id="coa-rule-reference-amount"');
-    expect(reconciliationSource).toContain('id="coa-rule-amount-tolerance"');
-    expect(reconciliationSource).toContain('id="coa-rule-confidence"');
-    expect(reconciliationSource).toContain('id="coa-rule-priority"');
+    // Rule configuration is owned by the dedicated recon-config page. The\n    // reconciliation page must not carry a second, stale serializer/form.\n    expect(reconciliationSource).not.toContain("buildManualRuleAiPayload(");\n    expect(reconciliationSource).not.toContain("setRuleMetadata(");
     expect(ruleConfigSource).toContain("const editableMetadata = editableRuleAiFieldsFromRow(row);");
     expect(ruleConfigSource).toContain("reference_amount: editableMetadata.reference_amount");
     expect(ruleConfigSource).toContain("amount_tolerance: editableMetadata.amount_tolerance");
