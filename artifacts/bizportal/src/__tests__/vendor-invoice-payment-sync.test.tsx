@@ -41,6 +41,7 @@ const postedInvoice = {
   reconciledAmountPaid: "0",
   amountPaid: "0",
   journalStatus: "posted",
+  paymentStatus: "unpaid",
   journalEntryNumber: "JRNL-042",
   threeWayMatchStatus: "matched",
   lines: [{
@@ -85,14 +86,15 @@ describe("Vendor invoice payment synchronization", () => {
         } as Response;
       }
 
+      const detailReads = fetchMock.mock.calls.filter(([request, requestInit]) =>
+        String(request).includes("/purchase-workflow/vendor-invoices/42")
+        && requestInit?.method !== "POST",
+      ).length;
       return {
         ok: true,
-        json: async () => ({
-          ...postedInvoice,
-          status: fetchMock.mock.calls.filter(([request]) =>
-            String(request).includes("/purchase-workflow/vendor-invoices/42"),
-          ).length > 1 ? "paid" : "posted",
-        }),
+        json: async () => detailReads > 1
+          ? { ...postedInvoice, status: "paid", paymentStatus: "paid", reconciledAmountPaid: "100000", amountPaid: "100000" }
+          : postedInvoice,
       } as Response;
     });
     vi.stubGlobal("fetch", fetchMock);
