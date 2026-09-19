@@ -2403,21 +2403,26 @@ function QrisPaymentItemsSummary({
 function JournalEntryLines({
   entryId,
   companyId,
+  mutationId,
   onStatusLoaded,
 }: {
   entryId: number;
   companyId?: number | null;
+  mutationId?: number | null;
   onStatusLoaded?: (status: string) => void;
 }) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ["accounting-entry", entryId, companyId],
+    queryKey: ["accounting-entry", entryId, companyId, mutationId],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (Number.isInteger(companyId) && Number(companyId) > 0) {
         params.set("companyId", String(companyId));
       }
       const query = params.toString();
-      const r = await fetch(`/api/accounting/entries/${entryId}${query ? `?${query}` : ""}`, { credentials: "include" });
+      const endpoint = Number.isInteger(mutationId) && Number(mutationId) > 0
+        ? `/api/bank-reconciliation/${mutationId}/journal-entry`
+        : `/api/accounting/entries/${entryId}${query ? `?${query}` : ""}`;
+      const r = await fetch(endpoint, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ status: string; ref?: string; totalDebit: string; totalCredit: string; lines: JournalLine[] }>;
     },
@@ -2496,7 +2501,7 @@ function JournalPreview({
 }) {
   // Case 1: real journal entry exists → show actual lines
   if (journalEntryId) {
-    return <JournalEntryLines entryId={journalEntryId} companyId={mutation.company_id} />;
+    return <JournalEntryLines entryId={journalEntryId} companyId={mutation.company_id} mutationId={mutation.id} />;
   }
 
   // Case 2: candidate from matching API → show candidate-based estimate
@@ -9181,7 +9186,7 @@ export default function BankReconciliationPage() {
   // Post Accounting → POST /:id/post → status becomes posted
   const postMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/post`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
