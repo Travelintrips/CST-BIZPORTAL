@@ -13,6 +13,11 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).not.toContain("bm.status = any(${values.length}::text[])");
   });
 
+  it("binds ordinary status filters to SQL parameters", () => {
+    expect(source).toContain("filters.push(`bm.status = $${values.length}`)");
+    expect(source).not.toContain("filters.push(`bm.status = ${values.length}`)");
+  });
+
   it("persists canonical source identities for locally generated candidates", () => {
     expect(source).toContain('"sport_center.sport_payments"');
     expect(source).toContain('"public.vendor_invoices"');

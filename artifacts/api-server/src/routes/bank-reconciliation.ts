@@ -2191,7 +2191,7 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
     } else {
       if (!MUTATION_STATUSES.has(status)) throw new Error("INVALID_STATUS");
       values.push(status);
-      filters.push(`bm.status = ${values.length}`);
+      filters.push(`bm.status = $${values.length}`);
     }
   }
 
