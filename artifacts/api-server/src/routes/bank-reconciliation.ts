@@ -2760,9 +2760,16 @@ async function ensureCanonicalQrisSettlement(
     correction_count: string | number | null;
   }>();
   for (const journal of journalResult.rows) {
-    if (journalByPayment.has(journal.payment_id)) {
+    const existing = journalByPayment.get(journal.payment_id);
+    if (existing) {
+      const existingPosted = existing.status === "posted";
+      const incomingPosted = journal.status === "posted";
+      if (existingPosted !== incomingPosted) {
+        if (incomingPosted) journalByPayment.set(journal.payment_id, journal);
+        continue;
+      }
       throw new ApprovalError(
-        `Payment ${journal.payment_id} memiliki lebih dari satu jurnal payment_confirmed.`,
+        `Payment ${journal.payment_id} memiliki lebih dari satu jurnal payment_confirmed dengan status finansial yang sama.`,
         409,
         "CANONICAL_PAYMENT_JOURNAL_AMBIGUOUS",
       );
