@@ -1,0 +1,5 @@
+import { describe,expect,it } from 'vitest';
+import { readFileSync } from 'node:fs';import { fileURLToPath } from 'node:url';
+const ui=readFileSync(fileURLToPath(new URL('../../../bizportal/src/pages/accounting/bank-reconciliation.tsx',import.meta.url)),'utf8');
+const api=readFileSync(fileURLToPath(new URL('../routes/bank-reconciliation.ts',import.meta.url)),'utf8');
+describe('reconciliation button endpoint contract',()=>{it('keeps safe standalone endpoints',()=>{for(const p of ['/run-matching','/:mutationId/approve','/:mutationId/unmatch','/qris-candidates','/sheet-sync'])expect(api).toContain(p);});it('does not call known missing legacy endpoints',()=>{for(const p of ['/post`','/unapprove`','/void-journal`','/upload-proof`','/proof-ocr`','/repair-diagnosis`','/link-historical-settlement`'])expect(ui).not.toContain(p);});it('fails closed instead of 404',()=>{expect(ui).toContain('/api/bank-reconciliation/unsupported-standalone-action');expect(api).toContain('UNSUPPORTED_STANDALONE_RECONCILIATION_ACTION');});});

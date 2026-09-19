@@ -3104,7 +3104,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -4375,7 +4375,7 @@ function useCanonicalRepairDiagnosis(mutationId: number, enabled: boolean) {
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: enabled && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         credentials: "include",
         cache: "no-store",
       });
@@ -6268,7 +6268,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       return;
     }
     let cancelled = false;
-    fetch(`/api/bank-reconciliation/${mutationId}/proof-ocr`, { credentials: "include" })
+    fetch(`/api/bank-reconciliation/unsupported-standalone-action`, { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) return null;
         return response.json();
@@ -6290,7 +6290,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -6316,7 +6316,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     if (!confirm("Hapus bukti transfer ini?")) return;
     setBusy(true);
     try {
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "DELETE", credentials: "include",
       });
       if (!r.ok) throw new Error("Gagal hapus");
@@ -6453,7 +6453,7 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: open && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         credentials: "include",
       });
       const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
@@ -9116,7 +9116,7 @@ export default function BankReconciliationPage() {
       reason: string;
     }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/${mutationId}/link-historical-settlement`,
+        `/api/bank-reconciliation/unsupported-standalone-action`,
         {
           method: "POST",
           credentials: "include",
@@ -9240,7 +9240,7 @@ export default function BankReconciliationPage() {
   // Post Accounting → POST /:id/post → status becomes posted
   const postMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/post`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
@@ -9258,7 +9258,7 @@ export default function BankReconciliationPage() {
   // matched so the reviewer can choose another candidate or COA.
   const unapproveMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/unapprove`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -9293,7 +9293,7 @@ export default function BankReconciliationPage() {
   // Reopen void → POST /:id/reopen → resets status to 'unmatched' so re-matching can run
   const reopenMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/reopen`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
@@ -9314,7 +9314,7 @@ export default function BankReconciliationPage() {
   // Void/Reverse → POST /:id/void-journal → status becomes void (creates reversal entry)
   const voidMut = useMutation({
     mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason || null }),
       });
@@ -9355,7 +9355,7 @@ export default function BankReconciliationPage() {
         return body;
       }
 
-      const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+      const voidResponse = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -9420,7 +9420,7 @@ export default function BankReconciliationPage() {
 
   const deleteAllMut = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/delete-all", { method: "DELETE", credentials: "include" });
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", { method: "DELETE", credentials: "include" });
       const body = await r.json().catch(() => ({ error: r.statusText }));
       if (!r.ok) throw new Error(body.error ?? r.statusText);
       return body;
@@ -9438,7 +9438,7 @@ export default function BankReconciliationPage() {
   const deleteDuplicateCandidateMut = useMutation({
     mutationFn: async ({ mutationId, candidateId }: { mutationId: number; candidateId: number }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/${mutationId}/candidates/${candidateId}`,
+        `/api/bank-reconciliation/unsupported-standalone-action`,
         { method: "DELETE", credentials: "include" },
       );
       const body = await response.json().catch(() => ({ error: response.statusText }));
@@ -9463,7 +9463,7 @@ export default function BankReconciliationPage() {
 
   const purgeMutations = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
         method: "DELETE",
         credentials: "include",
       });
@@ -9491,7 +9491,7 @@ export default function BankReconciliationPage() {
       if (activeCompanyId == null || activeCompanyId <= 0) {
         throw new Error("Pilih satu perusahaan terlebih dahulu. Purge PROD tidak boleh dijalankan dalam mode konsolidasi.");
       }
-      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
         method: "DELETE",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
