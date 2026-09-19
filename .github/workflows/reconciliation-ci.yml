@@ -1,0 +1,35 @@
+name: Reconciliation CI
+
+on:
+  pull_request:
+    paths:
+      - "artifacts/api-server/src/routes/bank-reconciliation.ts"
+      - "artifacts/api-server/src/__tests__/bank-reconciliation*.test.ts"
+      - ".github/workflows/reconciliation-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: API typecheck
+        run: pnpm --filter @workspace/api-server run typecheck
+      - name: Source integrity regression
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/bank-reconciliation-source-integrity.test.ts
+      - name: API build
+        run: pnpm --filter @workspace/api-server run build

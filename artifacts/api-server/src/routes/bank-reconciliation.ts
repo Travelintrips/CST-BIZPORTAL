@@ -314,8 +314,8 @@ async function matchLocalMutation(
     await client.query(
       `insert into public.bank_reconciliation_matches
         (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, 'candidate')`,
+         amount_match, date_match, name_match, order_id_match, proof_match, status, candidate_source)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, 'candidate', $10)`,
       [
         mutation.id,
         best.candidateType,
@@ -326,6 +326,7 @@ async function matchLocalMutation(
         best.dateMatch,
         best.nameMatch,
         best.referenceMatch,
+        best.candidateType === "sport_payment" ? "sport_center.sport_payments" : "public.vendor_invoices",
       ],
     );
   }
@@ -693,6 +694,57 @@ async function nextApprovalEntryNumber(
   return `RECON/${year}/${String(claimed).padStart(6, "0")}`;
 }
 
+async function assertApprovalCandidateExists(
+  client: ApprovalClient,
+  candidateType: string | null,
+  candidateId: number | null,
+  candidateSource: string | null,
+  companyId: number,
+): Promise<void> {
+  if (!candidateType || candidateId == null) return;
+
+  let result: { rows: Array<{ id: number }> };
+  if (candidateType === "sport_payment") {
+    if (candidateSource && candidateSource !== "sport_center.sport_payments") {
+      throw new ApprovalError("Sumber kandidat Sport Center tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id from sport_center.sport_payments where id = $1 and company_id = $2 limit 1 for update`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "vendor_invoice") {
+    if (candidateSource && candidateSource !== "public.vendor_invoices") {
+      throw new ApprovalError("Sumber kandidat vendor tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id from public.vendor_invoices where id = $1 and company_id = $2 limit 1 for update`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "accounting_payment") {
+    if (candidateSource && candidateSource !== "public.accounting_payments") {
+      throw new ApprovalError("Sumber kandidat accounting payment tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id from public.accounting_payments where id = $1 and company_id = $2 limit 1 for update`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "qris_settlement") {
+    if (candidateSource !== "sport_center.payment_settlement_batches") {
+      throw new ApprovalError("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id from sport_center.payment_settlement_batches where id = $1 and company_id = $2 limit 1 for update`,
+      [candidateId, companyId],
+    );
+  } else {
+    throw new ApprovalError(`Tipe kandidat "${candidateType}" tidak didukung untuk approval.`, 409, "STALE_CANDIDATE");
+  }
+
+  if (result.rows.length === 0) {
+    throw new ApprovalError("Kandidat sudah tidak memiliki source record yang valid. Jalankan matching ulang.", 409, "STALE_CANDIDATE");
+  }
+}
+
 async function approveBankMutation(
   client: ApprovalClient,
   mutationId: number,
@@ -796,6 +848,22 @@ async function approveBankMutation(
   }
 
   const companyId = mutation.company_id;
+  if (selectedCandidateType && selectedCandidateId != null && !selectedCandidateSource) {
+    selectedCandidateSource = selectedCandidateType === "sport_payment"
+      ? "sport_center.sport_payments"
+      : selectedCandidateType === "vendor_invoice"
+        ? "public.vendor_invoices"
+        : selectedCandidateType === "accounting_payment"
+          ? "public.accounting_payments"
+          : null;
+  }
+  await assertApprovalCandidateExists(
+    client,
+    selectedCandidateType,
+    selectedCandidateId,
+    selectedCandidateSource,
+    companyId,
+  );
   const bankCoaId = await resolveApprovalBankAccount(
     client,
     companyId,
@@ -902,9 +970,18 @@ async function approveBankMutation(
   if (matchId != null) {
     await client.query(
       `update public.bank_reconciliation_matches
-          set status = 'approved'
+          set status = 'superseded'
+        where mutation_id = $1
+          and id <> $2
+          and status not in ('approved', 'posted')`,
+      [mutationId, matchId],
+    );
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status = 'approved',
+              candidate_source = coalesce(candidate_source, $3)
         where id = $1 and mutation_id = $2`,
-      [matchId, mutationId],
+      [matchId, mutationId, selectedCandidateSource],
     );
   } else if (selectedCandidateType && selectedCandidateId != null) {
     await client.query(
