@@ -9062,7 +9062,7 @@ export default function BankReconciliationPage() {
       reason: string;
     }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/unsupported-standalone-action`,
+        `/api/bank-reconciliation/${mutationId}/recover-qris-settlement`,
         {
           method: "POST",
           credentials: "include",
