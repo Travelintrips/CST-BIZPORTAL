@@ -32,7 +32,7 @@ describe("canonical API source integrity", () => {
   it("bank sheet sync module has one top-level implementation", () => {
     const text = canonicalFiles[1].text;
     expect(occurrences(text, /^import crypto from "node:crypto";\s*$/gm)).toBe(1);
-    expect(occurrences(text, /^function parseAmount\(/gm)).toBe(1);
+    expect(occurrences(text, /^export function parseAmount\(/gm)).toBe(1);
     expect(occurrences(text, /^export async function syncOneBankSheetConfig\(/gm)).toBe(1);
   });
 
