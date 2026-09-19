@@ -24,5 +24,13 @@
 - [Imported PPh liability accounts](imported-pph-liability-accounts.md) — imported liability IDs are untrusted; confirm them through company-scoped Finance Review before payment.
 - [Top-level artifact routing](top-level-artifact-routing.md) — the preview gateway only publishes root artifacts from top-level `artifacts/`; upstream manifests need a validated root wrapper.
 - [Artifact production environment injection](artifact-production-env.md) — service runtime values may need to be declared in the artifact manifest, not only root userenv.
+- [Production API cutover](production-api-cutover.md) — a green Supabase health check can coexist with a self-looping proxy; production must run the complete upstream API server.
 - [Posted ledger immutability](posted-ledger-immutability.md) — posted accounting entries reject financial date edits; corrections require a reversal/new entry workflow.
 - [Manual COA company context](manual-coa-company-context.md) — manual bank-reconciliation approval needs validated active-company context for legacy imported rows.
+- [Supabase database selection](supabase-database-selection.md) — never fall back to generic DATABASE_URL; readiness must report the resolved Supabase runtime.
+- [Upstream artifact build dependencies](upstream-artifact-build.md) — nested workspace production builds must install their own dependencies before running.
+- [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
+- [Bank reconciliation read contract](bank-reconciliation-read-contract.md) — production can have synced bank rows while the UI stays empty if the standalone API omits its list and summary endpoints.
+- [Bank sheet amount locale](bank-sheet-amount-locale.md) — Indonesian-formatted Sheet values such as `685.170` must parse as 685170, not 685.17.
+- [External production write verification](external-production-write-verification.md) — a shell timeout can occur after an external Supabase transaction commits; verify state before retrying a destructive write.
+- [Bank reconciliation candidate explanation](candidate-explanation-contract.md) — render persisted match flags and reasons even when optional source details are absent.

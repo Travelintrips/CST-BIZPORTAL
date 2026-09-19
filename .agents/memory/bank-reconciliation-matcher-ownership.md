@@ -3,8 +3,8 @@ name: Bank reconciliation matcher ownership
 description: Boundary between the local BizPortal proxy/UI and the upstream bank reconciliation matcher.
 ---
 
-Candidate generation and server-side auto-post decisions for bank reconciliation are owned by the configured upstream service. The local BizPortal workspace can control candidate visibility, reviewer selection, and UI safeguards, but it cannot create a missing candidate when the upstream response contains `candidate_count = 0`.
+The standalone BizPortal API now owns a deliberately limited matcher for canonical Sport Center payments and posted vendor invoices; broader rule/ECF matching and server-side auto-post decisions remain upstream-only. The local matcher must never auto-post.
 
-**Why:** Production mutation records can have matching payment evidence while the upstream matcher returns no candidate; adding frontend fallback data would create an unapproved or non-persisted accounting source.
+**Why:** The standalone UI called a missing matching endpoint after the upstream API was removed. A local endpoint is needed for basic reconciliation, but recreating the full upstream decision stack locally would risk inconsistent accounting behavior.
 
-**How to apply:** Change the upstream matcher for date/amount candidate creation and name-gated auto-post behavior. Keep local changes limited to rendering, selection, approval request contracts, and explicit safeguards unless the upstream matcher source is mounted in the workspace.
+**How to apply:** Keep local matching scoped to canonical candidate tables, exact amount/date/reference signals, candidate/audit persistence, and review/approval states. Add new rule sources only with explicit schema and accounting safeguards; do not silently fall back to frontend data or auto-post.

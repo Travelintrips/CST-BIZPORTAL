@@ -585,6 +585,7 @@ interface Candidate {
   status: string;
   duplicate_count?: number;
   customer_name?: string | null;
+  order_ref?: string | null;
   details?: CandidateDetails | null;
 }
 
@@ -2261,6 +2262,28 @@ function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[]
   return reasons;
 }
 
+function candidateEvidenceLabels(candidate: Candidate): string[] {
+  const signals: Array<[boolean, string]> = [
+    [candidate.amount_match, "Nominal cocok"],
+    [candidate.date_match, "Tanggal cocok"],
+    [candidate.name_match, "Nama/deskripsi cocok"],
+    [candidate.order_id_match, "Referensi cocok"],
+    [candidate.proof_match, "Bukti transfer cocok"],
+  ];
+  const matched = signals.filter(([isMatch]) => isMatch).map(([, label]) => label);
+  const unmatched = signals.filter(([isMatch]) => !isMatch).map(([, label]) =>
+    label.replace(" cocok", " belum cocok"),
+  );
+  return [...matched, ...unmatched];
+}
+
+function candidateMatchReasonLabel(reason: string): string {
+  return reason
+    .replace(/^MANUAL_RULE:/i, "Rule manual: ")
+    .replace(/^AUTO_RULE:/i, "Rule otomatis: ")
+    .trim();
+}
+
 function candidateApprovalBlockReason(candidate: Candidate): string | null {
   if (candidate.candidate_type !== "recon_rule") return null;
   const targetCoaCode = String(candidate.details?.targetCoaCode ?? "").trim();
@@ -2855,7 +2878,7 @@ function AIActionCenter({
               <Button
                 size="sm"
                 className="w-full gap-1.5"
-                onClick={() => onRunMatching(unmatched > 0 ? "new" : "rematch_non_final")}
+                onClick={() => onRunMatching("rematch_non_final")}
                 disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
               >
                 {matchingPending || matchingBackgroundPending
@@ -3081,7 +3104,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -4352,7 +4375,7 @@ function useCanonicalRepairDiagnosis(mutationId: number, enabled: boolean) {
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: enabled && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         credentials: "include",
         cache: "no-store",
       });
@@ -5652,6 +5675,7 @@ function MutationCard({
                     const candidateReference =
                       candidateDetails?.paymentNumber
                       ?? candidateDetails?.reference
+                      ?? candidate.order_ref
                       ?? `#${candidate.candidate_id}`;
                     return (
                       <div
@@ -5701,6 +5725,33 @@ function MutationCard({
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
+                           <div className="mt-1 rounded border border-border/70 bg-muted/30 px-2 py-1.5">
+                             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                               Alasan pencocokan
+                             </p>
+                             <div className="mt-1 flex flex-wrap gap-1">
+                               {candidateEvidenceLabels(candidate).map((label) => {
+                                 const positive = label.endsWith("cocok");
+                                 return (
+                                   <span
+                                     key={label}
+                                     className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                       positive
+                                         ? "bg-green-950/50 text-green-300"
+                                         : "bg-amber-950/50 text-amber-300"
+                                     }`}
+                                   >
+                                     {positive ? "✓" : "!"} {label}
+                                   </span>
+                                 );
+                               })}
+                             </div>
+                             {candidate.match_reason && (
+                               <p className="mt-1 text-[10px] text-muted-foreground">
+                                 Sinyal sistem: {candidateMatchReasonLabel(candidate.match_reason)}
+                               </p>
+                             )}
+                           </div>
                            <CandidateDetailsBlock candidate={candidate} compact />
                            {candidateApprovalBlockedReason ? (
                              <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
@@ -6217,7 +6268,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       return;
     }
     let cancelled = false;
-    fetch(`/api/bank-reconciliation/${mutationId}/proof-ocr`, { credentials: "include" })
+    fetch(`/api/bank-reconciliation/unsupported-standalone-action`, { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) return null;
         return response.json();
@@ -6239,7 +6290,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", body: fd,
       });
       const body = await r.json();
@@ -6265,7 +6316,7 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
     if (!confirm("Hapus bukti transfer ini?")) return;
     setBusy(true);
     try {
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "DELETE", credentials: "include",
       });
       if (!r.ok) throw new Error("Gagal hapus");
@@ -6402,7 +6453,7 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
     queryKey: ["bank-repair-diagnosis", mutationId],
     enabled: open && Number.isInteger(mutationId) && mutationId > 0,
     queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+      const response = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         credentials: "include",
       });
       const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
@@ -7553,6 +7604,8 @@ function SheetConfigCollapsed() {
       const d = await r.json();
       toast({ title: d.ok ? `${cfg.label}: ${d.message}` : (d.error ?? "Sync gagal"), variant: d.ok ? "default" : "destructive" });
       qc.invalidateQueries({ queryKey: ["sheet-configs"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     } catch (e: any) {
       toast({ title: e.message, variant: "destructive" });
     } finally {
@@ -7684,7 +7737,7 @@ function SheetConfigCollapsed() {
                         {testing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Wifi className="w-2.5 h-2.5" />} Test
                       </Button>
                       <Button size="sm" variant="outline" className="h-6 text-xs gap-1" onClick={() => syncOne(cfg)} disabled={syncing[cfg.id] || !cfg.is_active}>
-                        {syncing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />} Sync
+                        {syncing[cfg.id] ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />} Sync 2 Arah
                       </Button>
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => openEdit(cfg)}>Edit</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => toggleActive(cfg)}>{cfg.is_active ? "Nonaktifkan" : "Aktifkan"}</Button>
@@ -7876,7 +7929,6 @@ export default function BankReconciliationPage() {
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
   const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
   const [showPurgeSyncedProd, setShowPurgeSyncedProd] = useState(false);
-  const [purgeCreatedAfter, setPurgeCreatedAfter] = useState("");
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
     error: string;
@@ -9064,7 +9116,7 @@ export default function BankReconciliationPage() {
       reason: string;
     }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/${mutationId}/link-historical-settlement`,
+        `/api/bank-reconciliation/unsupported-standalone-action`,
         {
           method: "POST",
           credentials: "include",
@@ -9188,7 +9240,7 @@ export default function BankReconciliationPage() {
   // Post Accounting → POST /:id/post → status becomes posted
   const postMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/post`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
@@ -9206,7 +9258,7 @@ export default function BankReconciliationPage() {
   // matched so the reviewer can choose another candidate or COA.
   const unapproveMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/unapprove`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -9241,7 +9293,7 @@ export default function BankReconciliationPage() {
   // Reopen void → POST /:id/reopen → resets status to 'unmatched' so re-matching can run
   const reopenMut = useMutation({
     mutationFn: async (mutId: number) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/reopen`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       if (!r.ok) {
@@ -9262,7 +9314,7 @@ export default function BankReconciliationPage() {
   // Void/Reverse → POST /:id/void-journal → status becomes void (creates reversal entry)
   const voidMut = useMutation({
     mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+      const r = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason || null }),
       });
@@ -9303,7 +9355,7 @@ export default function BankReconciliationPage() {
         return body;
       }
 
-      const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+      const voidResponse = await fetch(`/api/bank-reconciliation/unsupported-standalone-action`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -9368,7 +9420,7 @@ export default function BankReconciliationPage() {
 
   const deleteAllMut = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/delete-all", { method: "DELETE", credentials: "include" });
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", { method: "DELETE", credentials: "include" });
       const body = await r.json().catch(() => ({ error: r.statusText }));
       if (!r.ok) throw new Error(body.error ?? r.statusText);
       return body;
@@ -9386,7 +9438,7 @@ export default function BankReconciliationPage() {
   const deleteDuplicateCandidateMut = useMutation({
     mutationFn: async ({ mutationId, candidateId }: { mutationId: number; candidateId: number }) => {
       const response = await fetch(
-        `/api/bank-reconciliation/${mutationId}/candidates/${candidateId}`,
+        `/api/bank-reconciliation/unsupported-standalone-action`,
         { method: "DELETE", credentials: "include" },
       );
       const body = await response.json().catch(() => ({ error: response.statusText }));
@@ -9411,7 +9463,7 @@ export default function BankReconciliationPage() {
 
   const purgeMutations = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
         method: "DELETE",
         credentials: "include",
       });
@@ -9439,14 +9491,13 @@ export default function BankReconciliationPage() {
       if (activeCompanyId == null || activeCompanyId <= 0) {
         throw new Error("Pilih satu perusahaan terlebih dahulu. Purge PROD tidak boleh dijalankan dalam mode konsolidasi.");
       }
-      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
         method: "DELETE",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scope: "unprocessed_google_sheet",
           company_id: activeCompanyId,
-          created_after: purgeCreatedAfter,
           confirmation: "HAPUS MUTASI SYNC PROD",
         }),
       });
@@ -11661,25 +11712,11 @@ export default function BankReconciliationPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Hapus Mutasi Sync Perusahaan Aktif?</AlertDialogTitle>
             <AlertDialogDescription>
-              Hanya mutasi dari Google Sheet pada perusahaan yang sedang dipilih yang akan dihapus.
-              Waktu mulai sync di bawah menjadi batas bawah <code>created_at</code>, sehingga mutasi lama tidak ikut terhapus.
-              Mutasi yang sudah memiliki jurnal, posting, atau settlement tidak akan disentuh.
+              Hanya mutasi Google Sheet pada perusahaan yang sedang dipilih dan belum dicocokkan yang akan dihapus.
+              Mutasi yang sudah memiliki pencocokan, jurnal, posting, atau settlement tidak akan disentuh.
               Data di Google Sheet tetap utuh sehingga dapat di-sync ulang setelah proses ini selesai.
               Jangan jalankan jika matching atau posting sedang berlangsung.
             </AlertDialogDescription>
-            <div className="space-y-1.5">
-              <Label htmlFor="purge-created-after">Hapus hanya baris yang dibuat setelah</Label>
-              <Input
-                id="purge-created-after"
-                value={purgeCreatedAfter}
-                onChange={(event) => setPurgeCreatedAfter(event.target.value)}
-                placeholder="2026-09-13T15:00:00+07:00"
-                autoComplete="off"
-              />
-              <p className="text-xs text-muted-foreground">
-                Gunakan waktu mulai sync terakhir dengan zona waktu, misalnya Asia/Jakarta (+07:00).
-              </p>
-            </div>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Batal</AlertDialogCancel>
@@ -11690,7 +11727,6 @@ export default function BankReconciliationPage() {
                 purgeSyncedProdMutations.isPending
                 || activeCompanyId == null
                 || activeCompanyId <= 0
-                || !purgeCreatedAfter.trim()
               }
             >
               {purgeSyncedProdMutations.isPending ? "Menghapus..." : "Ya, Hapus Mutasi Sync"}

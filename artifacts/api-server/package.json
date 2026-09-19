@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "export NODE_ENV=development APP_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "start": "node --enable-source-maps ./dist/index.mjs",
+    "start": "node --max-http-header-size=65536 --enable-source-maps ./dist/index.mjs",
     "typecheck": "pnpm exec tsc --build ../../lib/db ../../lib/api-zod --force && tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },

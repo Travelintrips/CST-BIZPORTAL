@@ -14,6 +14,10 @@ function isProductionEnvironment(): boolean {
  *
  * This is kept for CLI tools such as drizzle-kit. Runtime callers should use
  * resolveDatabaseUrl() so the GCP Secret Manager fallback is available.
+ *
+ * The generic DATABASE_URL is intentionally not a fallback here. The
+ * application database is the environment-specific Supabase database, and
+ * Replit's managed database must never be selected implicitly.
  */
 export function getDatabaseUrl(): string | undefined {
   const isProduction = isProductionEnvironment();
@@ -21,8 +25,7 @@ export function getDatabaseUrl(): string | undefined {
     (isProduction
       ? process.env.SUPABASE_DATABASE_URL
       : process.env.SUPABASE_DATABASE_URL_DEV) ??
-    process.env.SUPABASE_PG_URL ??
-    process.env.DATABASE_URL
+    process.env.SUPABASE_PG_URL
   );
 }
 

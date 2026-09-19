@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveDatabaseUrl } from "@workspace/db/connection";
+import { getDatabaseUrl, resolveDatabaseUrl } from "@workspace/db/connection";
 import {
   extractDatabaseUrl,
   validateDatabaseUrl,
@@ -25,6 +25,17 @@ afterEach(() => {
 });
 
 describe("database URL resolution", () => {
+  it("does not fall back to the generic Replit database URL", () => {
+    process.env.APP_ENV = "development";
+    process.env.NODE_ENV = "development";
+    delete process.env.SUPABASE_DATABASE_URL_DEV;
+    delete process.env.SUPABASE_DATABASE_URL;
+    delete process.env.SUPABASE_PG_URL;
+    process.env.DATABASE_URL = "postgresql://replit-user:password@replit.example.test:5432/replit";
+
+    expect(getDatabaseUrl()).toBeUndefined();
+  });
+
   it("uses the development Supabase database URL", async () => {
     process.env.APP_ENV = "development";
     process.env.NODE_ENV = "development";

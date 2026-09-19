@@ -10,6 +10,11 @@ interface GoogleTokenResponse {
   access_token?: string;
 }
 
+export interface SpreadsheetValueUpdate {
+  range: string;
+  values: string[][];
+}
+
 interface SpreadsheetMetadata {
   properties?: { title?: string };
   sheets?: Array<{ properties?: { title?: string } }>;
@@ -45,7 +50,7 @@ async function getAccessToken(credentials: ReturnType<typeof getCredentials>): P
   const claim = encodeBase64Url(
     JSON.stringify({
       iss: credentials.client_email,
-      scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+      scope: "https://www.googleapis.com/auth/spreadsheets",
       aud: tokenUri,
       iat: now,
       exp: now + 3600,
@@ -100,4 +105,87 @@ export async function inspectSpreadsheet(
       .filter((title): title is string => Boolean(title)),
     serviceAccountEmail: credentials.client_email,
   };
+}
+
+export async function readSpreadsheetValues(
+  spreadsheetId: string,
+  tabName: string,
+): Promise<string[][]> {
+  const credentials = getCredentials();
+  const accessToken = await getAccessToken(credentials);
+  const range = `${tabName}!A:ZZ`;
+  const url = new URL(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`,
+  );
+  url.searchParams.set("majorDimension", "ROWS");
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 404) {
+      throw new Error("Spreadsheet tidak ditemukan atau belum dibagikan ke Service Account");
+    }
+    throw new Error(`Google Sheets API failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as { values?: unknown[][] };
+  return (data.values ?? []).map((row) =>
+    row.map((value) => (value == null ? "" : String(value))),
+  );
+}
+
+function quoteSheetName(tabName: string): string {
+  return `'${tabName.replace(/'/g, "''")}'`;
+}
+
+export function spreadsheetCellRange(
+  tabName: string,
+  columnNumber: number,
+  rowNumber: number,
+): string {
+  let column = columnNumber + 1;
+  let letters = "";
+  while (column > 0) {
+    const remainder = (column - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    column = Math.floor((column - 1) / 26);
+  }
+  return `${quoteSheetName(tabName)}!${letters}${rowNumber}`;
+}
+
+export async function writeSpreadsheetValues(
+  spreadsheetId: string,
+  updates: SpreadsheetValueUpdate[],
+): Promise<void> {
+  if (updates.length === 0) return;
+
+  const credentials = getCredentials();
+  const accessToken = await getAccessToken(credentials);
+  const url = new URL(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`,
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      valueInputOption: "USER_ENTERED",
+      data: updates.map((update) => ({
+        range: update.range,
+        majorDimension: "ROWS",
+        values: update.values,
+      })),
+    }),
+  });
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 404) {
+      throw new Error(
+        "Spreadsheet tidak dapat ditulis. Pastikan Service Account memiliki akses Editor",
+      );
+    }
+    throw new Error(`Google Sheets write API failed (${response.status})`);
+  }
 }

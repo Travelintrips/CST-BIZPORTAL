@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalEnvironment = {
   APP_ENV: process.env.APP_ENV,
@@ -19,6 +19,11 @@ afterEach(() => {
     }
   }
   vi.resetModules();
+});
+
+beforeEach(() => {
+  delete process.env.BIZPORTAL_BACKEND_API_ORIGIN;
+  delete process.env.BIZPORTAL_API_ORIGIN;
 });
 
 describe("configured BizPortal API origin", () => {

@@ -23,17 +23,6 @@ export interface ProductionSession {
   expiresAt: number;
 }
 
-export type DevLoginHook = (
-  user: DevAuthUser,
-  response: Response,
-) => Promise<void>;
-
-export type ProductionLoginHook = (
-  accessToken: string,
-  user: DevAuthUser,
-  response: Response,
-) => Promise<void>;
-
 const DEV_SESSION_COOKIE = "bizportal_dev_session";
 const PRODUCTION_SESSION_COOKIE = "bizportal_supabase_session";
 const DEV_SESSION_TTL_SECONDS = 8 * 60 * 60;
@@ -329,10 +318,7 @@ function getSafeRedirect(value: unknown): string {
   return value;
 }
 
-export function createDevAuthRouter(options: {
-  onLogin?: DevLoginHook;
-  onProductionLogin?: ProductionLoginHook;
-} = {}): Router {
+export function createDevAuthRouter(): Router {
   const router = Router();
 
   router.post("/auth/supabase-exchange", async (request, response): Promise<void> => {
@@ -376,7 +362,6 @@ export function createDevAuthRouter(options: {
         return;
       }
 
-      await options.onProductionLogin?.(accessToken, user, response);
       setProductionSessionCookie(response, productionSession);
       response.json({ user });
     } catch (error) {
@@ -417,15 +402,6 @@ export function createDevAuthRouter(options: {
     if (!user) {
       return response.status(403).json({
         error: "Email belum diizinkan untuk Dev Login.",
-      });
-    }
-
-    try {
-      await options.onLogin?.(user, response);
-    } catch (error) {
-      request.log.error({ error }, "Development upstream login failed");
-      return response.status(502).json({
-        error: "Development API login is unavailable",
       });
     }
 

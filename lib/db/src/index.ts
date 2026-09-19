@@ -17,6 +17,7 @@ export const pool = new Pool({
   query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS ?? 45_000),
 });
 export const db = drizzle(pool, { schema });
+export const runtimeDatabaseUrl = databaseUrl;
 
 export * from "./schema";
 export { getDatabaseUrl, resolveDatabaseUrl } from "./connection";

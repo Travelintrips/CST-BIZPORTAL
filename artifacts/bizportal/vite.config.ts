@@ -5,13 +5,11 @@ import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
-const rawPort = process.env.PORT;
-
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
+// The artifact workflow supplies these values through services.env. Keep the
+// same values as local defaults so direct package builds remain self-contained.
+const defaultPort = 18442;
+const defaultBasePath = '/bizportal/';
+const rawPort = process.env.PORT ?? String(defaultPort);
 
 const port = Number(rawPort);
 
@@ -19,13 +17,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
-}
+const basePath = process.env.BASE_PATH ?? defaultBasePath;
 
 export default defineConfig({
   base: basePath,

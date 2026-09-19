@@ -597,6 +597,8 @@ function effectiveBankMutationImportStatusSql(alias = "bmi"): string {
       THEN 'approved'
     WHEN ${alias}.status IN ('REJECTED', 'DUPLICATE')
       THEN 'rejected'
+    WHEN ${alias}.status = 'NEED_REVIEW'
+      THEN 'duplicate_need_review'
     ELSE 'unmatched'
   END`;
 }
@@ -10031,12 +10033,29 @@ router.get("/summary", async (req, res) => {
     : `WHERE bm.company_id = ${requestedCompanyId}`;
   const { rows } = await db.execute(sql.raw(`
     SELECT
-      ${effectiveBankMutationStatusSql("bm")} AS status,
-      COUNT(*) as count,
-      SUM(bm.amount) as total_amount
-    FROM bank_mutations bm
-    ${companyFilter}
-    GROUP BY 1
+      summary_rows.status,
+      COUNT(*) AS count,
+      SUM(summary_rows.amount) AS total_amount
+    FROM (
+      SELECT
+        ${effectiveBankMutationStatusSql("bm")} AS status,
+        bm.amount
+      FROM bank_mutations bm
+      ${companyFilter}
+
+      UNION ALL
+
+      SELECT
+        ${effectiveBankMutationImportStatusSql("bmi")} AS status,
+        GREATEST(COALESCE(bmi.credit, 0), COALESCE(bmi.debit, 0)) AS amount
+      FROM bank_mutation_imports bmi
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM bank_mutations bm2
+        WHERE bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)
+      )
+    ) summary_rows
+    GROUP BY summary_rows.status
     ORDER BY count DESC
   `));
   return res.json({ summary: rows });
@@ -10288,9 +10307,6 @@ router.delete("/purge-mutations", async (req, res) => {
   const scopedSheetPurge = requestedScope === "unprocessed_google_sheet";
   const productionScopedPurge = process.env.APP_ENV === "production" && scopedSheetPurge;
   const requestedCompanyId = scopedSheetPurge ? Number(req.body?.company_id) : null;
-  const requestedCreatedAfter = scopedSheetPurge
-    ? new Date(String(req.body?.created_after ?? ""))
-    : null;
 
   if (
     process.env.APP_ENV !== "development"
@@ -10306,13 +10322,11 @@ router.delete("/purge-mutations", async (req, res) => {
       requestedCompanyId == null
       || !Number.isSafeInteger(requestedCompanyId)
       || requestedCompanyId <= 0
-      || !requestedCreatedAfter
-      || Number.isNaN(requestedCreatedAfter.getTime())
       || String(req.body?.confirmation ?? "") !== "HAPUS MUTASI SYNC PROD"
     )
   ) {
     return res.status(400).json({
-      error: "Untuk purge scoped wajib memilih company, mengisi waktu mulai sync yang valid, dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
+      error: "Untuk purge scoped wajib memilih company dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
     });
   }
   if (process.env.APP_ENV === "production" && !scopedSheetPurge) {
@@ -10355,7 +10369,9 @@ router.delete("/purge-mutations", async (req, res) => {
           ${scopedSheetPurge ? sql`
             AND bm.source = 'google_sheet'
             AND bm.company_id = ${requestedCompanyId}
-            AND bm.created_at >= ${requestedCreatedAfter?.toISOString() ?? null}::timestamptz
+          ` : sql``}
+          ${scopedSheetPurge ? sql`
+            AND LOWER(COALESCE(bm.status::text, 'unmatched')) = 'unmatched'
           ` : sql``}
           AND bm.journal_entry_id IS NULL
           AND COALESCE(bm.accounting_posted, false) = false
