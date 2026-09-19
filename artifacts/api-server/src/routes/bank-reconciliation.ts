@@ -2309,6 +2309,14 @@ const mutationListColumns = `
     ) order by match.match_score desc nulls last, match.id), '[]'::json)
     from public.bank_reconciliation_matches match
     where match.mutation_id = bm.id
+      and match.candidate_source is not null
+      and (
+        (match.candidate_type = 'sport_payment' and match.candidate_source = 'sport_center.sport_payments')
+        or (match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments')
+        or (match.candidate_type = 'vendor_invoice' and match.candidate_source = 'public.vendor_invoices')
+        or (match.candidate_type = 'qris_settlement' and match.candidate_source = 'sport_center.payment_settlement_batches')
+        or (match.candidate_type = 'recon_rule' and match.candidate_source = 'public.recon_rules')
+      )
   ) as candidates,
   exists (
     select 1
