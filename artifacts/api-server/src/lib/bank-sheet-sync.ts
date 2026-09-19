@@ -630,7 +630,7 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
   return summaries;
-}import crypto from "node:crypto";
+}/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -1263,3 +1263,4 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   }
   return summaries;
 }
+*/
