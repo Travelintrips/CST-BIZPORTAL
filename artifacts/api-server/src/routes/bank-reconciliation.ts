@@ -1019,6 +1019,188 @@ router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promis
   }
 });
 
+router.post("/bank-reconciliation/:mutationId/unmatch", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) {
+    res.status(400).json({ error: "ID mutasi tidak valid", code: "INVALID_MUTATION_ID" });
+    return;
+  }
+
+  let actor: ApprovalActor | null;
+  try {
+    actor = await getApprovalActor(req);
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Failed to resolve unmatch actor");
+    res.status(503).json({ error: "Authorization service unavailable" });
+    return;
+  }
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const reason =
+    typeof req.body?.reason === "string"
+      ? req.body.reason.trim()
+      : typeof req.body?.note === "string"
+        ? req.body.note.trim()
+        : "";
+  const client = await pool.connect();
+
+  try {
+    await client.query("begin");
+    const locked = await client.query<{
+      id: number;
+      status: string;
+      journal_entry_id: number | null;
+      journal_status: string | null;
+    }>(
+      `select bm.id,
+              bm.status,
+              bm.journal_entry_id,
+              ae.status as journal_status
+         from public.bank_mutations bm
+         left join public.accounting_entries ae on ae.id = bm.journal_entry_id
+        where bm.id = $1
+        for update of bm`,
+      [mutationId],
+    );
+    const mutation = locked.rows[0];
+    if (!mutation) {
+      const error = new Error("Mutasi tidak ditemukan") as Error & { code?: string };
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+
+    const status = String(mutation.status ?? "").toLowerCase();
+    const resettableStatuses = new Set([
+      "unmatched",
+      "matched",
+      "manual_review",
+      "duplicate_need_review",
+    ]);
+    if (!resettableStatuses.has(status)) {
+      const message =
+        status === "posted"
+          ? "Mutasi sudah posted. Gunakan alur Unmatch & Reverse agar ledger tetap immutable."
+          : status === "approved_pending_posting" || status === "approved"
+            ? "Mutasi masih memiliki draft approval. Gunakan Batalkan Draft terlebih dahulu."
+            : `Mutasi berstatus '${mutation.status}' tidak dapat di-unmatch melalui alur ini.`;
+      const error = new Error(message) as Error & { code?: string };
+      error.code = "INVALID_STATUS";
+      throw error;
+    }
+
+    let removedDraftJournalId: number | null = null;
+    if (mutation.journal_entry_id !== null) {
+      const journalStatus = String(mutation.journal_status ?? "").toLowerCase();
+      if (journalStatus === "draft") {
+        const deleted = await client.query(
+          `delete from public.accounting_entries
+            where id = $1 and status = 'draft'`,
+          [mutation.journal_entry_id],
+        );
+        if (deleted.rowCount !== 1) {
+          const error = new Error(
+            `Draft journal #${mutation.journal_entry_id} tidak dapat dibatalkan karena status berubah bersamaan.`,
+          ) as Error & { code?: string };
+          error.code = "JOURNAL_CONCURRENT_CHANGE";
+          throw error;
+        }
+        removedDraftJournalId = mutation.journal_entry_id;
+      } else if (journalStatus === "posted") {
+        const error = new Error(
+          "Journal sudah posted. Gunakan Unmatch & Reverse agar ledger tetap immutable.",
+        ) as Error & { code?: string };
+        error.code = "JOURNAL_POSTED";
+        throw error;
+      } else if (!journalStatus) {
+        const error = new Error(
+          `Journal entry #${mutation.journal_entry_id} tidak ditemukan. Periksa data jurnal sebelum unmatch.`,
+        ) as Error & { code?: string };
+        error.code = "JOURNAL_MISSING";
+        throw error;
+      } else {
+        const error = new Error(
+          `Journal entry #${mutation.journal_entry_id} berstatus '${journalStatus}' dan tidak dapat di-unmatch melalui alur ini.`,
+        ) as Error & { code?: string };
+        error.code = "JOURNAL_LINKED";
+        throw error;
+      }
+    }
+
+    await client.query(
+      `delete from public.bank_reconciliation_matches
+        where mutation_id = $1 and status in ('candidate', 'rejected')`,
+      [mutationId],
+    );
+    const released = await client.query<{ id: number }>(
+      `update public.bank_reconciliation_matches
+          set status = 'superseded'
+        where mutation_id = $1 and status = 'approved'
+      returning id`,
+      [mutationId],
+    );
+    const releasedMatchIds = released.rows.map((row) => row.id);
+
+    await client.query(
+      `update public.bank_mutations
+          set status = 'unmatched',
+              journal_entry_id = null,
+              matched_payment_id = null,
+              matched_order_id = null,
+              linked_transaction_type = null,
+              linked_transaction_id = null,
+              reconciliation_status = 'unmatched',
+              approved_by = null,
+              approved_at = null,
+              updated_at = now()
+        where id = $1`,
+      [mutationId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit
+        (mutation_id, action, actor, meta)
+       values ($1, 'UNMATCHED', $2, $3::jsonb)`,
+      [
+        mutationId,
+        actor.email,
+        JSON.stringify({
+          reason: reason || null,
+          previous_status: mutation.status,
+          removed_draft_journal_id: removedDraftJournalId,
+          released_approved_match_ids: releasedMatchIds,
+        }),
+      ],
+    );
+
+    await client.query("commit");
+    res.json({ ok: true, released_match_ids: releasedMatchIds });
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch (rollbackError) {
+      req.log.warn({ rollbackError, mutationId }, "Unmatch rollback failed");
+    }
+
+    const code = (error as { code?: string }).code;
+    const statusCode =
+      code === "NOT_FOUND" ? 404 :
+      code === "INVALID_STATUS" ||
+      code === "JOURNAL_LINKED" ||
+      code === "JOURNAL_POSTED" ||
+      code === "JOURNAL_MISSING" ||
+      code === "JOURNAL_CONCURRENT_CHANGE" ? 409 :
+      503;
+    req.log.error({ error, mutationId }, "Bank reconciliation unmatch failed");
+    res.status(statusCode).json({
+      error: error instanceof Error ? error.message : "Unmatch mutasi gagal",
+    });
+  } finally {
+    client.release();
+  }
+});
+
 function parsePositiveInt(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;

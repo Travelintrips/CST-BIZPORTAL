@@ -287,6 +287,21 @@ describe("Google Sheet bank mutation sync", () => {
     ]));
   });
 
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
+      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["51001"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Beban Operasional"]] },
+      { range: "'Mutasi Bank'!I2", values: [["98"]] },
+      { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
+      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
+    ]));
+  });
+
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
