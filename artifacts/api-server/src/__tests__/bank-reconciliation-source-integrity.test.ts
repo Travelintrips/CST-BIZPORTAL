@@ -63,4 +63,13 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("brm.candidate_source = 'public.vendor_invoices'");
   });
 
+  it("matches vendor invoices by canonical allocation balance", () => {
+    expect(source).toContain("from public.payment_allocations pa");
+    expect(source).toContain("join public.payment_matching_groups pmg on pmg.id = pa.group_id");
+    expect(source).toContain("coalesce(pa.is_active, true) = true");
+    expect(source).toContain("lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')");
+    expect(source).toContain("greatest(vi.grand_total::numeric - coalesce(cip.canonical_paid, 0), 0)");
+    expect(source).not.toContain("vendor_invoices.amount_paid");
+  });
+
 });
