@@ -365,7 +365,12 @@ async function matchLocalMutation(
     [mutation.id],
   );
 
-  const candidates = await loadLocalMatchCandidates(client, mutation);
+  // A previous historical cleanup may have removed an old reconciliation
+  // journal while leaving audit rows behind. Audit history is evidence only;
+  // it must never be rehydrated as a live matching candidate.
+  const candidates = (await loadLocalMatchCandidates(client, mutation)).filter(
+    (candidate) => candidate.candidateType !== ("recon_rule" as LocalMatchCandidate["candidateType"]),
+  );
   const rules = await loadActiveRuleAi(client, mutation.company_id);
   const ruleResult = evaluateReconRules(rules,{description:mutation.description??'',reference:mutation.bank_reference??mutation.provider_order_id??null,amount:Number(mutation.amount),direction:String(mutation.direction).toUpperCase() as 'IN'|'OUT',bankAccountId:mutation.bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)?Number(mutation.bank_account_id):null,bank:mutation.provider_name??null,normalizedDescription:mutation.normalized_description??null,hasDocumentUpload:Boolean(mutation.uploaded_proof_url),companyId:mutation.company_id});
   if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
