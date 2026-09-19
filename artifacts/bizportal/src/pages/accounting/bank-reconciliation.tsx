@@ -9260,7 +9260,7 @@ export default function BankReconciliationPage() {
   // Void/Reverse → POST /:id/void-journal → status becomes void (creates reversal entry)
   const voidMut = useMutation({
     mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
-      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason || null }),
       });
@@ -9301,7 +9301,7 @@ export default function BankReconciliationPage() {
         return body;
       }
 
-      const voidResponse = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+      const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
