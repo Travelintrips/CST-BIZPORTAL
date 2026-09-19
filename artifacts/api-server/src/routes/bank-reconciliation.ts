@@ -2406,6 +2406,9 @@ async function ensureCanonicalQrisSettlement(
     id: number;
     status: string;
     effective_gross_amount: string | number | null;
+    base_debit_amount: string | number | null;
+    base_credit_amount: string | number | null;
+    correction_count: string | number | null;
   }>(
     `select j.payment_id,
             j.id,
@@ -2420,7 +2423,27 @@ async function ensureCanonicalQrisSettlement(
                  and correction.journal_type = 'payment_amount_correction'
                  and correction.status = 'posted'
                  and correction.reversal_of_id = j.id
-            ), 0) as effective_gross_amount
+            ), 0) as effective_gross_amount,
+            coalesce((
+              select sum(line.amount)
+                from sport_center.accounting_journal_lines line
+               where line.journal_id = j.id
+                 and lower(line.line_type) = 'debit'
+            ), 0) as base_debit_amount,
+            coalesce((
+              select sum(line.amount)
+                from sport_center.accounting_journal_lines line
+               where line.journal_id = j.id
+                 and lower(line.line_type) = 'credit'
+            ), 0) as base_credit_amount,
+            (
+              select count(*)
+                from sport_center.accounting_journals correction
+               where correction.payment_id = j.payment_id
+                 and correction.journal_type = 'payment_amount_correction'
+                 and correction.status = 'posted'
+                 and correction.reversal_of_id = j.id
+            ) as correction_count
        from sport_center.accounting_journals j
       where j.payment_id = any($1::int[])
         and j.journal_type = 'payment_confirmed'
@@ -2433,6 +2456,9 @@ async function ensureCanonicalQrisSettlement(
     id: number;
     status: string;
     effective_gross_amount: string | number | null;
+    base_debit_amount: string | number | null;
+    base_credit_amount: string | number | null;
+    correction_count: string | number | null;
   }>();
   for (const journal of journalResult.rows) {
     if (journalByPayment.has(journal.payment_id)) {
@@ -2456,17 +2482,49 @@ async function ensureCanonicalQrisSettlement(
     );
   }
   for (const payment of payments) {
-    const journalGross = Number(journalByPayment.get(payment.id)?.effective_gross_amount);
+    const journal = journalByPayment.get(payment.id);
+    const journalGross = Number(journal?.effective_gross_amount);
     const paymentGross = Number(payment.amount);
+    const baseDebit = Number(journal?.base_debit_amount);
+    const baseCredit = Number(journal?.base_credit_amount);
+    const correctionCount = Number(journal?.correction_count ?? 0);
+    const postedLinesProveGross =
+      correctionCount === 0
+      && Number.isFinite(baseDebit)
+      && Number.isFinite(baseCredit)
+      && Math.abs(baseDebit - baseCredit) <= 0.01
+      && Math.abs(baseDebit - paymentGross) <= 0.01;
+
     if (
       !Number.isFinite(journalGross)
       || !Number.isFinite(paymentGross)
-      || Math.abs(journalGross - paymentGross) > 0.01
+      || (Math.abs(journalGross - paymentGross) > 0.01 && !postedLinesProveGross)
     ) {
       throw new ApprovalError(
         `Gross payment ${payment.id} berbeda dengan gross jurnal payment.`,
         409,
         "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
+      );
+    }
+
+    if (Math.abs(journalGross - paymentGross) > 0.01 && postedLinesProveGross) {
+      await client.query(
+        `insert into public.bank_reconciliation_audit
+          (mutation_id, action, actor, meta)
+         values ($1, 'QRIS_JOURNAL_HEADER_DRIFT_ACCEPTED', $2, $3::jsonb)`,
+        [
+          mutationId,
+          actor.email,
+          JSON.stringify({
+            payment_id: payment.id,
+            journal_id: journal?.id ?? null,
+            payment_gross: paymentGross,
+            stored_journal_gross: journalGross,
+            posted_debit_lines: baseDebit,
+            posted_credit_lines: baseCredit,
+            reason: "Posted journal lines are balanced and equal the canonical payment gross.",
+          }),
+        ],
       );
     }
   }
