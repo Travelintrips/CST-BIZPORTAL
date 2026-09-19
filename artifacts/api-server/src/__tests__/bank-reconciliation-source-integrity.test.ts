@@ -48,6 +48,13 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(candidateUpdate).toBeGreaterThan(approval);
   });
 
+  it("rejects legacy source-less matches and accounting_payment candidates", () => {
+    expect(source).toContain("Kandidat lama tanpa candidate_source canonical tidak dapat di-approve");
+    expect(source).not.toContain('candidateType === "accounting_payment"');
+    expect(source).not.toContain('selectedCandidateType === "accounting_payment"');
+    expect(source).not.toContain('selectedCandidateSource = match.candidate_source ?? requestedSource');
+  });
+
   it("supersedes competing non-final candidates before approving the selected match", () => {
     expect(source).toContain("set status = 'superseded'");
     expect(source).toContain("and id <> $2");
