@@ -761,6 +761,74 @@ router.get("/accounting/reports/cash-flow", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/accounting/entries/:id", async (req, res): Promise<void> => {
+  try {
+    const entryId = Number(req.params.id);
+    if (!Number.isInteger(entryId) || entryId <= 0) {
+      res.status(400).json({ error: "ID jurnal tidak valid" });
+      return;
+    }
+
+    const companyId = requestedCompanyId(req);
+    const entry = await pool.query<{
+      id: number;
+      status: string;
+      ref: string | null;
+      total_debit: string;
+      total_credit: string;
+    }>(
+      `select id, status::text status, ref, total_debit::text total_debit, total_credit::text total_credit
+         from public.accounting_entries
+        where id = $1
+          and ($2::int is null or company_id = $2)`,
+      [entryId, companyId],
+    );
+
+    const header = entry.rows[0];
+    if (!header) {
+      res.status(404).json({ error: "Jurnal tidak ditemukan" });
+      return;
+    }
+
+    const lines = await pool.query<{
+      id: number;
+      account_id: number;
+      account_code: string | null;
+      account_name: string | null;
+      debit: string;
+      credit: string;
+      description: string | null;
+    }>(
+      `select l.id, l.account_id, a.code account_code, a.name account_name,
+              l.debit::text debit, l.credit::text credit, l.description
+         from public.accounting_entry_lines l
+         left join public.chart_of_accounts a on a.id = l.account_id
+        where l.entry_id = $1
+        order by l.id`,
+      [entryId],
+    );
+
+    res.json({
+      id: header.id,
+      status: header.status,
+      ref: header.ref,
+      totalDebit: numberValue(header.total_debit),
+      totalCredit: numberValue(header.total_credit),
+      lines: lines.rows.map((line) => ({
+        id: line.id,
+        accountId: line.account_id,
+        accountCode: line.account_code,
+        accountName: line.account_name,
+        debit: line.debit,
+        credit: line.credit,
+        description: line.description,
+      })),
+    });
+  } catch (error) {
+    reportError(req, res, error);
+  }
+});
+
 router.get("/accounting/entries", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];

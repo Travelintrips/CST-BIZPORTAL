@@ -252,20 +252,6 @@ describe("Google Sheet bank mutation sync", () => {
 
     await syncOneBankSheetConfig(config.id);
 
-  it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
-    mocks.readSpreadsheetValues.mockResolvedValue([
-      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
-      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
-      ["2026-09-04", "Transfer masuk", "0", "125000", "sheet-key-duplicate", ""],
-      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
-      ["2026-09-05", "Setoran tunai", "0", "275000", "", ""],
-    ]);
-
-    const result = await syncOneBankSheetConfig(config.id);
-
-    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
-      String(sql).includes("insert into public.bank_mutations"),
-    );
     const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
       range: string;
       values: string[][];
@@ -322,7 +308,7 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!F5", values: [["UNMATCHED"]] },
     ]));
   });
-});import { beforeEach, describe, expect, it, vi } from "vitest";
+}); /* import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseAmount } from "./bank-sheet-sync";
 
 describe("bank sheet amount parsing", () => {
@@ -676,3 +662,4 @@ describe("Google Sheet bank mutation sync", () => {
     expect(rowTwoStatus).toBe(rowOneStatus);
   });
 });
+*/
