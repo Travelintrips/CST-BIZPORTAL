@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseAmount } from "./bank-sheet-sync";
 
 describe("bank sheet amount parsing", () => {
@@ -16,7 +16,8 @@ describe("bank sheet amount parsing", () => {
   it("handles currency labels and blank values", () => {
     expect(parseAmount("Rp 1.234.567")).toBe(1234567);
     expect(parseAmount("")).toBe(0);
-import { beforeEach, describe, expect, it, vi } from "vitest";
+  });
+});
 
 const mocks = vi.hoisted(() => {
   const poolQuery = vi.fn();
@@ -252,6 +253,21 @@ describe("Google Sheet bank mutation sync", () => {
 
     await syncOneBankSheetConfig(config.id);
 
+    const reconciledUpdates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(reconciledUpdates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
+      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["51001"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Beban Operasional"]] },
+      { range: "'Mutasi Bank'!I2", values: [["98"]] },
+      { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
+      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
+    ]));
+  });
+
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
@@ -270,14 +286,6 @@ describe("Google Sheet bank mutation sync", () => {
       range: string;
       values: string[][];
     }>;
-    expect(updates).toEqual(expect.arrayContaining([
-      { range: "'Mutasi Bank'!E2", values: [["reconciled-key"]] },
-      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
-      { range: "'Mutasi Bank'!G2", values: [["51001"]] },
-      { range: "'Mutasi Bank'!H2", values: [["Beban Operasional"]] },
-      { range: "'Mutasi Bank'!I2", values: [["98"]] },
-      { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
-      { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
     const generatedCanonicalKey = updates.find(
       (update) => update.range === "'Mutasi Bank'!E4",
     )?.values[0]?.[0];

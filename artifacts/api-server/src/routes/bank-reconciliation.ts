@@ -60,6 +60,31 @@ interface ApprovalActor {
   companyId: number | null;
 }
 
+type MatchingMode = "new" | "retry_unmatched" | "rematch_non_final";
+
+interface MatchingMutation {
+  id: number;
+  amount: string;
+  direction: string;
+  transaction_date: string;
+  description: string;
+  normalized_description: string | null;
+  provider_order_id: string | null;
+  company_id: number | null;
+  status: string;
+}
+
+interface LocalMatchCandidate {
+  candidateType: "sport_payment" | "vendor_invoice";
+  candidateId: number;
+  score: number;
+  amountMatch: boolean;
+  dateMatch: boolean;
+  referenceMatch: boolean;
+  nameMatch: boolean;
+  reason: string;
+}
+
 class ApprovalError extends Error {
   constructor(
     message: string,
@@ -98,6 +123,406 @@ async function getApprovalActor(request: Request): Promise<ApprovalActor | null>
   if (!user || !allowedRoles.has(user.role.toLowerCase())) return null;
   return { email: user.email, companyId: user.companyId };
 }
+
+function normalizeMatchText(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function matchingTokens(value: unknown): Set<string> {
+  return new Set(
+    normalizeMatchText(value)
+      .split(/\s+/)
+      .filter((token) => token.length >= 4),
+  );
+}
+
+function tokenOverlap(left: unknown, right: unknown): boolean {
+  const leftTokens = matchingTokens(left);
+  if (leftTokens.size === 0) return false;
+  for (const token of matchingTokens(right)) {
+    if (leftTokens.has(token)) return true;
+  }
+  return false;
+}
+
+async function loadLocalMatchCandidates(
+  client: ApprovalClient,
+  mutation: MatchingMutation,
+): Promise<LocalMatchCandidate[]> {
+  if (mutation.company_id == null) return [];
+
+  const amount = Number(mutation.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return [];
+  const date = String(mutation.transaction_date).slice(0, 10);
+  const direction = String(mutation.direction ?? "").toUpperCase();
+  const candidates: LocalMatchCandidate[] = [];
+
+  if (direction === "IN") {
+    try {
+      const sportPayments = await client.query<{
+        id: number;
+        amount: string;
+        paid_date: string | null;
+        payment_reference: string | null;
+        description: string | null;
+      }>(
+        `select sp.id,
+                sp.amount,
+                coalesce(sp.paid_at, sp.created_at)::date::text as paid_date,
+                coalesce(sp.provider_order_id, sp.provider_id::text) as payment_reference,
+                concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description
+           from sport_center.sport_payments sp
+          where sp.company_id = $1
+            and lower(coalesce(sp.status::text, '')) in
+                ('confirmed', 'paid', 'completed', 'success', 'settled')
+            and abs(sp.amount::numeric - $2::numeric) < 0.01
+            and (
+              coalesce(sp.paid_at, sp.created_at)::date = $3::date
+              or coalesce(sp.settlement_date, (coalesce(sp.paid_at, sp.created_at)::date + 1)) = $3::date
+            )
+            and not exists (
+              select 1
+                from public.bank_reconciliation_matches brm
+               where brm.candidate_type = 'sport_payment'
+                 and brm.candidate_id = sp.id
+                 and brm.status in ('approved', 'posted')
+            )
+          order by sp.id`,
+        [mutation.company_id, amount, date],
+      );
+
+      for (const payment of sportPayments.rows) {
+        const referenceMatch =
+          Boolean(mutation.provider_order_id) &&
+          normalizeMatchText(mutation.provider_order_id) === normalizeMatchText(payment.payment_reference);
+        const nameMatch = tokenOverlap(mutation.description, payment.description);
+        const dateMatch = payment.paid_date === date;
+        const score = 60 + (dateMatch ? 25 : 0) + (referenceMatch ? 15 : nameMatch ? 8 : 0);
+        candidates.push({
+          candidateType: "sport_payment",
+          candidateId: payment.id,
+          score,
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: referenceMatch
+            ? "Nominal, tanggal, dan referensi payment cocok."
+            : dateMatch
+              ? "Nominal dan tanggal payment cocok."
+              : "Nominal dan tanggal settlement cocok.",
+        });
+      }
+    } catch (error) {
+      // Sport Center is an optional source on installations that only use
+      // bank imports and vendor invoices. Keep matching usable when that
+      // optional schema is not installed.
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+  } else if (direction === "OUT") {
+    try {
+      const invoices = await client.query<{
+        id: number;
+        invoice_number: string;
+        vendor_invoice_ref: string | null;
+        supplier_name: string;
+        grand_total: string;
+        due_date: string | null;
+      }>(
+        `select vi.id,
+                vi.invoice_number,
+                vi.vendor_invoice_ref,
+                vi.supplier_name,
+                vi.grand_total,
+                vi.due_date
+           from public.vendor_invoices vi
+          where vi.company_id = $1
+            and vi.status::text = 'posted'
+            and abs(vi.grand_total::numeric - $2::numeric) < 0.01
+            and not exists (
+              select 1
+                from public.bank_reconciliation_matches brm
+               where brm.candidate_type = 'vendor_invoice'
+                 and brm.candidate_id = vi.id
+                 and brm.status in ('approved', 'posted')
+            )
+          order by vi.due_date nulls last, vi.id
+          limit 50`,
+        [mutation.company_id, amount],
+      );
+
+      for (const invoice of invoices.rows) {
+        const referenceMatch = tokenOverlap(
+          mutation.provider_order_id,
+          `${invoice.invoice_number} ${invoice.vendor_invoice_ref ?? ""}`,
+        );
+        const nameMatch = tokenOverlap(mutation.description, invoice.supplier_name);
+        const dateMatch = invoice.due_date === date;
+        const score = 60 + (referenceMatch ? 25 : 0) + (nameMatch ? 15 : 0);
+        candidates.push({
+          candidateType: "vendor_invoice",
+          candidateId: invoice.id,
+          score,
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: referenceMatch || nameMatch
+            ? "Nominal dan identitas invoice/supplier cocok."
+            : "Nominal invoice cocok; konfirmasi supplier sebelum approve.",
+        });
+      }
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+  }
+
+  return candidates.sort((left, right) => right.score - left.score || left.candidateId - right.candidateId);
+}
+
+async function matchLocalMutation(
+  client: ApprovalClient,
+  mutation: MatchingMutation,
+  actor: string,
+): Promise<"matched" | "manual_review" | "unmatched"> {
+  if (mutation.company_id == null) return "unmatched";
+
+  await client.query(
+    `delete from public.bank_reconciliation_matches
+      where mutation_id = $1
+        and status not in ('approved', 'posted')`,
+    [mutation.id],
+  );
+
+  const candidates = await loadLocalMatchCandidates(client, mutation);
+  const best = candidates[0];
+  const isDuplicate = candidates.length > 1 && candidates[1]!.score >= best!.score - 5;
+  const nextStatus = !best
+    ? "unmatched"
+    : isDuplicate
+      ? "duplicate_need_review"
+      : best.score >= 80
+        ? "matched"
+        : "manual_review";
+
+  if (best) {
+    await client.query(
+      `insert into public.bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match, status)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, 'candidate')`,
+      [
+        mutation.id,
+        best.candidateType,
+        best.candidateId,
+        Math.round(best.score),
+        isDuplicate ? "Lebih dari satu kandidat memiliki kecocokan serupa." : best.reason,
+        best.amountMatch,
+        best.dateMatch,
+        best.nameMatch,
+        best.referenceMatch,
+      ],
+    );
+  }
+
+  await client.query(
+    `update public.bank_mutations
+        set status = $1,
+            reconciliation_status = $2,
+            review_reason = $3,
+            review_code = $4,
+            updated_at = now()
+      where id = $5
+        and status not in ('approved_pending_posting', 'approved', 'posted', 'void')`,
+    [
+      nextStatus,
+      nextStatus === "matched" ? "matched" : nextStatus,
+      best ? (isDuplicate ? "Kandidat ganda perlu diperiksa." : best.reason) : null,
+      best ? (isDuplicate ? "DUPLICATE_CANDIDATE" : "LOCAL_MATCHING") : null,
+      mutation.id,
+    ],
+  );
+
+  await client.query(
+    `insert into public.bank_reconciliation_audit
+      (mutation_id, action, actor, meta)
+     values ($1, 'MATCH_CREATED', $2, $3::jsonb)`,
+    [
+      mutation.id,
+      actor,
+      JSON.stringify({
+        engine: "bizportal-local-matching",
+        candidate_count: candidates.length,
+        candidate_type: best?.candidateType ?? null,
+        candidate_id: best?.candidateId ?? null,
+        score: best?.score ?? null,
+        status: nextStatus,
+      }),
+    ],
+  );
+
+  return nextStatus === "duplicate_need_review" ? "manual_review" : nextStatus;
+}
+
+router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  // The local matcher runs synchronously and returns its aggregate result in
+  // the POST response. Keep the status contract for the existing UI polling
+  // path so a synchronous run never gets stuck in "running".
+  res.json({
+    ok: true,
+    running: false,
+    status: "idle",
+    total: 0,
+    processed: 0,
+    failed: 0,
+    summary: {},
+    error: null,
+  });
+});
+
+router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    ids?: unknown;
+    matching_mode?: unknown;
+    legacy_reference_coa_retry?: unknown;
+  };
+  const matchingMode = (body.matching_mode ?? "new") as MatchingMode;
+  if (!["new", "retry_unmatched", "rematch_non_final"].includes(matchingMode)) {
+    res.status(400).json({
+      error: "Mode matching tidak valid. Gunakan new, retry_unmatched, atau rematch_non_final.",
+    });
+    return;
+  }
+
+  const requestedIds = Array.isArray(body.ids)
+    ? body.ids.map((id) => safeInteger(id))
+    : [];
+  if (Array.isArray(body.ids) && requestedIds.some((id) => id == null)) {
+    res.status(400).json({ error: "Daftar ID mutasi tidak valid." });
+    return;
+  }
+  const ids = requestedIds.filter((id): id is number => id != null);
+  if (body.legacy_reference_coa_retry === true && ids.length === 0) {
+    res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
+    return;
+  }
+
+  const values: unknown[] = [];
+  const filters: string[] = [];
+  const addValue = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+
+  if (ids.length > 0) {
+    filters.push(`bm.id = any(${addValue(ids)}::bigint[])`);
+  }
+  if (actor.companyId != null) {
+    filters.push(`bm.company_id = ${addValue(actor.companyId)}`);
+  }
+
+  if (matchingMode === "new") {
+    filters.push(`
+      bm.status in ('unmatched', 'matched', 'duplicate_need_review')
+      and not exists (
+        select 1 from public.bank_reconciliation_audit audit
+         where audit.mutation_id = bm.id
+           and audit.action = 'MATCH_CREATED'
+      )`);
+  } else if (matchingMode === "retry_unmatched") {
+    filters.push(`
+      bm.status = 'unmatched'
+      and exists (
+        select 1 from public.bank_reconciliation_audit audit
+         where audit.mutation_id = bm.id
+           and audit.action = 'MATCH_CREATED'
+      )`);
+  } else {
+    filters.push("bm.status in ('unmatched', 'matched', 'manual_review', 'duplicate_need_review')");
+  }
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query<MatchingMutation>(
+      `select bm.id, bm.amount, bm.direction, bm.transaction_date,
+              bm.description, bm.normalized_description, bm.provider_order_id,
+              bm.company_id, bm.status
+         from public.bank_mutations bm
+        where ${filters.join(" and ")}
+        order by bm.transaction_date desc, bm.id
+        limit 500`,
+      values as any[],
+    );
+
+    let processed = 0;
+    let autoMatched = 0;
+    let manualReview = 0;
+    let unmatched = 0;
+    let failed = 0;
+
+    for (const mutation of result.rows) {
+      try {
+        await client.query("begin");
+        const outcome = await matchLocalMutation(client, mutation, actor.email);
+        await client.query("commit");
+        processed++;
+        if (outcome === "matched") autoMatched++;
+        else if (outcome === "manual_review") manualReview++;
+        else unmatched++;
+      } catch (error) {
+        failed++;
+        try {
+          await client.query("rollback");
+        } catch (rollbackError) {
+          req.log.warn({ rollbackError, mutationId: mutation.id }, "Matching rollback failed");
+        }
+        req.log.warn({ error, mutationId: mutation.id }, "Local bank matching failed for mutation");
+      }
+    }
+
+    res.json({
+      ok: true,
+      queued: false,
+      processed,
+      failed,
+      auto_matched: autoMatched,
+      manual_review: manualReview,
+      unmatched,
+      rule_matched: 0,
+      ecf_matched: 0,
+    });
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "42P01" || code === "42703") {
+      res.status(503).json({
+        error: "Schema bank reconciliation atau sumber matching belum tersedia.",
+        code: "BANK_RECONCILIATION_SCHEMA_UNAVAILABLE",
+      });
+      return;
+    }
+    req.log.error({ error }, "Local bank matching failed");
+    res.status(503).json({ error: "AI Matching lokal gagal dijalankan." });
+  } finally {
+    client.release();
+  }
+});
 
 async function resolveApprovalContraAccount(
   client: ApprovalClient,

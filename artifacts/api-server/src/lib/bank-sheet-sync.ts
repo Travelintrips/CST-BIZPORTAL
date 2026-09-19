@@ -78,14 +78,12 @@ function canonicalKey(
   return crypto.createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
-export function parseAmount(value: string): number {
-  const cleaned = String(value ?? "").replace(/\s/g, "").replace(/[^0-9.,-]/g, "");
 function normalizeMutationKey(value: string): string | null {
   const normalized = value.trim();
   return normalized ? normalized : null;
 }
 
-function parseAmount(value: string): number {
+export function parseAmount(value: string): number {
   const cleaned = String(value ?? "").replace(/[^0-9.,-]/g, "").trim();
   if (!cleaned) return 0;
 
