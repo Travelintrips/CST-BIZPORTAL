@@ -2036,7 +2036,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
           and lower(coalesce(sp.status::text, '')) = 'confirmed'
           and coalesce(sp.settlement_status::text, 'unsettled') = 'unsettled'
           and (
-            sp.expected_settlement_date = $2::date
+            nullif(btrim(sp.expected_settlement_date::text), '')::date = $2::date
             or (
               sp.expected_settlement_date is null
               and (sp.paid_at at time zone 'Asia/Jakarta')::date = $2::date - 1
