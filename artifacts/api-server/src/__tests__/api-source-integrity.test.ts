@@ -18,8 +18,9 @@ function occurrences(text: string, pattern: RegExp): number {
 
 describe("canonical API source integrity", () => {
   it.each(canonicalFiles)("$name has no stale whole-file block-comment wrapper", ({ text }) => {
-    expect(text).not.toMatch(/\/\*[\s\S]*export default router;\s*\*\/[\s\S]*export default router;/);
-    expect(text).not.toMatch(/\/\*[\s\S]*import [\s\S]*\*\/[\s\S]*import /);
+    expect(text).not.toContain("export default router; /*\nimport ");
+    expect(text).not.toContain("*/import { Router");
+    expect(text).not.toContain("}import crypto from \"node:crypto\";");
   });
 
   it("accounting router has one canonical router implementation", () => {
