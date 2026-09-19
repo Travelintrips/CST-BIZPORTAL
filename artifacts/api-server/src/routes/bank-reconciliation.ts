@@ -119,6 +119,30 @@ function textValue(value: unknown): string | null {
   return text ? text : null;
 }
 
+function calendarDateValue(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    const isoDate = text.match(/^(\d{4}-\d{2}-\d{2})(?:T|\s|$)/);
+    if (isoDate) return isoDate[1];
+  }
+
+  const parsed = value instanceof Date
+    ? value
+    : new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  const date = `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
 function safeInteger(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -194,7 +218,8 @@ async function loadLocalMatchCandidates(
 
   const amount = Number(mutation.amount);
   if (!Number.isFinite(amount) || amount <= 0) return [];
-  const date = String(mutation.transaction_date).slice(0, 10);
+  const date = calendarDateValue(mutation.transaction_date);
+  if (!date) return [];
   const direction = String(mutation.direction ?? "").toUpperCase();
   const candidates: LocalMatchCandidate[] = [];
 
@@ -1193,7 +1218,14 @@ async function approveBankMutation(
     entryId = existingEntry.rows[0].id;
     entryNumber = existingEntry.rows[0].entry_number;
   } else {
-    const txDate = String(mutation.transaction_date).split("T")[0];
+    const txDate = calendarDateValue(mutation.transaction_date);
+    if (!txDate) {
+      throw new ApprovalError(
+        "Tanggal transaksi mutasi tidak valid; approval diblokir.",
+        422,
+        "INVALID_TRANSACTION_DATE",
+      );
+    }
     const year = Number(txDate.slice(0, 4)) || new Date().getUTCFullYear();
     entryNumber = await nextApprovalEntryNumber(client, companyId, year);
     const reference = mutation.mutation_key ?? mutation.bank_reference ?? mutation.canonical_key ?? String(mutationId);
@@ -2488,6 +2520,14 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
 
     const generated: Record<string, unknown>[] = [];
     for (const mutation of mutationResult.rows) {
+      const mutationDate = calendarDateValue(mutation.transaction_date);
+      if (!mutationDate) {
+        throw new ApprovalError(
+          `Tanggal transaksi mutasi #${mutation.id} tidak valid.`,
+          422,
+          "INVALID_TRANSACTION_DATE",
+        );
+      }
       const paymentResult = await client.query(
         `select
            sp.id,
@@ -2534,7 +2574,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
             )
           )
         order by sp.id`,
-        [mutation.company_id, mutation.transaction_date],
+        [mutation.company_id, mutationDate],
       );
       const payments = paymentResult.rows;
       const grossAmount = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -2554,7 +2594,7 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
         providerName: payment.provider_name,
         paymentNumber: payment.payment_number,
         paidAt: payment.paid_at,
-        expectedSettlementDate: payment.expected_settlement_date ?? mutation.transaction_date,
+        expectedSettlementDate: payment.expected_settlement_date ?? mutationDate,
         settlementRuleVersion: payment.settlement_rule_version,
       }));
       const reviewReason = payments.length === 0
@@ -2582,8 +2622,8 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
         mutation.id,
         mutation.company_id,
         mutation.bank_account_id,
-        mutation.transaction_date,
-        mutation.transaction_date,
+        mutationDate,
+        mutationDate,
         "unknown",
         "payment_source",
         "payment-method-h-minus-one-v1",
