@@ -1301,7 +1301,7 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
   }
 });
 
-export default router;/* import { Router, type IRouter, type Request } from "express";
+/* import { Router, type IRouter, type Request } from "express";
 export default router;
 /* The duplicate router block below was left by an incomplete merge. Keep it
  * out of the module until it can be reconciled with the canonical router. */
@@ -2612,4 +2612,3 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
 
 export default router; */
 export default router;
-*/
