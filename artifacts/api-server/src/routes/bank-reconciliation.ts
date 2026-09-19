@@ -254,7 +254,7 @@ async function loadLocalMatchCandidates(
                 or (
                   lower(coalesce(to_jsonb(sp)->>'payment_method', to_jsonb(sp)->>'method', sp.payment_type::text, '')) like '%qris%'
                   and coalesce(
-                    sp.settlement_date,
+                    nullif(to_jsonb(sp)->>'expected_settlement_date','')::date,
                     ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
                   ) = $3::date
                 )
@@ -279,7 +279,7 @@ async function loadLocalMatchCandidates(
              ) as description,
              bool_or(sp.normalized_method like '%qris%') as is_qris,
              min(coalesce(
-               sp.settlement_date,
+               nullif(to_jsonb(sp)->>'expected_settlement_date','')::date,
                ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
              )) as settlement_date
            from eligible sp
@@ -295,7 +295,7 @@ async function loadLocalMatchCandidates(
              concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description,
              (sp.normalized_method like '%qris%') as is_qris,
              coalesce(
-               sp.settlement_date,
+               nullif(to_jsonb(sp)->>'expected_settlement_date','')::date,
                ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
              ) as settlement_date
            from eligible sp
