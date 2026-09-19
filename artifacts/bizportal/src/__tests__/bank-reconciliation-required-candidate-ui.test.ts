@@ -14,13 +14,10 @@ type CandidateFixture = {
 };
 
 const realTransactionCandidateTypes = new Set([
-  "logistic_order",
-  "invoice",
-  "expense",
   "sport_payment",
   "qris_settlement",
   "tenant_invoice",
-  "internal_transfer",
+  "vendor_invoice",
 ]);
 
 function isRealTransactionCandidate(candidate: CandidateFixture): boolean {
@@ -71,4 +68,16 @@ describe("Rule AI required-candidate approval UI", () => {
       "Approve baru tersedia setelah ditemukan",
     );
   });
+  it("does not offer approval for unsupported legacy transaction candidates", () => {
+    const candidates = [
+      { candidate_type: "logistic_order" },
+      { candidate_type: "invoice" },
+      { candidate_type: "expense" },
+      { candidate_type: "accounting_payment" },
+      { candidate_type: "internal_transfer" },
+    ];
+    expect(displayableCandidates(candidates)).toEqual([]);
+    expect(componentSource).not.toContain('"logistic_order",\n  "invoice",\n  "expense",');
+  });
+
 });
