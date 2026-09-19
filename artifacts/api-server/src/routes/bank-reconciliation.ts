@@ -995,7 +995,12 @@ async function assertApprovalCandidateExists(
       throw new ApprovalError("Sumber kandidat Sport Center tidak valid.", 409, "STALE_CANDIDATE");
     }
     result = await client.query(
-      `select id from sport_center.sport_payments where id = $1 and company_id = $2 limit 1 for update`,
+      `select id
+         from sport_center.sport_payments
+        where id = $1
+          and coalesce(company_id, 1) = $2
+        limit 1
+        for update`,
       [candidateId, companyId],
     );
   } else if (candidateType === "vendor_invoice") {

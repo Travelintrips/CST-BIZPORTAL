@@ -31,6 +31,11 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(journalLookup).toBeGreaterThan(validation);
   });
 
+  it("uses the same legacy company scope for Sport Center matching and approval", () => {
+    expect(source).toContain("where coalesce(sp.company_id, 1) = $1");
+    expect(source).toContain("and coalesce(company_id, 1) = $2");
+  });
+
   it("uses canonical QRIS settlements only", () => {
     expect(source).toContain("sport_center.payment_settlement_batches");
     expect(source).toContain("sport_center.payment_settlement_items");
