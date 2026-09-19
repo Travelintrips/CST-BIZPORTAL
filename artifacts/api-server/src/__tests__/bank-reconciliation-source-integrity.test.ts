@@ -43,4 +43,16 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("and id <> $2");
     expect(source).toContain("and status not in ('approved', 'posted')");
   });
+  it("approves canonical QRIS settlement as link-only without generic journal creation", () => {
+    expect(source).toContain("async function approveCanonicalSettlementLink");
+    expect(source).toContain("CANONICAL_SETTLEMENT_LINK_APPROVED");
+    expect(source).toContain("status='reconciled',bank_mutation_id=$2,reconciled_at=now(),reconciled_by=$3");
+    expect(source).toContain("set status='approved',reconciliation_status='approved',journal_entry_id=null");
+    const branch = source.indexOf('selectedCandidateType === "qris_settlement"');
+    const bankResolution = source.indexOf("const bankCoaId = await resolveApprovalBankAccount", branch);
+    expect(branch).toBeGreaterThan(-1);
+    expect(bankResolution).toBeGreaterThan(branch);
+    expect(source.slice(branch, bankResolution)).toContain("return approveCanonicalSettlementLink(");
+  });
+
 });
