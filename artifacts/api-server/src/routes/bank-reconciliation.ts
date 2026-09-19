@@ -1897,30 +1897,54 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
            sp.amount,
            sp.status,
            sp.paid_at,
-           sp.payment_number,
-           sp.method,
+           'SCPAY-SC-' || sp.id::text as payment_number,
+           sp.payment_method as method,
+           coalesce(nullif(sp.payment_provider, ''), nullif(sp.provider_name, '')) as provider_name,
            coalesce(
-             nullif(to_jsonb(sp)->>'provider_name', ''),
-             nullif(to_jsonb(sp)->>'provider', '')
-           ) as provider_name,
-           case
-             when coalesce(to_jsonb(sp)->>'mdr_amount', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-               then (to_jsonb(sp)->>'mdr_amount')::numeric
-             else 0
-           end as mdr_amount
-         from public.sport_payments sp
-        where sp.company_id = $1
-          and lower(coalesce(sp.method, '')) like '%qris%'
-          and lower(coalesce(sp.status, '')) = 'confirmed'
-          and sp.paid_at::date = $2::date - 1
+             nullif(sp.mdr_amount, 0),
+             round(sp.amount * coalesce(cfg.mdr_rate, 0), coalesce(cfg.rounding_scale, 2))
+           ) as mdr_amount,
+           sp.expected_settlement_date,
+           sp.settlement_rule_version,
+           sp.bank_account_id as payment_bank_account_id
+         from sport_center.sport_payments sp
+         left join lateral (
+           select psc.mdr_rate, psc.rounding_scale
+             from sport_center.payment_settlement_configs psc
+            where psc.company_id = coalesce(sp.company_id, $1)
+              and psc.is_active = true
+              and psc.source = 'OWNER_APPROVED'
+              and lower(btrim(psc.provider_code)) =
+                  lower(btrim(coalesce(sp.payment_provider, sp.provider_name, '')))
+              and (
+                btrim(psc.bank_account_id::text) = btrim(coalesce(sp.bank_account_id::text, ''))
+                or sp.bank_account_id is null
+              )
+              and psc.effective_from <= $2::date
+              and (psc.effective_until is null or $2::date < psc.effective_until)
+            order by psc.id desc
+            limit 1
+         ) cfg on true
+        where coalesce(sp.company_id, $1) = $1
+          and lower(coalesce(sp.payment_method, '')) like '%qris%'
+          and lower(coalesce(sp.status::text, '')) = 'confirmed'
+          and coalesce(sp.settlement_status::text, 'unsettled') = 'unsettled'
+          and (
+            sp.expected_settlement_date = $2::date
+            or (
+              sp.expected_settlement_date is null
+              and (sp.paid_at at time zone 'Asia/Jakarta')::date = $2::date - 1
+            )
+          )
         order by sp.id`,
         [mutation.company_id, mutation.transaction_date],
       );
       const payments = paymentResult.rows;
       const grossAmount = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
       const mdrAmount = payments.reduce((sum, payment) => sum + Number(payment.mdr_amount || 0), 0);
+      const expectedNetAmount = grossAmount - mdrAmount;
       const netAmount = Number(mutation.amount);
-      const difference = Math.abs(grossAmount - mdrAmount - netAmount);
+      const difference = Math.abs(expectedNetAmount - netAmount);
       const status = payments.length === 0
         ? "UNMATCHED"
         : difference <= 0.5 ? "MATCHED" : "REVIEW";
@@ -1933,13 +1957,14 @@ router.post("/bank-reconciliation/qris-candidates/generate", async (req, res): P
         providerName: payment.provider_name,
         paymentNumber: payment.payment_number,
         paidAt: payment.paid_at,
-        expectedSettlementDate: mutation.transaction_date,
+        expectedSettlementDate: payment.expected_settlement_date ?? mutation.transaction_date,
+        settlementRuleVersion: payment.settlement_rule_version,
       }));
       const reviewReason = payments.length === 0
-        ? "Belum ditemukan payment QRIS confirmed dengan paid_at H-1."
+        ? "Belum ditemukan payment QRIS confirmed/unsettled untuk expected settlement date mutasi."
         : status === "MATCHED"
-          ? "Gross payment dikurangi MDR sesuai dengan nominal mutasi bank."
-          : `Selisih gross dikurangi MDR dengan mutasi bank: ${difference.toFixed(2)}.`;
+          ? "Gross payment dikurangi MDR owner-approved sesuai dengan nominal mutasi bank."
+          : `Selisih expected net settlement dengan mutasi bank: ${difference.toFixed(2)}.`;
 
       const existing = await client.query<{ id: number; status: string }>(
         `select id, status
