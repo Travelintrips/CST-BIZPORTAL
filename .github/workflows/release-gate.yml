@@ -17,6 +17,11 @@ jobs:
     name: Test, typecheck, build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # CI must never require production GCP credentials. The test suites mock DB
+      # access where needed; this syntactically valid, unreachable URL only keeps
+      # import-time DB initialization deterministic.
+      SUPABASE_DATABASE_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/ci
     steps:
       - name: Checkout
         uses: actions/checkout@v4
