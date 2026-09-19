@@ -22,6 +22,9 @@ jobs:
       # access where needed; this syntactically valid, unreachable URL only keeps
       # import-time DB initialization deterministic.
       SUPABASE_DATABASE_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/ci
+      SUPABASE_PG_URL: postgresql://ci:ci@127.0.0.1:65432/ci
+      APP_ENV: development
+      NODE_ENV: test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
