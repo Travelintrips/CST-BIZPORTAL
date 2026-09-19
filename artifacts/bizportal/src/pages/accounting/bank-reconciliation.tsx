@@ -2915,35 +2915,6 @@ function AIActionCenter({
             </div>
           )}
 
-          {/* Step 3: generate QRIS candidates */}
-          {onGenerateQrisCandidates && (
-            <div className="flex-1 rounded-lg border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20 p-3 space-y-2">
-              <div className="flex items-start gap-2">
-                <CreditCard className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold">Kandidat QRIS</p>
-                  <p className="text-xs text-muted-foreground">
-                    {workflowStage === "candidates"
-                      ? "Matching selesai, kandidat siap dibuat untuk direview"
-                      : "Tombol aktif setelah matching selesai"}
-                  </p>
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="w-full gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-300"
-                onClick={onGenerateQrisCandidates}
-                disabled={qrisGenerationPending || matchingPending || matchingBackgroundPending || workflowStage !== "candidates"}
-              >
-                {qrisGenerationPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <CreditCard className="w-3.5 h-3.5" />}
-                {qrisGenerationPending ? "Membuat kandidat..." : "Generate Kandidat QRIS"}
-              </Button>
-            </div>
-          )}
-
           {/* Step 4: siap approve */}
           {matched > 0 && (
             <div className="flex-1 rounded-lg border bg-background p-3 space-y-2">
