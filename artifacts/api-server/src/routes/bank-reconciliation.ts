@@ -855,12 +855,25 @@ async function resolveApprovalContraAccount(
   );
   const configured = settings.rows[0];
   const type = (candidateType ?? "").toLowerCase();
-  const isVendorPayable = type.includes("vendor") || type.includes("invoice") || type.includes("payable");
-  const configuredId = direction === "IN"
-    ? configured?.ar_account_id
-    : isVendorPayable
-      ? configured?.ap_account_id
-      : configured?.purchase_expense_account_id ?? configured?.ap_account_id;
+
+  // Resolve the contra account from the accounting meaning of the canonical
+  // candidate, not from a broad substring such as "invoice".
+  //
+  // IN  sport_payment / tenant_invoice: cash receipt settles receivable.
+  // OUT vendor_invoice: cash payment settles payable.
+  // OUT without a payable candidate: use the configured purchase/expense COA.
+  let configuredId: number | null | undefined;
+  if (direction === "IN") {
+    if (type === "sport_payment" || type === "tenant_invoice") {
+      configuredId = configured?.ar_account_id;
+    } else {
+      configuredId = undefined;
+    }
+  } else if (type === "vendor_invoice") {
+    configuredId = configured?.ap_account_id;
+  } else {
+    configuredId = configured?.purchase_expense_account_id;
+  }
 
   if (configuredId != null) {
     const configuredAccount = await client.query<{ id: number; code: string; name: string }>(
@@ -1213,8 +1226,30 @@ async function approveBankMutation(
   const direction = String(mutation.direction ?? "").toUpperCase() === "OUT" ? "OUT" : "IN";
 
   if (["approved_pending_posting", "approved", "posted"].includes(mutation.status)) {
+    // Canonical QRIS reconciliation is link-only and intentionally has no
+    // public.accounting_entries journal. Its journal is owned by sport_center.
     if (mutation.journal_entry_id == null) {
-      throw new ApprovalError("Mutasi sudah approved tetapi belum memiliki jurnal.", 409, "APPROVAL_STATE_INVALID");
+      const canonicalQris = await client.query<{ settlement_id: number }>(
+        `select psb.id as settlement_id
+           from sport_center.payment_settlement_batches psb
+          where psb.bank_mutation_id = $1
+            and psb.company_id = $2
+            and psb.status = 'reconciled'
+            and psb.settlement_journal_id is not null
+          limit 1`,
+        [mutationId, mutation.company_id],
+      );
+      const linkedSettlement = canonicalQris.rows[0];
+      if (linkedSettlement) {
+        return {
+          ok: true,
+          status: mutation.status,
+          settlement_id: linkedSettlement.settlement_id,
+          journal_entry_id: null,
+          idempotent: true,
+        };
+      }
+      throw new ApprovalError("Mutasi sudah approved tetapi tidak memiliki jurnal canonical yang valid.", 409, "APPROVAL_STATE_INVALID");
     }
     return {
       ok: true,
