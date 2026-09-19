@@ -55,4 +55,12 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source.slice(branch, bankResolution)).toContain("return approveCanonicalSettlementLink(");
   });
 
+  it("uses total grouped Sport Center payment amount and source-qualified exclusions", () => {
+    expect(source).toContain("sum(sp.amount::numeric) as amount");
+    expect(source).not.toContain("max(sp.amount::numeric) as amount");
+    expect(source).toContain("brm.candidate_source = 'sport_center.sport_payments'");
+    expect(source).toContain("brm.candidate_source = 'public.tenant_payments'");
+    expect(source).toContain("brm.candidate_source = 'public.vendor_invoices'");
+  });
+
 });
