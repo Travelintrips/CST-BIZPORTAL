@@ -186,7 +186,7 @@ async function loadLocalMatchCandidates(
                   )) as normalized_method
              from sport_center.sport_payments sp
              left join sport_center.sport_bookings sb on sb.id = sp.booking_id
-            where coalesce(sp.company_id, sb.company_id) = $1
+            where coalesce(sp.company_id, 1) = $1
               and lower(coalesce(sp.status::text, '')) in
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
          ),
