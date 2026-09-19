@@ -517,11 +517,14 @@ async function matchLocalMutation(
         }, actor, `rule-ai:${mutation.id}:${ruleResult.ruleId}`);
         const entryId = safeInteger(approval.journal_entry_id);
         if (entryId == null) throw new ApprovalError('Rule AI approval tidak menghasilkan jurnal.', 409, 'AUTO_POST_JOURNAL_MISSING');
-        await client.query("update public.accounting_entries set status='posted', posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'", [entryId]);
-        await client.query("update public.bank_reconciliation_matches set status='approved' where id=$1", [matchId]);
-        await client.query("update public.bank_reconciliation_matches set status='superseded' where mutation_id=$1 and id<>$2 and status='candidate'", [mutation.id, matchId]);
-        await client.query("update public.bank_mutations set status='posted', reconciliation_status='reconciled', accounting_posted=true, journal_entry_id=$2, posted_at=coalesce(posted_at,now()), approved_at=coalesce(approved_at,now()), review_code='RULE_AI_AUTO_POSTED', review_reason=$3, updated_at=now() where id=$1", [mutation.id, entryId, 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name]);
-        await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'AUTO_POSTED',$2,$3::jsonb)", [mutation.id, actor.email, JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence,coa_code:matchedRule.targetCoaCode,journal_entry_id:entryId})]);
+        await postBankMutationCanonical(client, mutation.id, entryId, matchId, actor, {
+          engine: 'bizportal-rule-ai',
+          rule_id: ruleResult.ruleId,
+          rule_name: matchedRule.name,
+          confidence,
+          coa_code: matchedRule.targetCoaCode,
+          reason: 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name,
+        });
          return "auto_posted";
       }
     }
