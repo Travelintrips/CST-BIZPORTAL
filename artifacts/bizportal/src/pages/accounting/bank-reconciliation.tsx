@@ -9366,7 +9366,7 @@ export default function BankReconciliationPage() {
 
   const deleteAllMut = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", { method: "DELETE", credentials: "include" });
+      const r = await fetch("/api/bank-reconciliation/dev/reset", { method: "DELETE", credentials: "include" });
       const body = await r.json().catch(() => ({ error: r.statusText }));
       if (!r.ok) throw new Error(body.error ?? r.statusText);
       return body;
@@ -9409,7 +9409,7 @@ export default function BankReconciliationPage() {
 
   const purgeMutations = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
+      const r = await fetch("/api/bank-reconciliation/dev/purge-mutations", {
         method: "DELETE",
         credentials: "include",
       });
@@ -9437,7 +9437,7 @@ export default function BankReconciliationPage() {
       if (activeCompanyId == null || activeCompanyId <= 0) {
         throw new Error("Pilih satu perusahaan terlebih dahulu. Purge PROD tidak boleh dijalankan dalam mode konsolidasi.");
       }
-      const r = await fetch("/api/bank-reconciliation/unsupported-standalone-action", {
+      const r = await fetch("/api/bank-reconciliation/purge-synced", {
         method: "DELETE",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
