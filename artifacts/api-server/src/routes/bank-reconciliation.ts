@@ -223,11 +223,11 @@ async function loadLocalMatchCandidates(
                   ('confirmed', 'paid', 'completed', 'success', 'settled')
               and (
                 (
-                  not normalized_method like '%qris%'
+                  not lower(coalesce(to_jsonb(sp)->>'payment_method', to_jsonb(sp)->>'method', sp.payment_type::text, '')) like '%qris%'
                   and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
                 )
                 or (
-                  normalized_method like '%qris%'
+                  lower(coalesce(to_jsonb(sp)->>'payment_method', to_jsonb(sp)->>'method', sp.payment_type::text, '')) like '%qris%'
                   and coalesce(
                     sp.settlement_date,
                     ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
