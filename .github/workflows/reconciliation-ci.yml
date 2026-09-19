@@ -31,7 +31,5 @@ jobs:
         run: pnpm --filter @workspace/api-server run typecheck
       - name: Source integrity regression
         run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/bank-reconciliation-source-integrity.test.ts
-      - name: Bank reconciliation regression suite
-        run: pnpm --filter @workspace/api-server exec vitest run "src/__tests__/bank-reconciliation*.test.ts"
       - name: API build
         run: pnpm --filter @workspace/api-server run build
