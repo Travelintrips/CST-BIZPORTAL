@@ -1040,6 +1040,317 @@ async function assertApprovalCandidateExists(
   }
 }
 
+
+async function approveCanonicalQrisSettlementLink(
+  client: ApprovalClient,
+  mutationId: number,
+  settlementId: number,
+  actor: ApprovalActor,
+  options: { historicalRepair?: boolean; reason?: string | null; cleanupDraft?: boolean } = {},
+): Promise<Record<string, unknown>> {
+  const mutationResult = await client.query<{
+    id: number;
+    status: string;
+    amount: string;
+    direction: string;
+    transaction_date: string;
+    company_id: number | null;
+    bank_account_id: string | number | null;
+    journal_entry_id: number | null;
+  }>(
+    `select id,status,amount,direction,transaction_date::text as transaction_date,
+            company_id,bank_account_id,journal_entry_id
+       from public.bank_mutations
+      where id=$1
+      for update`,
+    [mutationId],
+  );
+  const mutation = mutationResult.rows[0];
+  if (!mutation) throw new ApprovalError("Mutasi bank tidak ditemukan.", 404, "NOT_FOUND");
+  if (mutation.company_id == null) throw new ApprovalError("Mutasi tidak memiliki company context.", 422, "COMPANY_SCOPE_REQUIRED");
+  if (actor.companyId != null && actor.companyId !== mutation.company_id) {
+    throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+  }
+  if (String(mutation.direction ?? "").toUpperCase() !== "IN") {
+    throw new ApprovalError("Settlement QRIS canonical hanya dapat ditautkan ke mutasi IN.", 422, "INVALID_DIRECTION");
+  }
+
+  const settlementResult = await client.query<{
+    id: number;
+    company_id: number;
+    bank_account_id: string | null;
+    settlement_date: string;
+    net_amount: string;
+    status: string;
+    bank_mutation_id: number | null;
+    canonical_bank_mutation_id: number | null;
+    settlement_journal_id: number | null;
+  }>(
+    `select id,company_id,bank_account_id,settlement_date::text as settlement_date,
+            net_amount,status,bank_mutation_id,canonical_bank_mutation_id,settlement_journal_id
+       from sport_center.payment_settlement_batches
+      where id=$1
+      for update`,
+    [settlementId],
+  );
+  const settlement = settlementResult.rows[0];
+  if (!settlement) throw new ApprovalError("Settlement QRIS canonical tidak ditemukan.", 404, "CANONICAL_SETTLEMENT_NOT_FOUND");
+
+  const settlementStatus = String(settlement.status ?? "").toLowerCase();
+  const linkedMutationId = settlement.bank_mutation_id ?? settlement.canonical_bank_mutation_id;
+  const amountMatches = Math.abs(Number(mutation.amount) - Number(settlement.net_amount)) <= 0.01;
+  const dateMatches = calendarDateValue(mutation.transaction_date) === calendarDateValue(settlement.settlement_date);
+  if (
+    settlement.company_id !== mutation.company_id
+    || !amountMatches
+    || !dateMatches
+    || !["posted", "reconciled"].includes(settlementStatus)
+  ) {
+    throw new ApprovalError(
+      "Settlement canonical tidak memenuhi company/tanggal/net amount/status mutasi.",
+      409,
+      "CANONICAL_SETTLEMENT_EVIDENCE_INVALID",
+      {
+        mutation_amount: Number(mutation.amount),
+        settlement_net_amount: Number(settlement.net_amount),
+        mutation_date: mutation.transaction_date,
+        settlement_date: settlement.settlement_date,
+        settlement_status: settlement.status,
+      },
+    );
+  }
+  if (linkedMutationId != null && linkedMutationId !== mutationId) {
+    throw new ApprovalError("Settlement sudah digunakan oleh mutasi bank lain.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
+  }
+
+  const bankAccountResult = await client.query<{ id: number; account_number: string | null }>(
+    `select id,account_number
+       from public.company_bank_accounts
+      where company_id=$1 and is_active=true
+        and (id::text=$2 or account_number=$2)
+      order by case when id::text=$2 then 0 else 1 end,id
+      limit 1`,
+    [mutation.company_id, mutation.bank_account_id == null ? "" : String(mutation.bank_account_id)],
+  );
+  const bankAccount = bankAccountResult.rows[0];
+  if (
+    !bankAccount
+    || !settlement.bank_account_id
+    || String(bankAccount.account_number ?? "").trim() !== String(settlement.bank_account_id).trim()
+  ) {
+    throw new ApprovalError("Rekening settlement dan rekening mutasi tidak sama.", 409, "CANONICAL_SETTLEMENT_BANK_MISMATCH");
+  }
+
+  if (settlement.settlement_journal_id == null) {
+    throw new ApprovalError("Settlement belum memiliki jurnal settlement.", 409, "CANONICAL_SETTLEMENT_JOURNAL_MISSING");
+  }
+  const settlementJournal = await client.query<{ status: string; company_id: number | null }>(
+    `select status,company_id
+       from sport_center.accounting_journals
+      where id=$1
+      for update`,
+    [settlement.settlement_journal_id],
+  );
+  const journal = settlementJournal.rows[0];
+  if (!journal || String(journal.status ?? "").toLowerCase() !== "posted" || journal.company_id !== mutation.company_id) {
+    throw new ApprovalError("Jurnal settlement belum posted atau company tidak sesuai.", 409, "CANONICAL_SETTLEMENT_JOURNAL_NOT_ELIGIBLE");
+  }
+
+  const invalidPayment = await client.query<{ id: number }>(
+    `select item.payment_id as id
+       from sport_center.payment_settlement_items item
+       join sport_center.sport_payments payment on payment.id=item.payment_id
+      where item.settlement_id=$1
+        and item.item_status='active'
+        and (
+          lower(coalesce(payment.status::text,'')) <> 'confirmed'
+          or lower(coalesce(payment.payment_method::text,'')) not like '%qris%'
+        )
+      limit 1
+      for update of item,payment`,
+    [settlementId],
+  );
+  const itemCount = await client.query<{ count: string }>(
+    `select count(*)::text as count
+       from sport_center.payment_settlement_items
+      where settlement_id=$1 and item_status='active'`,
+    [settlementId],
+  );
+  if (Number(itemCount.rows[0]?.count ?? 0) < 1 || invalidPayment.rows[0]) {
+    throw new ApprovalError("Payment settlement tidak seluruhnya QRIS confirmed aktif.", 409, "CANONICAL_SETTLEMENT_PAYMENT_INVALID");
+  }
+
+  if (mutation.journal_entry_id != null) {
+    if (!options.cleanupDraft) {
+      throw new ApprovalError(
+        "Mutasi QRIS canonical memiliki generic bank journal; gunakan recovery canonical, bukan Post ke Accounting.",
+        409,
+        "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
+      );
+    }
+    const genericJournal = await client.query<{ id: number; status: string; source: string | null; source_id: number | null }>(
+      `select id,status,source,source_id
+         from public.accounting_entries
+        where id=$1
+        for update`,
+      [mutation.journal_entry_id],
+    );
+    const entry = genericJournal.rows[0];
+    if (
+      !entry
+      || String(entry.status).toLowerCase() !== "draft"
+      || entry.source !== "bank_reconciliation"
+      || Number(entry.source_id) !== mutationId
+    ) {
+      throw new ApprovalError("Generic journal tidak aman untuk dibersihkan otomatis.", 409, "CANONICAL_GENERIC_JOURNAL_CLEANUP_BLOCKED");
+    }
+    await client.query(`delete from public.accounting_entry_lines where entry_id=$1`, [entry.id]);
+    await client.query(`delete from public.accounting_entries where id=$1 and status='draft'`, [entry.id]);
+    await client.query(`update public.bank_mutations set journal_entry_id=null where id=$1`, [mutationId]);
+  }
+
+  const finalMatches = await client.query<{ id: number; candidate_type: string; candidate_id: number; candidate_source: string | null }>(
+    `select id,candidate_type,candidate_id,candidate_source
+       from public.bank_reconciliation_matches
+      where mutation_id=$1 and status='approved'
+      order by id
+      for update`,
+    [mutationId],
+  );
+  const unrelatedFinal = finalMatches.rows.find((row) =>
+    row.candidate_type !== "qris_settlement"
+    || Number(row.candidate_id) !== settlementId
+    || row.candidate_source !== "sport_center.payment_settlement_batches"
+  );
+  if (unrelatedFinal) throw new ApprovalError("Mutasi sudah memiliki approved match lain.", 409, "CONFLICT");
+
+  let matchId = finalMatches.rows.find((row) =>
+    row.candidate_type === "qris_settlement"
+    && Number(row.candidate_id) === settlementId
+    && row.candidate_source === "sport_center.payment_settlement_batches"
+  )?.id ?? null;
+  if (matchId == null) {
+    const candidateMatches = await client.query<{ id: number }>(
+      `select id
+         from public.bank_reconciliation_matches
+        where mutation_id=$1
+          and candidate_type='qris_settlement'
+          and candidate_id=$2
+          and candidate_source='sport_center.payment_settlement_batches'
+          and status='candidate'
+        order by id
+        limit 2
+        for update`,
+      [mutationId, settlementId],
+    );
+    if (candidateMatches.rows.length > 1) {
+      throw new ApprovalError("Lebih dari satu kandidat settlement canonical aktif.", 409, "CANONICAL_SETTLEMENT_SELECTION_CONFLICT");
+    }
+    if (candidateMatches.rows[0]) {
+      matchId = candidateMatches.rows[0].id;
+    } else {
+      const inserted = await client.query<{ id: number }>(
+        `insert into public.bank_reconciliation_matches
+          (mutation_id,candidate_type,candidate_id,candidate_source,match_score,match_reason,
+           amount_match,date_match,status,is_manual)
+         values($1,'qris_settlement',$2,'sport_center.payment_settlement_batches',100,$3,true,true,'candidate',$4)
+         returning id`,
+        [
+          mutationId,
+          settlementId,
+          options.historicalRepair
+            ? "Historical posted-settlement recovery; canonical evidence validated transactionally"
+            : "Canonical QRIS settlement approval",
+          options.historicalRepair === true,
+        ],
+      );
+      matchId = inserted.rows[0]?.id ?? null;
+    }
+  }
+  if (matchId == null) throw new ApprovalError("Match canonical gagal dibuat.", 409, "MATCH_NOT_FOUND");
+
+  const alreadyLinked =
+    settlementStatus === "reconciled"
+    && linkedMutationId === mutationId
+    && mutation.status === "approved"
+    && finalMatches.rows.some((row) => row.id === matchId);
+  if (!alreadyLinked) {
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status='superseded'
+        where mutation_id=$1 and id<>$2 and status not in ('approved','posted')`,
+      [mutationId, matchId],
+    );
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status='approved',candidate_source='sport_center.payment_settlement_batches'
+        where id=$1 and mutation_id=$2`,
+      [matchId, mutationId],
+    );
+    await client.query(
+      `update sport_center.payment_settlement_batches
+          set status='reconciled',
+              bank_mutation_id=$2,
+              canonical_bank_mutation_id=$2,
+              reconciled_at=coalesce(reconciled_at,now()),
+              reconciled_by=$3,
+              updated_at=now()
+        where id=$1`,
+      [settlementId, mutationId, actor.email],
+    );
+    await client.query(
+      `update public.bank_mutations
+          set status='approved',
+              reconciliation_status='reconciled',
+              accounting_posted=true,
+              journal_entry_id=null,
+              approved_by=coalesce(approved_by,$2),
+              approved_at=coalesce(approved_at,now()),
+              review_code='QRIS_CANONICAL_RECONCILED',
+              review_reason=$3,
+              updated_at=now()
+        where id=$1`,
+      [
+        mutationId,
+        actor.email,
+        options.reason ?? "Canonical QRIS settlement linked without creating a generic bank journal.",
+      ],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'CANONICAL_SETTLEMENT_LINKED',$2,$3::jsonb)`,
+      [
+        mutationId,
+        actor.email,
+        JSON.stringify({
+          settlement_id: settlementId,
+          match_id: matchId,
+          settlement_journal_id: settlement.settlement_journal_id,
+          historical_repair: options.historicalRepair === true,
+          generic_journal_cleaned: mutation.journal_entry_id != null && options.cleanupDraft === true,
+          contract: "qris-canonical-link-v1",
+        }),
+      ],
+    );
+  }
+
+  return {
+    ok: true,
+    idempotent: alreadyLinked,
+    mutation_id: mutationId,
+    candidate_type: "qris_settlement",
+    candidate_id: settlementId,
+    candidate_source: "sport_center.payment_settlement_batches",
+    settlement_status: "reconciled",
+    bank_mutation_status: "approved",
+    match_status: "approved",
+    journal_created: false,
+    requiresPosting: false,
+    journal_entry_id: null,
+    settlement_journal_id: settlement.settlement_journal_id,
+  };
+}
+
 async function approveBankMutation(
   client: ApprovalClient,
   mutationId: number,
