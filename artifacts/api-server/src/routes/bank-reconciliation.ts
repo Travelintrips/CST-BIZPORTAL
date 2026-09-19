@@ -517,11 +517,14 @@ async function matchLocalMutation(
         }, actor, `rule-ai:${mutation.id}:${ruleResult.ruleId}`);
         const entryId = safeInteger(approval.journal_entry_id);
         if (entryId == null) throw new ApprovalError('Rule AI approval tidak menghasilkan jurnal.', 409, 'AUTO_POST_JOURNAL_MISSING');
-        await client.query("update public.accounting_entries set status='posted', posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'", [entryId]);
-        await client.query("update public.bank_reconciliation_matches set status='approved' where id=$1", [matchId]);
-        await client.query("update public.bank_reconciliation_matches set status='superseded' where mutation_id=$1 and id<>$2 and status='candidate'", [mutation.id, matchId]);
-        await client.query("update public.bank_mutations set status='posted', reconciliation_status='reconciled', accounting_posted=true, journal_entry_id=$2, posted_at=coalesce(posted_at,now()), approved_at=coalesce(approved_at,now()), review_code='RULE_AI_AUTO_POSTED', review_reason=$3, updated_at=now() where id=$1", [mutation.id, entryId, 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name]);
-        await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'AUTO_POSTED',$2,$3::jsonb)", [mutation.id, actor.email, JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence,coa_code:matchedRule.targetCoaCode,journal_entry_id:entryId})]);
+        await postBankMutationCanonical(client, mutation.id, entryId, matchId, actor, {
+          engine: 'bizportal-rule-ai',
+          rule_id: ruleResult.ruleId,
+          rule_name: matchedRule.name,
+          confidence,
+          coa_code: matchedRule.targetCoaCode,
+          reason: 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name,
+        });
          return "auto_posted";
       }
     }
@@ -1307,6 +1310,91 @@ async function approveBankMutation(
     journal_entry_number: entryNumber,
     status: "approved_pending_posting",
   };
+}
+
+async function postBankMutationCanonical(
+  client: ApprovalClient,
+  mutationId: number,
+  entryId: number,
+  matchId: number,
+  actor: ApprovalActor,
+  meta: Record<string, unknown>,
+): Promise<{ journal_entry_id: number; status: "posted"; idempotent: boolean }> {
+  const locked = await client.query<{ status: string; journal_entry_id: number | null; company_id: number | null }>(
+    `select status, journal_entry_id, company_id from public.bank_mutations where id=$1 for update`,
+    [mutationId],
+  );
+  const mutation = locked.rows[0];
+  if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+  if (actor.companyId != null && mutation.company_id !== actor.companyId) {
+    throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+  }
+  if (mutation.status === "posted" && mutation.journal_entry_id != null) {
+    return { journal_entry_id: mutation.journal_entry_id, status: "posted", idempotent: true };
+  }
+  if (mutation.journal_entry_id !== entryId) {
+    throw new ApprovalError("Jurnal approval tidak sama dengan jurnal mutasi.", 409, "JOURNAL_ID_MISMATCH");
+  }
+  const entry = await client.query<{ status: string; total_debit: string; total_credit: string }>(
+    `select status,total_debit,total_credit from public.accounting_entries
+      where id=$1 and company_id=$2 and source='bank_reconciliation' and source_id=$3
+      for update`,
+    [entryId, mutation.company_id, mutationId],
+  );
+  const journal = entry.rows[0];
+  if (!journal) throw new ApprovalError("Jurnal canonical tidak ditemukan.", 409, "CANONICAL_JOURNAL_MISSING");
+  const lines = await client.query<{ debit: string; credit: string }>(
+    `select debit,credit from public.accounting_entry_lines where entry_id=$1 for update`,
+    [entryId],
+  );
+  const debit = lines.rows.reduce((sum,row)=>sum+Number(row.debit||0),0);
+  const credit = lines.rows.reduce((sum,row)=>sum+Number(row.credit||0),0);
+  if (lines.rows.length < 2 || !Number.isFinite(debit) || !Number.isFinite(credit) || debit <= 0 || Math.abs(debit-credit) > 0.0001) {
+    throw new ApprovalError("Jurnal tidak balanced; posting dibatalkan.", 409, "UNBALANCED_JOURNAL");
+  }
+  if (Math.abs(Number(journal.total_debit)-debit) > 0.0001 || Math.abs(Number(journal.total_credit)-credit) > 0.0001) {
+    throw new ApprovalError("Total header jurnal tidak sama dengan journal lines.", 409, "JOURNAL_TOTAL_MISMATCH");
+  }
+  const selected = await client.query<{ id: number }>(
+    `select id from public.bank_reconciliation_matches where id=$1 and mutation_id=$2 for update`,
+    [matchId, mutationId],
+  );
+  if (!selected.rows[0]) throw new ApprovalError("Approved match canonical tidak ditemukan.", 409, "MATCH_NOT_FOUND");
+  const otherFinal = await client.query<{ id: number }>(
+    `select id from public.bank_reconciliation_matches
+      where mutation_id=$1 and id<>$2 and status in ('approved','posted') limit 1 for update`,
+    [mutationId, matchId],
+  );
+  if (otherFinal.rows[0]) throw new ApprovalError("Mutasi sudah memiliki final match lain.", 409, "CONFLICT");
+
+  if (journal.status === "draft") {
+    await client.query(
+      `update public.accounting_entries set status='posted',posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'`,
+      [entryId],
+    );
+  } else if (journal.status !== "posted") {
+    throw new ApprovalError(`Jurnal berstatus "${journal.status}" tidak dapat diposting.`, 409, "INVALID_JOURNAL_STATUS");
+  }
+  await client.query(`update public.bank_reconciliation_matches set status='approved' where id=$1`, [matchId]);
+  await client.query(
+    `update public.bank_reconciliation_matches set status='superseded'
+      where mutation_id=$1 and id<>$2 and status not in ('approved','posted')`,
+    [mutationId, matchId],
+  );
+  await client.query(
+    `update public.bank_mutations
+        set status='posted',reconciliation_status='reconciled',accounting_posted=true,
+            journal_entry_id=$2,posted_at=coalesce(posted_at,now()),approved_at=coalesce(approved_at,now()),
+            review_code='RULE_AI_AUTO_POSTED',review_reason=$3,updated_at=now()
+      where id=$1`,
+    [mutationId, entryId, String(meta.reason ?? "Canonical bank reconciliation posting")],
+  );
+  await client.query(
+    `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+      values($1,'CANONICAL_POSTED',$2,$3::jsonb)`,
+    [mutationId, actor.email, JSON.stringify({ ...meta, journal_entry_id: entryId, match_id: matchId, contract: "bank-reconciliation-canonical-v1" })],
+  );
+  return { journal_entry_id: entryId, status: "posted", idempotent: false };
 }
 
 router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res): Promise<void> => {
