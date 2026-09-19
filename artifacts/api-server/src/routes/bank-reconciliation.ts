@@ -993,7 +993,12 @@ async function assertApprovalCandidateExists(
       throw new ApprovalError("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.", 409, "STALE_CANDIDATE");
     }
     result = await client.query(
-      `select id from sport_center.payment_settlement_batches where id = $1 and company_id = $2 limit 1 for update`,
+      `select id
+         from sport_center.payment_settlement_batches
+        where id::text = $1::text
+          and company_id = $2
+        limit 1
+        for update`,
       [candidateId, companyId],
     );
   } else {
@@ -2132,32 +2137,47 @@ async function resolveCanonicalQrisSettlement(
   // canonical Sport Center settlement batch first. Requiring the full scope
   // prevents a larger canonical batch from being partially approved through
   // the generic bank journal path.
-  const result = await client.query<{ id: number }>(
+  const result = await client.query<{ id: number | string }>(
     `with matching_batches as (
        select psb.id
          from sport_center.payment_settlement_batches psb
          join sport_center.payment_settlement_items psi
            on psi.settlement_id = psb.id
         where psb.company_id = $1
+          and lower(coalesce(psb.status::text, '')) in ('posted', 'reconciled')
+          and psi.item_status = 'active'
         group by psb.id
        having count(distinct psi.payment_id) = cardinality($2::bigint[])
           and count(distinct psi.payment_id) filter (
             where psi.payment_id = any($2::bigint[])
           ) = cardinality($2::bigint[])
      )
-     select psb.id
+     select psb.id::bigint as id
        from sport_center.payment_settlement_batches psb
        join matching_batches mb on mb.id = psb.id
       where psb.company_id = $1
-      order by psb.id desc
-      limit 1
       for update of psb`,
     [companyId, normalizedPaymentIds],
   );
-  const settlementId = result.rows[0]?.id;
-  if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+  if (result.rows.length === 0) {
     throw new ApprovalError(
       "Kandidat lokal QRIS belum terhubung ke settlement canonical. Jalankan matching ulang agar batch settlement dibuat terlebih dahulu.",
+      409,
+      "CANONICAL_SETTLEMENT_REQUIRED",
+    );
+  }
+  if (result.rows.length > 1) {
+    throw new ApprovalError(
+      "Kandidat lokal QRIS memiliki lebih dari satu settlement canonical untuk payment scope yang sama. Selesaikan duplikasi settlement sebelum approval.",
+      409,
+      "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
+    );
+  }
+
+  const settlementId = safeInteger(result.rows[0]?.id);
+  if (settlementId === null) {
+    throw new ApprovalError(
+      "ID settlement canonical tidak valid; approval QRIS diblokir.",
       409,
       "CANONICAL_SETTLEMENT_REQUIRED",
     );
@@ -2165,7 +2185,6 @@ async function resolveCanonicalQrisSettlement(
 
   return settlementId;
 }
-
 async function listQrisCanonicalSettlements(
   companyId: number | null,
   includeCompleted: boolean,

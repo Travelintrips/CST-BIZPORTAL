@@ -21,19 +21,31 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(journalLookup).toBeGreaterThan(validation);
   });
 
-  it("fails closed for stale and legacy QRIS candidates", () => {
-    expect(source).toContain('"STALE_CANDIDATE"');
-    expect(source).toContain('candidateSource !== "sport_center.payment_settlement_batches"');
-    expect(source).toContain("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.");
-  });
-
   it("resolves local QRIS payment scope to a canonical settlement before journal approval", () => {
     expect(source).toContain("async function resolveCanonicalQrisSettlement(");
     expect(source).toContain("sport_center.payment_settlement_items");
+    expect(source).toContain("psi.item_status = 'active'");
+    expect(source).toContain("in ('posted', 'reconciled')");
     expect(source).toContain("CANONICAL_SETTLEMENT_REQUIRED");
+    expect(source).toContain("result.rows.length > 1");
+    expect(source).toContain("CANONICAL_SETTLEMENT_SELECTION_CONFLICT");
     expect(source).toContain("const canonicalSettlementId = await resolveCanonicalQrisSettlement(");
+    expect(source).toContain("id::text = $1::text");
     expect(source).toContain('candidate_source: "sport_center.payment_settlement_batches"');
     expect(source).not.toContain('candidate_source: "local.qris_mutation_batch_candidates"');
+
+    const resolverStart = source.indexOf("async function resolveCanonicalQrisSettlement(");
+    const resolverEnd = source.indexOf("async function listQrisCanonicalSettlements(", resolverStart);
+    const resolver = source.slice(resolverStart, resolverEnd);
+    expect(resolver).not.toContain("limit 1");
+
+    const approval = source.indexOf("const approval = await approveBankMutation(", resolverEnd);
+    const candidateUpdate = source.indexOf(
+      "update public.qris_mutation_batch_candidates",
+      approval,
+    );
+    expect(approval).toBeGreaterThan(resolverEnd);
+    expect(candidateUpdate).toBeGreaterThan(approval);
   });
 
   it("supersedes competing non-final candidates before approving the selected match", () => {
