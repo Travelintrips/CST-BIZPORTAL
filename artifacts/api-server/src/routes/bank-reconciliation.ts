@@ -77,6 +77,7 @@ interface MatchingMutation {
   bank_reference: string | null;
   provider_name: string | null;
   uploaded_proof_url: string | null;
+  review_code: string | null;
 }
 
 interface LocalMatchCandidate {
@@ -479,7 +480,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       `select bm.id, bm.amount, bm.direction, bm.transaction_date,
               bm.description, bm.normalized_description, bm.provider_order_id,
               bm.company_id, bm.status, bm.bank_account_id, bm.bank_reference,
-              bm.provider_name, bm.uploaded_proof_url
+              bm.provider_name, bm.uploaded_proof_url, bm.review_code
          from public.bank_mutations bm
         where ${filters.join(" and ")}
         order by bm.transaction_date desc, bm.id
@@ -492,6 +493,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     let manualReview = 0;
     let unmatched = 0;
     let failed = 0;
+    let ruleMatched = 0;
 
     for (const mutation of result.rows) {
       try {
@@ -500,6 +502,8 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
         await client.query("commit");
         processed++;
         if (outcome === "matched") autoMatched++;
+        const marker = await client.query<{ review_code: string | null }>("select review_code from public.bank_mutations where id=$1", [mutation.id]);
+        if (marker.rows[0]?.review_code === "RULE_AI_MATCH") ruleMatched++;
         else if (outcome === "manual_review") manualReview++;
         else unmatched++;
       } catch (error) {
@@ -521,7 +525,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       auto_matched: autoMatched,
       manual_review: manualReview,
       unmatched,
-      rule_matched: result.rows.filter((m) => m.review_code === 'RULE_AI_MATCH').length,
+      rule_matched: ruleMatched,
       ecf_matched: 0,
     });
   } catch (error) {
