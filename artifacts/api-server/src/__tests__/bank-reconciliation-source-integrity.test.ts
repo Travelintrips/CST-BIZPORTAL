@@ -80,4 +80,12 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("recoverableMatch.rows.length !== 1");
   });
 
+  it("allows approved draft cancellation only while the linked journal is still draft", () => {
+    expect(source).toContain('"approved_pending_posting",\n      "approved",');
+    expect(source).toContain('String(mutation.journal_status ?? "").toLowerCase() !== "draft"');
+    expect(source).toContain("Approval hanya dapat dibatalkan bila jurnal terkait masih berstatus draft.");
+    expect(source).toContain("where id = $1 and status = 'draft'");
+    expect(source).toContain("set status = 'superseded'");
+  });
+
 });
