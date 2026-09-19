@@ -1609,14 +1609,10 @@ function isExactMatch(m: BankMutation): boolean {
 }
 
 const REAL_TRANSACTION_CANDIDATE_TYPES = new Set([
-  "accounting_payment",
-  "logistic_order",
-  "invoice",
-  "expense",
   "sport_payment",
   "qris_settlement",
   "tenant_invoice",
-  "internal_transfer",
+  "vendor_invoice",
 ]);
 
 function isRealTransactionCandidate(candidate: Candidate): boolean {
