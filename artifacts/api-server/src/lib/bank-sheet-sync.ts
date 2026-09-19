@@ -83,7 +83,7 @@ function normalizeMutationKey(value: string): string | null {
   return normalized ? normalized : null;
 }
 
-function parseAmount(value: string): number {
+export function parseAmount(value: string): number {
   const cleaned = String(value ?? "").replace(/[^0-9.,-]/g, "").trim();
   if (!cleaned) return 0;
 
