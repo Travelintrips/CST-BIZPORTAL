@@ -248,4 +248,13 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain("const isClosedQrisSettlement =");
     expect(componentSource).toContain("Settlement sudah digunakan");
   });
+
+  it("keeps duplicate review actionable through explicit candidate or manual COA paths", () => {
+    expect(componentSource).toContain(
+      'm.status === "manual_review" || m.status === "duplicate_need_review"',
+    );
+    expect(componentSource).toContain(
+      'mutation.status === "duplicate_need_review"',
+    );
+  });
 });

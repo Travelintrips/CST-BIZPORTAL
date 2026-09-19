@@ -1111,6 +1111,14 @@ async function approveBankMutation(
         where id = $1 and mutation_id = $2`,
       [matchId, mutationId, selectedCandidateSource],
     );
+  } else if (manualCoaCode) {
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status = 'superseded'
+        where mutation_id = $1
+          and status not in ('approved', 'posted')`,
+      [mutationId],
+    );
   } else if (selectedCandidateType && selectedCandidateId != null) {
     await client.query(
       `insert into public.bank_reconciliation_matches

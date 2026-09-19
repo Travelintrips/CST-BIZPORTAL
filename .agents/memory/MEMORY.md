@@ -34,3 +34,4 @@
 - [Bank sheet amount locale](bank-sheet-amount-locale.md) — Indonesian-formatted Sheet values such as `685.170` must parse as 685170, not 685.17.
 - [External production write verification](external-production-write-verification.md) — a shell timeout can occur after an external Supabase transaction commits; verify state before retrying a destructive write.
 - [Bank reconciliation candidate explanation](candidate-explanation-contract.md) — render persisted match flags and reasons even when optional source details are absent.
+- [Duplicate review resolution](duplicate-review-resolution.md) — duplicate matches need either an explicit candidate choice or a manual COA path, never two blocked actions.

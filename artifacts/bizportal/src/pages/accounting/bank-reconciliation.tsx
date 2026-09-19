@@ -1650,7 +1650,7 @@ function isUiApprovalEligible(m: BankMutation): boolean {
  * reviewer action for this state.
  */
 function isManualReviewActionable(m: BankMutation): boolean {
-  return m.status === "manual_review"
+  return (m.status === "manual_review" || m.status === "duplicate_need_review")
     && !isQrisMutation(m)
     && !isCanonicalSettlementMutation(m);
 }
@@ -3772,7 +3772,11 @@ function CoaReferenceDialog({
       isQris
         ? !!canonicalCandidate && isCanonicalSettlementApprovalEligible(mutation)
         : !isCanonicalSettlementMutation(mutation) &&
-          (mutation.status === "manual_review" || visibleCandidates(mutation).length === 0)
+          (
+            mutation.status === "manual_review"
+            || mutation.status === "duplicate_need_review"
+            || visibleCandidates(mutation).length === 0
+          )
     );
 
   const startCreateCoa = () => {
@@ -3891,8 +3895,8 @@ function CoaReferenceDialog({
     }
     if (!canApplyCurrent) {
       toast({
-        title: "COA hanya dapat dipilih untuk transaksi ini",
-        description: "Jika kandidat transaksi tersedia, pilih kandidat tersebut melalui alur review.",
+        title: "COA manual belum dapat dipakai",
+        description: "Pastikan mutasi belum memiliki approved match dan gunakan COA ini sebagai approval manual.",
         variant: "destructive",
       });
       return;
