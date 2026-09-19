@@ -1157,6 +1157,72 @@ async function approveBankMutation(
   };
 }
 
+router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  const client = await pool.connect();
+  try {
+    const mutationResult = await client.query<any>(
+      `select id, company_id, status, journal_entry_id, review_code, review_reason,
+              mutation_key, description
+         from public.bank_mutations
+        where id=$1 and ($2::bigint is null or company_id=$2)
+        limit 1`, [mutationId, actor.companyId],
+    );
+    const mutation = mutationResult.rows[0];
+    if (!mutation) { res.status(404).json({ error: "Mutasi tidak ditemukan" }); return; }
+    const matchResult = await client.query<any>(
+      `select id, mutation_id, candidate_id, candidate_type, candidate_source,
+              status, match_score, match_reason
+         from public.bank_reconciliation_matches
+        where mutation_id=$1
+        order by case when status in ('approved','posted') then 0 else 1 end, id desc
+        limit 1`, [mutationId],
+    );
+    const match = matchResult.rows[0] ?? null;
+    let journal: any = null;
+    if (mutation.journal_entry_id != null) {
+      const journalResult = await client.query<any>(
+        `select id, company_id, status, source, source_id,
+                total_debit, total_credit, transaction_date as date
+           from public.accounting_entries where id=$1 limit 1`, [mutation.journal_entry_id],
+      ).catch(() => ({ rows: [] as any[] }));
+      journal = journalResult.rows[0] ?? null;
+    }
+    const resolved = mutation.status === 'posted' && mutation.journal_entry_id != null && journal != null;
+    const staleJournal = mutation.journal_entry_id != null && journal == null;
+    const diagnosis = {
+      mutation: {
+        id: mutation.id, companyId: mutation.company_id, status: mutation.status,
+        journalEntryId: mutation.journal_entry_id, reviewCode: mutation.review_code,
+        reviewReason: mutation.review_reason, mutationKey: mutation.mutation_key,
+        description: mutation.description,
+      },
+      match: match ? {
+        id: match.id, mutationId: match.mutation_id, candidateId: String(match.candidate_id),
+        candidateType: match.candidate_type, candidateSource: match.candidate_source,
+        status: match.status, matchScore: match.match_score, matchReason: match.match_reason,
+      } : null,
+      journal,
+      disposition: resolved ? 'resolved' : staleJournal ? 'developer_action_required' : 'auto_repair',
+      code: resolved ? 'RECONCILIATION_RESOLVED' : staleJournal ? 'STALE_JOURNAL_REFERENCE' : 'REMATCH_REQUIRED',
+      title: resolved ? 'Rekonsiliasi sudah selesai' : staleJournal ? 'Referensi jurnal stale' : 'Evaluasi ulang Rule AI',
+      reason: resolved ? 'Mutasi dan jurnal sudah final.' : staleJournal ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.' : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
+      records: [
+        { table: 'public.bank_mutations', id: mutation.id, role: 'mutation' },
+        ...(match ? [{ table: 'public.bank_reconciliation_matches', id: match.id, role: 'match' }] : []),
+        ...(journal ? [{ table: 'public.accounting_entries', id: journal.id, role: 'journal' }] : []),
+      ],
+      sql: null,
+      autoRepair: resolved || staleJournal ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
+      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, matchStatus: match?.status ?? null }, after: null },
+    };
+    res.json({ ok: true, diagnosis });
+  } finally { client.release(); }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
