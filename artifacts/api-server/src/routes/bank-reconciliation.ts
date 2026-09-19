@@ -2127,80 +2127,8 @@ const mutationListColumns = `
     where approved_match.mutation_id = bm.id
       and approved_match.status = 'approved'
   ) as has_approved_match,
-  (
-    select coalesce(json_agg(json_build_object(
-      'id', qris.id,
-      'mutation_id', qris.mutation_id,
-      'company_id', qris.company_id,
-      'provider_code', qris.provider_code,
-      'mutation_source_classification', qris.mutation_source_classification,
-      'source_date', qris.source_date,
-      'estimated_settlement_date', qris.estimated_settlement_date,
-      'gross_amount', qris.gross_amount,
-      'net_amount', qris.net_amount,
-      'observed_deduction', qris.observed_deduction,
-      'effective_deduction_rate', qris.effective_deduction_rate,
-      'reconciliation_status', qris.reconciliation_status,
-      'confidence', qris.confidence,
-      'review_reason', qris.review_reason,
-      'payment_items', qris.payment_items,
-      'candidate_source', qris.candidate_source,
-      'status', qris.status,
-      'auto_post_status', qris.auto_post_status,
-      'auto_post_stage', qris.auto_post_stage,
-      'auto_post_problem', qris.auto_post_problem,
-      'auto_post_revision', qris.auto_post_revision,
-      'auto_post_action', qris.auto_post_action,
-      'auto_post_details', qris.auto_post_details
-    ) order by qris.updated_at desc nulls last, qris.id desc), '[]'::json)
-    from public.qris_mutation_batch_candidates qris
-    where qris.mutation_id = bm.id
-      and lower(coalesce(qris.status, '')) in (
-        'candidate_auto_matched',
-        'candidate_review',
-        'approved',
-        'partial',
-        'completed'
-      )
-  ) as qris_candidate_audits,
-  (
-    select json_build_object(
-      'id', qris.id,
-      'mutation_id', qris.mutation_id,
-      'company_id', qris.company_id,
-      'provider_code', qris.provider_code,
-      'mutation_source_classification', qris.mutation_source_classification,
-      'source_date', qris.source_date,
-      'estimated_settlement_date', qris.estimated_settlement_date,
-      'gross_amount', qris.gross_amount,
-      'net_amount', qris.net_amount,
-      'observed_deduction', qris.observed_deduction,
-      'effective_deduction_rate', qris.effective_deduction_rate,
-      'reconciliation_status', qris.reconciliation_status,
-      'confidence', qris.confidence,
-      'review_reason', qris.review_reason,
-      'payment_items', qris.payment_items,
-      'candidate_source', qris.candidate_source,
-      'status', qris.status,
-      'auto_post_status', qris.auto_post_status,
-      'auto_post_stage', qris.auto_post_stage,
-      'auto_post_problem', qris.auto_post_problem,
-      'auto_post_revision', qris.auto_post_revision,
-      'auto_post_action', qris.auto_post_action,
-      'auto_post_details', qris.auto_post_details
-    )
-    from public.qris_mutation_batch_candidates qris
-    where qris.mutation_id = bm.id
-      and lower(coalesce(qris.status, '')) in (
-        'candidate_auto_matched',
-        'candidate_review',
-        'approved',
-        'partial',
-        'completed'
-      )
-    order by qris.updated_at desc nulls last, qris.id desc
-    limit 1
-  ) as qris_candidate_audit
+  '[]'::json as qris_candidate_audits,
+  null::json as qris_candidate_audit
 `;
 
 type MutationCandidateRow = {
