@@ -27,7 +27,7 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("canonical_qris_settlement");
     expect(source).toContain("LEGACY_QRIS_GENERATOR_REMOVED");
     expect(source).toContain("LEGACY_QRIS_APPROVAL_REMOVED");
-    expect(source).not.toContain("from public.qris_mutation_batch_candidates");
+    expect(source).not.toContain("qris_mutation_batch_candidates");
     expect(source).not.toContain("update public.qris_mutation_batch_candidates");
   });
 
