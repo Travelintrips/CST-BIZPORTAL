@@ -31,3 +31,4 @@
 - [Standalone approval database boundary](standalone-approval-database.md) — local approval is implemented atomically, but the root standalone database still needs the canonical reconciliation/accounting schema.
 - [Bank reconciliation read contract](bank-reconciliation-read-contract.md) — production can have synced bank rows while the UI stays empty if the standalone API omits its list and summary endpoints.
 - [Bank sheet amount locale](bank-sheet-amount-locale.md) — Indonesian-formatted Sheet values such as `685.170` must parse as 685170, not 685.17.
+- [External production write verification](external-production-write-verification.md) — a shell timeout can occur after an external Supabase transaction commits; verify state before retrying a destructive write.
