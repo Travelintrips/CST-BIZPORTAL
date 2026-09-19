@@ -175,47 +175,82 @@ async function loadLocalMatchCandidates(
         payment_reference: string | null;
         description: string | null;
       }>(
-        `select sp.id,
-                sp.amount,
-                (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date::text as paid_date,
-                coalesce(sp.provider_order_id, sp.provider_id::text) as payment_reference,
-                concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description
-           from sport_center.sport_payments sp
-          where sp.company_id = $1
-            and lower(coalesce(sp.status::text, '')) in
-                ('confirmed', 'paid', 'completed', 'success', 'settled')
-            and abs(sp.amount::numeric - $2::numeric) < 0.01
+        `with eligible as (
+           select sp.*,
+                  nullif(btrim(sp.group_id::text), '') as normalized_group_id,
+                  lower(coalesce(
+                    to_jsonb(sp)->>'payment_method',
+                    to_jsonb(sp)->>'method',
+                    sp.payment_type::text,
+                    ''
+                  )) as normalized_method
+             from sport_center.sport_payments sp
+            where sp.company_id = $1
+              and lower(coalesce(sp.status::text, '')) in
+                  ('confirmed', 'paid', 'completed', 'success', 'settled')
+         ),
+         grouped as (
+           select
+             min(sp.id)::bigint as id,
+             sum(sp.amount::numeric) as amount,
+             min((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date)::text as paid_date,
+             coalesce(
+               max(nullif(btrim(sp.provider_order_id::text), '')),
+               max(sp.provider_id::text)
+             ) as payment_reference,
+             concat_ws(
+               ' ',
+               max(sp.payment_type::text),
+               max(sp.payment_provider::text),
+               max(sp.provider_order_id::text),
+               'group',
+               sp.normalized_group_id
+             ) as description,
+             bool_or(sp.normalized_method like '%qris%') as is_qris,
+             min(coalesce(
+               sp.settlement_date,
+               ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
+             )) as settlement_date
+           from eligible sp
+          where sp.normalized_group_id is not null
+          group by sp.normalized_group_id
+         ),
+         singles as (
+           select
+             sp.id::bigint as id,
+             sp.amount::numeric as amount,
+             (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date::text as paid_date,
+             coalesce(sp.provider_order_id, sp.provider_id::text) as payment_reference,
+             concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description,
+             (sp.normalized_method like '%qris%') as is_qris,
+             coalesce(
+               sp.settlement_date,
+               ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
+             ) as settlement_date
+           from eligible sp
+          where sp.normalized_group_id is null
+         ),
+         candidates as (
+           select * from grouped
+           union all
+           select * from singles
+         )
+         select c.id, c.amount, c.paid_date, c.payment_reference, c.description
+           from candidates c
+          where abs(c.amount::numeric - $2::numeric) < 0.01
             and (
-              (
-                lower(coalesce(
-                  to_jsonb(sp)->>'payment_method',
-                  to_jsonb(sp)->>'method',
-                  sp.payment_type::text,
-                  ''
-                )) not like '%qris%'
-                and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
-              )
-              or (
-                lower(coalesce(
-                  to_jsonb(sp)->>'payment_method',
-                  to_jsonb(sp)->>'method',
-                  sp.payment_type::text,
-                  ''
-                )) like '%qris%'
-                and coalesce(
-                  sp.settlement_date,
-                  ((coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date + 1)
-                ) = $3::date
-              )
+              (not c.is_qris and c.paid_date::date = $3::date)
+              or
+              (c.is_qris and c.settlement_date = $3::date)
             )
             and not exists (
               select 1
                 from public.bank_reconciliation_matches brm
                where brm.candidate_type = 'sport_payment'
-                 and brm.candidate_id = sp.id
+                 and brm.candidate_id = c.id
                  and brm.status in ('approved', 'posted')
             )
-          order by sp.id`,
+          order by c.id`,
         [mutation.company_id, amount, date],
       );
 
