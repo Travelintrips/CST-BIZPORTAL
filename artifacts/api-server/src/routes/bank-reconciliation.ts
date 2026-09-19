@@ -2641,6 +2641,173 @@ router.delete("/bank-reconciliation/:mutationId/upload-proof", async (req, res):
   }
 });
 
+
+router.post("/bank-reconciliation/:mutationId/void-journal", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const reason = textValue(req.body?.reason);
+  if (mutationId === null) { res.status(400).json({ error: "ID mutasi tidak valid" }); return; }
+  if (!reason || reason.length < 5) {
+    res.status(422).json({ error: "Alasan reversal minimal 5 karakter.", code: "REVERSAL_REASON_REQUIRED" });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const canonical = await client.query<{ id: number }>(
+      `select id from public.bank_reconciliation_matches
+        where mutation_id=$1
+          and candidate_type='qris_settlement'
+          and candidate_source='sport_center.payment_settlement_batches'
+          and status in ('candidate','approved')
+        limit 1 for update`,
+      [mutationId],
+    );
+    if (canonical.rows[0]) {
+      throw new ApprovalError(
+        "Settlement QRIS canonical memakai lifecycle link-only; jangan reverse jurnal settlement melalui generic bank journal.",
+        409,
+        "CANONICAL_SETTLEMENT_LINK_ONLY",
+      );
+    }
+
+    const mutationResult = await client.query<{
+      id: number;
+      company_id: number | null;
+      status: string;
+      journal_entry_id: number | null;
+    }>(
+      `select id,company_id,status,journal_entry_id from public.bank_mutations where id=$1 for update`,
+      [mutationId],
+    );
+    const mutation = mutationResult.rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan.", 404, "NOT_FOUND");
+    if (actor.companyId != null && mutation.company_id !== actor.companyId) {
+      throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
+    }
+    if (mutation.company_id == null || mutation.journal_entry_id == null) {
+      throw new ApprovalError("Mutasi tidak memiliki journal entry untuk direverse.", 409, "JOURNAL_NOT_FOUND");
+    }
+
+    const entryResult = await client.query<{
+      id: number;
+      entry_number: string;
+      journal_id: number;
+      date: string;
+      ref: string | null;
+      description: string | null;
+      status: string;
+      total_debit: string;
+      total_credit: string;
+      void_entry_id: number | null;
+    }>(
+      `select id,entry_number,journal_id,date::text as date,ref,description,status,
+              total_debit,total_credit,void_entry_id
+         from public.accounting_entries
+        where id=$1 and company_id=$2
+        for update`,
+      [mutation.journal_entry_id, mutation.company_id],
+    );
+    const entry = entryResult.rows[0];
+    if (!entry) throw new ApprovalError("Journal entry tidak ditemukan.", 404, "JOURNAL_NOT_FOUND");
+    if (String(entry.status).toLowerCase() === "voided" && entry.void_entry_id != null) {
+      await client.query("commit");
+      res.json({ ok: true, void_entry_id: entry.void_entry_id, idempotent: true });
+      return;
+    }
+    if (String(entry.status).toLowerCase() !== "posted") {
+      throw new ApprovalError(`Journal entry berstatus "${entry.status}" dan tidak dapat direverse.`, 409, "JOURNAL_NOT_POSTED");
+    }
+
+    const lineResult = await client.query<{
+      account_id: number;
+      debit: string;
+      credit: string;
+      description: string | null;
+    }>(
+      `select account_id,debit,credit,description
+         from public.accounting_entry_lines
+        where entry_id=$1
+        order by id
+        for update`,
+      [entry.id],
+    );
+    const debit = lineResult.rows.reduce((sum,row)=>sum+Number(row.debit||0),0);
+    const credit = lineResult.rows.reduce((sum,row)=>sum+Number(row.credit||0),0);
+    if (lineResult.rows.length < 2 || Math.abs(debit-credit) > 0.01 || debit <= 0) {
+      throw new ApprovalError("Journal asal tidak balanced; reversal diblokir.", 409, "UNBALANCED_JOURNAL");
+    }
+
+    const year = Number(entry.date.slice(0,4)) || new Date().getUTCFullYear();
+    const reversalNumber = await nextApprovalEntryNumber(client, mutation.company_id, year);
+    const reversalInsert = await client.query<{ id: number }>(
+      `insert into public.accounting_entries
+        (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,
+         created_by_id,company_id,previous_entry_id)
+       values($1,$2,$3,$4,$5,'draft','bank_reconciliation_void',$6,$7,$7,$8,$9,$10)
+       returning id`,
+      [
+        reversalNumber,
+        entry.journal_id,
+        entry.date,
+        entry.ref,
+        `Reversal: ${entry.description ?? entry.entry_number}`.slice(0,200),
+        mutationId,
+        debit,
+        actor.email,
+        mutation.company_id,
+        entry.id,
+      ],
+    );
+    const reversalId = reversalInsert.rows[0]?.id;
+    if (!reversalId) throw new Error("Reversal journal gagal dibuat.");
+
+    for (const line of lineResult.rows) {
+      await client.query(
+        `insert into public.accounting_entry_lines(entry_id,account_id,debit,credit,description)
+         values($1,$2,$3,$4,$5)`,
+        [reversalId,line.account_id,Number(line.credit||0),Number(line.debit||0),`Reversal: ${line.description ?? ""}`.slice(0,200)],
+      );
+    }
+    await client.query(
+      `update public.accounting_entries set status='posted',posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'`,
+      [reversalId],
+    );
+    await client.query(
+      `update public.accounting_entries
+          set status='voided',void_entry_id=$2,voided_at=now(),voided_by=$3,void_reason=$4,is_voided=true
+        where id=$1 and status='posted'`,
+      [entry.id,reversalId,actor.email,reason],
+    );
+    await client.query(
+      `update public.bank_mutations
+          set status='void',reconciliation_status='voided',accounting_posted=false,
+              review_code='JOURNAL_REVERSED',review_reason=$2,updated_at=now()
+        where id=$1`,
+      [mutationId,reason],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'JOURNAL_VOIDED',$2,$3::jsonb)`,
+      [mutationId,actor.email,JSON.stringify({ original_journal_entry_id:entry.id,void_entry_id:reversalId,reason,contract:"bank-reconciliation-reversal-v1" })],
+    );
+    await client.query("commit");
+    res.json({ ok: true, void_entry_id: reversalId, idempotent: false });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) {
+      res.status(error.status).json({ error:error.message, code:error.code??null, ...(error.details?{details:error.details}:{}) });
+      return;
+    }
+    req.log.error({ error, mutationId }, "Bank reconciliation journal reversal failed");
+    res.status(503).json({ error: "Reverse journal gagal", code: "BANK_RECONCILIATION_REVERSAL_FAILED" });
+  } finally {
+    client.release();
+  }
+});
+
 router.all("/bank-reconciliation/unsupported-standalone-action", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
