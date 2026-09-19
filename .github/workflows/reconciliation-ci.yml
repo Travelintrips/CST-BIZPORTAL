@@ -30,6 +30,6 @@ jobs:
       - name: API typecheck
         run: pnpm --filter @workspace/api-server run typecheck
       - name: Source integrity regression
-        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/bank-reconciliation-source-integrity.test.ts src/__tests__/bank-reconciliation-rule-ai.test.ts src/__tests__/bank-reconciliation-button-contract.test.ts src/__tests__/bank-reconciliation-rule-ai-autopost.test.ts src/__tests__/recon-classification-rule-api.test.ts src/__tests__/companies-router-auth-scope.test.ts src/__tests__/bank-reconciliation-qris-date-cast.test.ts src/__tests__/bank-reconciliation-canonical-posting.test.ts src/__tests__/bank-reconciliation-date-serialization.test.ts
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/bank-reconciliation-source-integrity.test.ts src/__tests__/bank-reconciliation-rule-ai.test.ts src/__tests__/bank-reconciliation-button-contract.test.ts src/__tests__/bank-reconciliation-rule-ai-autopost.test.ts src/__tests__/recon-classification-rule-api.test.ts src/__tests__/companies-router-auth-scope.test.ts src/__tests__/bank-reconciliation-qris-date-cast.test.ts src/__tests__/bank-reconciliation-canonical-posting.test.ts src/__tests__/bank-reconciliation-date-serialization.test.ts src/__tests__/bank-reconciliation-qris-group-gross.test.ts
       - name: API build
         run: pnpm --filter @workspace/api-server run build
