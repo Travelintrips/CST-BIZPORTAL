@@ -87,12 +87,15 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).not.toContain("vendor_invoices.amount_paid");
   });
 
-  it("repairs a missing approved match only from one deterministic source-qualified candidate", () => {
+  it("repairs one source-qualified candidate or accepts a governed direct-bank allocation", () => {
     expect(source).toContain("APPROVED_MATCH_REPAIRED");
     expect(source).toContain("candidate_source is not null");
     expect(source).toContain("status in ('candidate','matched','selected')");
     expect(source).toContain('entry?.source !== "bank_reconciliation"');
-    expect(source).toContain("recoverableMatch.rows.length !== 1");
+    expect(source).toContain("recoverableMatch.rows.length > 1");
+    expect(source).toContain("governedDirectAllocation");
+    expect(source).toContain("meta->>'manual_coa_override'");
+    expect(source).toContain("nullif(meta->>'journal_entry_id','')::bigint=$2");
   });
 
   it("allows approved draft cancellation only while the linked journal is still draft", () => {
