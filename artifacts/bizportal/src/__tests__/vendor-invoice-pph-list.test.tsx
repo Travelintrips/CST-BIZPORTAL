@@ -65,6 +65,7 @@ describe("Vendor Invoice AP PPh list presentation", () => {
             journalStatus: "posted",
             withholdingTaxAmount: 537045.92,
             withholdingTaxType: "PPh 23",
+            pphPaidAmount: 137045.92,
             invoiceBreakdown: {
               totals: {
                 withholding_tax_amount: 537045.92,
@@ -104,8 +105,13 @@ describe("Vendor Invoice AP PPh list presentation", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("PPh 23")).toBeTruthy();
-    expect(screen.getByText((value) => value.includes("537.046"))).toBeTruthy();
+    expect(await screen.findByText("PPh Total")).toBeTruthy();
+    expect(screen.getByText("PPh Terbayar")).toBeTruthy();
+    expect(screen.getByText("PPh Belum Dibayar")).toBeTruthy();
+    expect(screen.getByText((value) => value.includes("PPh 23:") && value.includes("537.046"))).toBeTruthy();
+    expect(screen.getByText((value) => value.includes("137.046"))).toBeTruthy();
+    expect(screen.getByText((value) => value.includes("400.000"))).toBeTruthy();
+    expect(screen.getByText("Harus dibayar")).toBeTruthy();
     expect(screen.getByText((value) => value.includes("26.315.250"))).toBeTruthy();
   });
 });
