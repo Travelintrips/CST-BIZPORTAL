@@ -1960,7 +1960,7 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
           and company_id=$2
           and (
             (source='bank_reconciliation' and source_id=$3)
-            or $4::text = 'SOURCE_JOURNAL_REUSED'
+            or $4::text in ('SOURCE_JOURNAL_REUSED','SOURCE_JOURNAL_RECLASSIFIED')
           )
         limit 1`,
       [mutation.journal_entry_id, mutation.company_id, mutationId, mutation.review_code],
@@ -2138,6 +2138,9 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
       );
     }
 
+    const sourceOwnedReclassification =
+      approvedMatch?.candidate_type === "sport_payment"
+      || approvedMatch?.candidate_type === "tenant_invoice";
     const result = await postBankMutationCanonical(
       client,
       mutationId,
@@ -2145,8 +2148,12 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
       approvedMatch?.id ?? null,
       actor,
       {
-        reason: "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",
-        review_code: "CANONICAL_POSTED",
+        reason: sourceOwnedReclassification
+          ? "Reklasifikasi akun penerimaan jurnal sumber ke rekening bank mutasi."
+          : "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",
+        review_code: sourceOwnedReclassification
+          ? "SOURCE_JOURNAL_RECLASSIFIED"
+          : "CANONICAL_POSTED",
         trigger: "manual-post",
       },
     );
