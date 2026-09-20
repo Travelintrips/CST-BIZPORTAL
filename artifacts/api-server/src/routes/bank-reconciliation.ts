@@ -1432,16 +1432,40 @@ async function approveCanonicalSettlementLink(
   actor: ApprovalActor,
   idempotencyKey: string | null,
 ): Promise<Record<string, unknown>> {
-  const mutationResult = await client.query<{ id: number; status: string; company_id: number | null; journal_entry_id: number | null }>(
-    `select id,status,company_id,journal_entry_id from public.bank_mutations where id=$1 for update`,
+  const mutationResult = await client.query<{
+    id: number;
+    status: string;
+    amount: string;
+    direction: string;
+    transaction_date: string;
+    company_id: number | null;
+    bank_account_id: string | number | null;
+    journal_entry_id: number | null;
+  }>(
+    `select id,status,amount,direction,transaction_date::text as transaction_date,
+            company_id,bank_account_id,journal_entry_id
+       from public.bank_mutations
+      where id=$1
+      for update`,
     [mutationId],
   );
   const mutation = mutationResult.rows[0];
   if (!mutation || mutation.company_id == null) throw new ApprovalError("Mutasi tidak ditemukan atau tidak memiliki company.", 404, "NOT_FOUND");
   if (actor.companyId != null && actor.companyId !== mutation.company_id) throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
 
-  const batchResult = await client.query<{ id: number; status: string; bank_mutation_id: number | null; settlement_journal_id: number | null }>(
-    `select id,status::text as status,bank_mutation_id,settlement_journal_id
+  const batchResult = await client.query<{
+    id: number;
+    company_id: number;
+    bank_account_id: string | null;
+    settlement_date: string;
+    net_amount: string;
+    status: string;
+    bank_mutation_id: number | null;
+    canonical_bank_mutation_id: number | null;
+    settlement_journal_id: number | null;
+  }>(
+    `select id,company_id,bank_account_id,settlement_date::text as settlement_date,net_amount,
+            status::text as status,bank_mutation_id,canonical_bank_mutation_id,settlement_journal_id
        from sport_center.payment_settlement_batches
       where id=$1 and company_id=$2
       for update`,
@@ -1449,27 +1473,124 @@ async function approveCanonicalSettlementLink(
   );
   const batch = batchResult.rows[0];
   if (!batch) throw new ApprovalError("Settlement canonical tidak ditemukan.", 409, "STALE_CANDIDATE");
-  if (batch.status === "reconciled" && batch.bank_mutation_id === mutationId) {
+  if (String(mutation.direction ?? "").toUpperCase() !== "IN") {
+    throw new ApprovalError("Settlement QRIS canonical hanya dapat ditautkan ke mutasi IN.", 422, "INVALID_DIRECTION");
+  }
+
+  const settlementStatus = String(batch.status ?? "").toLowerCase();
+  const linkedMutationId = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  const mutationAmount = Number(mutation.amount);
+  const settlementAmount = Number(batch.net_amount);
+  const amountMatches =
+    Number.isFinite(mutationAmount)
+    && Number.isFinite(settlementAmount)
+    && Math.abs(mutationAmount - settlementAmount) <= 0.01;
+  const dateMatches = calendarDateValue(mutation.transaction_date) === calendarDateValue(batch.settlement_date);
+  if (
+    batch.company_id !== mutation.company_id
+    || !amountMatches
+    || !dateMatches
+    || !["posted", "reconciled"].includes(settlementStatus)
+  ) {
+    throw new ApprovalError(
+      "Settlement canonical tidak memenuhi company/tanggal/net amount/status mutasi.",
+      409,
+      "CANONICAL_SETTLEMENT_EVIDENCE_INVALID",
+      {
+        mutation_amount: mutationAmount,
+        settlement_net_amount: settlementAmount,
+        mutation_date: mutation.transaction_date,
+        settlement_date: batch.settlement_date,
+        settlement_status: batch.status,
+      },
+    );
+  }
+  if (linkedMutationId != null && linkedMutationId !== mutationId) {
+    throw new ApprovalError("Settlement sudah digunakan oleh mutasi bank lain.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
+  }
+
+  const bankAccountResult = await client.query<{ id: number; account_number: string | null }>(
+    `select id,account_number
+       from public.company_bank_accounts
+      where company_id=$1
+        and coalesce(is_active,true)=true
+        and (
+          id::text=$2
+          or account_number::text=$2
+          or regexp_replace(coalesce(account_number, ''), '[^0-9]', '', 'g') =
+             regexp_replace($2, '[^0-9]', '', 'g')
+        )
+      order by case when id::text=$2 then 0 else 1 end,id
+      limit 1`,
+    [mutation.company_id, mutation.bank_account_id == null ? "" : String(mutation.bank_account_id)],
+  );
+  const bankAccount = bankAccountResult.rows[0];
+  const normalizeBankAccountNumber = (value: unknown): string => String(value ?? "").replace(/[^0-9]/g, "");
+  const mutationBankNumber = normalizeBankAccountNumber(bankAccount?.account_number);
+  const settlementBankNumber = normalizeBankAccountNumber(batch.bank_account_id);
+  if (!bankAccount || !mutationBankNumber || !settlementBankNumber || mutationBankNumber !== settlementBankNumber) {
+    throw new ApprovalError("Rekening settlement dan rekening mutasi tidak sama.", 409, "CANONICAL_SETTLEMENT_BANK_MISMATCH");
+  }
+
+  if (mutation.journal_entry_id != null) {
+    throw new ApprovalError(
+      "Mutasi QRIS canonical memiliki generic bank journal; canonical link diblokir sampai journal drift diperbaiki.",
+      409,
+      "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
+    );
+  }
+
+  if (settlementStatus === "reconciled" && linkedMutationId === mutationId) {
     return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: true };
   }
-  if (batch.status !== "posted" || batch.bank_mutation_id != null || batch.settlement_journal_id == null) {
+  if (settlementStatus !== "posted" || linkedMutationId != null || batch.settlement_journal_id == null) {
     throw new ApprovalError("Settlement canonical tidak lagi eligible untuk reconciliation.", 409, "CANONICAL_SETTLEMENT_NOT_ELIGIBLE");
   }
 
-  const journalResult = await client.query<{ status: string; journal_type: string; is_reversal: boolean }>(
-    `select status,journal_type::text as journal_type,is_reversal
+  const journalResult = await client.query<{ status: string; company_id: number | null; journal_type: string; is_reversal: boolean }>(
+    `select status,company_id,journal_type::text as journal_type,is_reversal
        from sport_center.accounting_journals
       where id=$1 for update`,
     [batch.settlement_journal_id],
   );
   const journal = journalResult.rows[0];
-  if (!journal || journal.status !== "posted" || journal.journal_type !== "settlement" || journal.is_reversal) {
+  if (
+    !journal
+    || journal.status !== "posted"
+    || journal.company_id !== mutation.company_id
+    || journal.journal_type !== "settlement"
+    || journal.is_reversal
+  ) {
     throw new ApprovalError("Jurnal settlement canonical tidak valid atau belum posted.", 409, "CANONICAL_SETTLEMENT_JOURNAL_INVALID");
+  }
+
+  const invalidPayment = await client.query<{ id: number }>(
+    `select item.payment_id as id
+       from sport_center.payment_settlement_items item
+       join sport_center.sport_payments payment on payment.id=item.payment_id
+      where item.settlement_id=$1
+        and item.item_status='active'
+        and (
+          lower(coalesce(payment.status::text,'')) <> 'confirmed'
+          or lower(coalesce(payment.payment_method::text,'')) not like '%qris%'
+        )
+      limit 1
+      for update of item,payment`,
+    [settlementId],
+  );
+  const itemCount = await client.query<{ count: string }>(
+    `select count(*)::text as count
+       from sport_center.payment_settlement_items
+      where settlement_id=$1 and item_status='active'`,
+    [settlementId],
+  );
+  if (Number(itemCount.rows[0]?.count ?? 0) < 1 || invalidPayment.rows[0]) {
+    throw new ApprovalError("Payment settlement tidak seluruhnya QRIS confirmed aktif.", 409, "CANONICAL_SETTLEMENT_PAYMENT_INVALID");
   }
 
   const otherMutationLink = await client.query<{ id: number }>(
     `select id from sport_center.payment_settlement_batches
-      where bank_mutation_id=$1 and id<>$2 limit 1 for update`,
+      where (bank_mutation_id=$1 or canonical_bank_mutation_id=$1) and id<>$2 limit 1 for update`,
     [mutationId, settlementId],
   );
   if (otherMutationLink.rows[0]) throw new ApprovalError("Mutasi sudah tertaut ke settlement canonical lain.", 409, "CONFLICT");
