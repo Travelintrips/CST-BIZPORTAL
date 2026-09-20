@@ -54,6 +54,13 @@ function visibleActionableCandidates(mutation: MutationFixture): CandidateFixtur
   return mutation.candidates;
 }
 
+function detailCandidates(mutation: MutationFixture): CandidateFixture[] {
+  const approved = mutation.candidates.filter(candidate =>
+    ["approved", "posted"].includes(candidate.status.toLowerCase()),
+  );
+  return approved.length > 0 ? approved : visibleActionableCandidates(mutation);
+}
+
 function isCanonicalApprovalEligible(mutation: MutationFixture): boolean {
   const canonicalCandidates = visibleActionableCandidates(mutation).filter(
     item =>
@@ -162,6 +169,22 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
   });
 
+  it("keeps the approved match visible as read-only detail evidence", () => {
+    const approvedCandidate: CandidateFixture = {
+      ...canonicalCandidate,
+      status: "approved",
+      settlement_status: "reconciled",
+    };
+    const mutation: MutationFixture = {
+      status: "approved",
+      has_approved_match: true,
+      candidates: [approvedCandidate],
+      canonicalSettlementStatus: "reconciled",
+    };
+
+    expect(visibleActionableCandidates(mutation)).toEqual([]);
+    expect(detailCandidates(mutation)).toEqual([approvedCandidate]);
+  });
   it("keeps a clean posted canonical candidate eligible", () => {
     const mutation: MutationFixture = {
       status: "matched",
@@ -225,6 +248,10 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain("function hasApprovedReconciliationMatch");
     expect(componentSource).toContain("m.has_approved_match === true");
     expect(componentSource).toContain("if (hasApprovedReconciliationMatch(m)) return [];");
+    expect(componentSource).toContain("function detailCandidates(m: BankMutation): Candidate[]");
+    expect(componentSource).toContain("const cands = detailCandidates(m);");
+    expect(componentSource).toContain("const candidate = detailCandidates(m)[0];");
+    expect(componentSource).toContain("Journal Settlement Canonical #");
     expect(componentSource).toContain(
       "if (m.status === \"matched\" && hasApprovedReconciliationMatch(m)) return \"Perlu Diperiksa\";",
     );
