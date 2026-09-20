@@ -2876,6 +2876,73 @@ const mutationListColumns = `
        and entry.status = 'posted'
   ) as posted_coa_accounts,
   (
+    select coalesce(
+      json_agg(
+        json_build_object(
+          'code', source_coa.code,
+          'name', source_coa.name,
+          'debit', source_line.debit,
+          'credit', source_line.credit
+        )
+        order by source_line.id
+      ),
+      '[]'::json
+    )
+      from public.accounting_entry_lines source_line
+      join public.accounting_entries source_entry
+        on source_entry.id = source_line.entry_id
+      left join public.chart_of_accounts source_coa
+        on source_coa.id = source_line.account_id
+     where source_line.entry_id = (
+       select candidate_entry.id
+         from public.accounting_entries candidate_entry
+        where candidate_entry.company_id = bm.company_id
+          and candidate_entry.status = 'posted'
+          and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+          and (
+            (
+              bm.linked_transaction_type = 'sport_payment'
+              and (
+                candidate_entry.source_payment_id = bm.linked_transaction_id
+                or (
+                  candidate_entry.source::text in ('sport_center_payment','sport_center_booking','sport_center_membership')
+                  and candidate_entry.source_id = bm.linked_transaction_id
+                )
+              )
+            )
+            or (
+              bm.linked_transaction_type = 'tenant_invoice'
+              and candidate_entry.source::text = 'tenant_rent_payment'
+              and candidate_entry.source_id in (
+                bm.linked_transaction_id,
+                coalesce(
+                  (
+                    select nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '')::integer
+                      from public.tenant_payments tp
+                     where tp.id = bm.linked_transaction_id
+                       and tp.company_id = bm.company_id
+                     limit 1
+                  ),
+                  bm.linked_transaction_id
+                )
+              )
+            )
+          )
+        order by
+          case
+            when bm.linked_transaction_type = 'sport_payment'
+             and candidate_entry.source_payment_id = bm.linked_transaction_id then 0
+            when bm.linked_transaction_type = 'tenant_invoice'
+             and candidate_entry.source_id = bm.linked_transaction_id then 0
+            else 1
+          end,
+          candidate_entry.id desc
+        limit 1
+     )
+       and source_entry.company_id = bm.company_id
+       and source_entry.status = 'posted'
+  ) as source_posted_coa_accounts,
+  (
     select coalesce(json_agg(json_build_object(
       'id', match.id,
       'mutation_id', match.mutation_id,
