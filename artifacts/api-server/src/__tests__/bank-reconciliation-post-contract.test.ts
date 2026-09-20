@@ -82,6 +82,24 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("&& !realCandidate");
   });
 
+  it("does not diagnose a voided or non-posted linked journal as resolved", () => {
+    expect(api).toContain("journal?.status === 'posted'");
+    expect(api).toContain("linkedJournalNotPosted");
+    expect(api).toContain("LINKED_JOURNAL_NOT_POSTED");
+    expect(api).toContain("journalStatus: journal?.status ?? null");
+  });
+
+  it("projects source-owned journal lines and shows the final accounting effect", () => {
+    expect(api).toContain("as source_posted_coa_accounts");
+    expect(api).toContain("bm.linked_transaction_type = 'sport_payment'");
+    expect(api).toContain("candidate_entry.source_payment_id = bm.linked_transaction_id");
+    expect(api).toContain("source_journal_id: sourceReceiptJournal?.entryId ?? null");
+    expect(api).toContain("linked_transaction_type = $5");
+    expect(ui).toContain("finalPostedCoaAccounts");
+    expect(ui).toContain("Hasil akuntansi final");
+    expect(ui).toContain("jurnal rekonsiliasi hanya memindahkan saldo ke rekening bank aktual");
+  });
+
   it("projects the actual posted journal COA lines into the mutation list", () => {
     expect(api).toContain("as journal_status");
     expect(api).toContain("as posted_coa_accounts");
@@ -89,6 +107,6 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("entry.company_id = bm.company_id");
     expect(ui).toContain("Diposting ke akun COA");
     expect(ui).toContain('const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;');
-    expect(ui).toContain("· {side} {idr(amount)}");
+    expect(ui).toContain("· {side} {idr(accountAmount)}");
   });
 });

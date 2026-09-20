@@ -1126,9 +1126,11 @@ async function finalizeSourceJournalReuse(
             posted_at = coalesce(posted_at, now()),
             review_code = 'SOURCE_JOURNAL_REUSED',
             review_reason = 'Bank mutation linked to existing posted source journal; duplicate accounting entry suppressed',
+            linked_transaction_type = $5,
+            linked_transaction_id = $6,
             updated_at = now()
       where id = $1 and company_id = $4`,
-    [mutationId, sourceJournal.entryId, actor.email, companyId],
+    [mutationId, sourceJournal.entryId, actor.email, companyId, candidateType, candidateId],
   );
 
   await client.query(
@@ -1860,9 +1862,18 @@ async function approveBankMutation(
             journal_entry_id = $1,
             approved_by = $2,
             approved_at = now(),
+            linked_transaction_type = case when $4::boolean then $5 else linked_transaction_type end,
+            linked_transaction_id = case when $4::boolean then $6 else linked_transaction_id end,
             updated_at = now()
       where id = $3`,
-    [entryId, actor.email, mutationId],
+    [
+      entryId,
+      actor.email,
+      mutationId,
+      sourceReceiptJournal != null,
+      sourceReceiptJournal ? selectedCandidateType : null,
+      sourceReceiptJournal ? selectedCandidateId : null,
+    ],
   );
 
   if (matchId != null) {
@@ -1922,6 +1933,8 @@ async function approveBankMutation(
         direction,
         note,
         manual_coa_override: manualCoaCode != null,
+        source_journal_id: sourceReceiptJournal?.entryId ?? null,
+        source_journal_number: sourceReceiptJournal?.entryNumber ?? null,
         idempotency_key: idempotencyKey,
       }),
     ],
@@ -2329,8 +2342,16 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
       ).catch(() => ({ rows: [] as any[] }));
       journal = journalResult.rows[0] ?? null;
     }
-    const resolved = mutation.status === 'posted' && mutation.journal_entry_id != null && journal != null;
+    const resolved =
+      mutation.status === 'posted'
+      && mutation.journal_entry_id != null
+      && journal?.status === 'posted';
     const staleJournal = mutation.journal_entry_id != null && journal == null;
+    const linkedJournalNotPosted =
+      mutation.journal_entry_id != null
+      && journal != null
+      && journal.status !== 'posted';
+    const developerActionRequired = staleJournal || linkedJournalNotPosted;
     const diagnosis = {
       mutation: {
         id: mutation.id, companyId: mutation.company_id, status: mutation.status,
@@ -2344,18 +2365,36 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
         status: match.status, matchScore: match.match_score, matchReason: match.match_reason,
       } : null,
       journal,
-      disposition: resolved ? 'resolved' : staleJournal ? 'developer_action_required' : 'auto_repair',
-      code: resolved ? 'RECONCILIATION_RESOLVED' : staleJournal ? 'STALE_JOURNAL_REFERENCE' : 'REMATCH_REQUIRED',
-      title: resolved ? 'Rekonsiliasi sudah selesai' : staleJournal ? 'Referensi jurnal stale' : 'Evaluasi ulang Rule AI',
-      reason: resolved ? 'Mutasi dan jurnal sudah final.' : staleJournal ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.' : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
+      disposition: resolved ? 'resolved' : developerActionRequired ? 'developer_action_required' : 'auto_repair',
+      code: resolved
+        ? 'RECONCILIATION_RESOLVED'
+        : staleJournal
+          ? 'STALE_JOURNAL_REFERENCE'
+          : linkedJournalNotPosted
+            ? 'LINKED_JOURNAL_NOT_POSTED'
+            : 'REMATCH_REQUIRED',
+      title: resolved
+        ? 'Rekonsiliasi sudah selesai'
+        : staleJournal
+          ? 'Referensi jurnal stale'
+          : linkedJournalNotPosted
+            ? 'Jurnal tertaut tidak berstatus posted'
+            : 'Evaluasi ulang Rule AI',
+      reason: resolved
+        ? 'Mutasi dan jurnal sudah final.'
+        : staleJournal
+          ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.'
+          : linkedJournalNotPosted
+            ? `Mutasi menunjuk jurnal berstatus "${journal.status}", sehingga tidak boleh dianggap sudah terposting.`
+            : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
       records: [
         { table: 'public.bank_mutations', id: mutation.id, role: 'mutation' },
         ...(match ? [{ table: 'public.bank_reconciliation_matches', id: match.id, role: 'match' }] : []),
         ...(journal ? [{ table: 'public.accounting_entries', id: journal.id, role: 'journal' }] : []),
       ],
       sql: null,
-      autoRepair: resolved || staleJournal ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
-      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, matchStatus: match?.status ?? null }, after: null },
+      autoRepair: resolved || developerActionRequired ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
+      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, journalStatus: journal?.status ?? null, matchStatus: match?.status ?? null }, after: null },
     };
     res.json({ ok: true, diagnosis });
   } finally { client.release(); }
@@ -2836,6 +2875,73 @@ const mutationListColumns = `
        and entry.company_id = bm.company_id
        and entry.status = 'posted'
   ) as posted_coa_accounts,
+  (
+    select coalesce(
+      json_agg(
+        json_build_object(
+          'code', source_coa.code,
+          'name', source_coa.name,
+          'debit', source_line.debit,
+          'credit', source_line.credit
+        )
+        order by source_line.id
+      ),
+      '[]'::json
+    )
+      from public.accounting_entry_lines source_line
+      join public.accounting_entries source_entry
+        on source_entry.id = source_line.entry_id
+      left join public.chart_of_accounts source_coa
+        on source_coa.id = source_line.account_id
+     where source_line.entry_id = (
+       select candidate_entry.id
+         from public.accounting_entries candidate_entry
+        where candidate_entry.company_id = bm.company_id
+          and candidate_entry.status = 'posted'
+          and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+          and (
+            (
+              bm.linked_transaction_type = 'sport_payment'
+              and (
+                candidate_entry.source_payment_id = bm.linked_transaction_id
+                or (
+                  candidate_entry.source::text in ('sport_center_payment','sport_center_booking','sport_center_membership')
+                  and candidate_entry.source_id = bm.linked_transaction_id
+                )
+              )
+            )
+            or (
+              bm.linked_transaction_type = 'tenant_invoice'
+              and candidate_entry.source::text = 'tenant_rent_payment'
+              and candidate_entry.source_id in (
+                bm.linked_transaction_id,
+                coalesce(
+                  (
+                    select nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '')::integer
+                      from public.tenant_payments tp
+                     where tp.id = bm.linked_transaction_id
+                       and tp.company_id = bm.company_id
+                     limit 1
+                  ),
+                  bm.linked_transaction_id
+                )
+              )
+            )
+          )
+        order by
+          case
+            when bm.linked_transaction_type = 'sport_payment'
+             and candidate_entry.source_payment_id = bm.linked_transaction_id then 0
+            when bm.linked_transaction_type = 'tenant_invoice'
+             and candidate_entry.source_id = bm.linked_transaction_id then 0
+            else 1
+          end,
+          candidate_entry.id desc
+        limit 1
+     )
+       and source_entry.company_id = bm.company_id
+       and source_entry.status = 'posted'
+  ) as source_posted_coa_accounts,
   (
     select coalesce(json_agg(json_build_object(
       'id', match.id,
