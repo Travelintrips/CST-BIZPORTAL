@@ -64,21 +64,21 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 const TYPE_HREFS: Record<string, (orderId: number | null) => string> = {
-  logistic:        (id) => id ? `/bizportal/logistics/portal-orders/${id}` : "/bizportal/logistics/portal-orders",
-  logistic_status: (id) => id ? `/bizportal/logistics/portal-orders/${id}` : "/bizportal/logistics/portal-orders",
-  portal_sales:    () => "/bizportal/logistics/portal-orders",
-  sales_update:    (id) => id ? `/bizportal/sales/documents/${id}` : "/bizportal/sales/documents",
-  sales_new:       (id) => id ? `/bizportal/sales/documents/${id}` : "/bizportal/sales/documents",
-  freight_new:     (id) => id ? `/bizportal/logistics/freight/${id}` : "/bizportal/logistics/freight",
-  freight_status:  (id) => id ? `/bizportal/logistics/freight/${id}` : "/bizportal/logistics/freight",
-  freight_stage:   (id) => id ? `/bizportal/logistics/freight/${id}` : "/bizportal/logistics/freight",
-  ecommerce:       () => "/bizportal/ecommerce",
-  product:         () => "/bizportal/portal-product-orders",
-  purchase_rfq:       (id) => id ? `/bizportal/purchase/documents/${id}` : "/bizportal/purchase/documents",
-  purchase_po:        (id) => id ? `/bizportal/purchase/documents/${id}` : "/bizportal/purchase/documents",
-  vendor_quote:       (id) => id ? `/bizportal/logistics/portal-orders/${id}` : "/bizportal/logistics/portal-orders",
-  vendor_po_accepted: (id) => id ? `/bizportal/purchase/orders/${id}` : "/bizportal/purchase/orders",
-  vendor_product_submitted: () => "/bizportal/purchase/vendor-catalog-engine",
+  logistic:        (id) => id ? `/logistics/portal-orders/${id}` : "/logistics/portal-orders",
+  logistic_status: (id) => id ? `/logistics/portal-orders/${id}` : "/logistics/portal-orders",
+  portal_sales:    () => "/logistics/portal-orders",
+  sales_update:    (id) => id ? `/sales/documents/${id}` : "/sales/documents",
+  sales_new:       (id) => id ? `/sales/documents/${id}` : "/sales/documents",
+  freight_new:     (id) => id ? `/logistics/freight/${id}` : "/logistics/freight",
+  freight_status:  (id) => id ? `/logistics/freight/${id}` : "/logistics/freight",
+  freight_stage:   (id) => id ? `/logistics/freight/${id}` : "/logistics/freight",
+  ecommerce:       () => "/ecommerce",
+  product:         () => "/portal-product-orders",
+  purchase_rfq:       (id) => id ? `/purchase/documents/${id}` : "/purchase/documents",
+  purchase_po:        (id) => id ? `/purchase/documents/${id}` : "/purchase/documents",
+  vendor_quote:       (id) => id ? `/logistics/portal-orders/${id}` : "/logistics/portal-orders",
+  vendor_po_accepted: (id) => id ? `/purchase/orders/${id}` : "/purchase/orders",
+  vendor_product_submitted: () => "/purchase/vendor-catalog-engine",
 };
 
 function TypeIcon({ type }: { type: string }) {
@@ -507,7 +507,7 @@ export default function NotificationsPage() {
             <div className="divide-y divide-border">
               {data.map((n) => {
                 const isUnread = !n.read_at;
-                const href = TYPE_HREFS[n.type]?.(n.order_id) ?? "/bizportal";
+                const href = TYPE_HREFS[n.type]?.(n.order_id) ?? "/";
                 const colorCls = TYPE_COLORS[n.type] ?? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
                 const desc = notifDesc(n);
                 return (
