@@ -1,5 +1,5 @@
 import path from "node:path";
-import { cp, mkdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -29,5 +29,18 @@ await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });
 await cp(apiDist, outputDir, { recursive: true });
 await cp(webDist, path.join(outputDir, "public"), { recursive: true });
+
+await writeFile(
+  path.join(outputDir, "index.js"),
+  [
+    '"use strict";',
+    'import("./index.mjs").catch((error) => {',
+    '  console.error(error);',
+    '  process.exit(1);',
+    '});',
+    "",
+  ].join("\n"),
+  "utf8",
+);
 
 console.log("Prepared Hostinger production bundle in ./dist");
