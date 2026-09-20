@@ -14,7 +14,7 @@ const ui = readFileSync(
 describe("bank reconciliation post contract", () => {
   it("exposes a mutation-scoped journal detail endpoint", () => {
     expect(api).toContain('router.get("/bank-reconciliation/:mutationId/journal-entry"');
-    expect(api).toContain("source='bank_reconciliation'");
+    expect(api).toContain("(source='bank_reconciliation' and source_id=$3)");
     expect(ui).toContain('/api/bank-reconciliation/${mutationId}/journal-entry');
   });
 
@@ -36,6 +36,28 @@ describe("bank reconciliation post contract", () => {
   it("does not label manual canonical posting as Rule AI", () => {
     expect(api).toContain('String(meta.review_code ?? "CANONICAL_POSTED")');
     expect(api).toContain("review_code: 'RULE_AI_AUTO_POSTED'");
+  });
+
+  it("never defaults Sport Center or tenant source-owned receipts to AR", () => {
+    expect(api).toContain('type === "sport_payment" || type === "tenant_invoice"');
+    expect(api).toContain("fallback otomatis ke Piutang Usaha dinonaktifkan");
+    expect(api).toContain("resolvePostedSourceReceiptJournal(");
+    expect(api).toContain("SOURCE_JOURNAL_REQUIRED");
+    expect(api).toContain("SOURCE_OWNED_COA_OVERRIDE_BLOCKED");
+    expect(api).toContain("SOURCE_JOURNAL_REUSED");
+  });
+
+  it("reuses the source journal when the receipt account is already the actual bank", () => {
+    expect(api).toContain("sourceReceiptJournal.debitAccountId === bankCoaId");
+    expect(api).toContain("finalizeSourceJournalReuse(");
+    expect(api).toContain("source_journal_reused: true");
+    expect(ui).toContain("jurnal sumber direuse, tanpa jurnal duplikat");
+  });
+
+  it("reclassifies the source receipt account instead of crediting revenue or AR when bank differs", () => {
+    expect(api).toContain("sourceReceiptJournal.debitAccountId");
+    expect(api).toContain("Reklasifikasi penerimaan dari");
+    expect(api).toContain("&& !realCandidate");
   });
 
   it("projects the actual posted journal COA lines into the mutation list", () => {
