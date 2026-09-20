@@ -16,6 +16,10 @@ function occurrences(text: string, pattern: RegExp): number {
   return [...text.matchAll(pattern)].length;
 }
 
+function activeSource(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 describe("canonical API source integrity", () => {
   it.each(canonicalFiles)("$name has no stale whole-file block-comment wrapper", ({ text }) => {
     expect(text).not.toContain("export default router; /*\nimport ");
@@ -24,20 +28,20 @@ describe("canonical API source integrity", () => {
   });
 
   it("accounting router has one canonical router implementation", () => {
-    const text = canonicalFiles[0].text;
+    const text = activeSource(canonicalFiles[0].text);
     expect(occurrences(text, /const router: IRouter = Router\(\);/g)).toBe(1);
     expect(occurrences(text, /^export default router;\s*$/gm)).toBe(1);
   });
 
   it("bank sheet sync module has one top-level implementation", () => {
-    const text = canonicalFiles[1].text;
+    const text = activeSource(canonicalFiles[1].text);
     expect(occurrences(text, /^import crypto from "node:crypto";\s*$/gm)).toBe(1);
     expect(occurrences(text, /^export function parseAmount\(/gm)).toBe(1);
     expect(occurrences(text, /^export async function syncOneBankSheetConfig\(/gm)).toBe(1);
   });
 
   it("bank sheet sync test file has one test harness and no duplicate named cases", () => {
-    const text = canonicalFiles[2].text;
+    const text = activeSource(canonicalFiles[2].text);
     expect(occurrences(text, /^import \{ beforeEach, describe, expect, it, vi \} from "vitest";\s*$/gm)).toBe(1);
     expect(occurrences(text, /^import \{ parseAmount \} from "\.\/bank-sheet-sync";\s*$/gm)).toBe(1);
 

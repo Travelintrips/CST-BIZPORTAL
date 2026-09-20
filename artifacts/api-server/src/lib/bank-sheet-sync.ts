@@ -710,9 +710,9 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
-}
-import crypto from "node:crypto";
+  return summaries; // duplicate bank tail 1
+} // canonical bank-sheet block
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -1343,9 +1343,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 2
 }
-import crypto from "node:crypto";
+// end duplicate bank-sheet block 1
+*/
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -1976,9 +1978,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 3
 }
-import crypto from "node:crypto";
+// end duplicate bank-sheet block 2
+*/
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -2609,9 +2613,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 4
 }
-import crypto from "node:crypto";
+// end duplicate bank-sheet block 3
+*/
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -3242,9 +3248,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 5
 }
-import crypto from "node:crypto";
+// end duplicate bank-sheet block 4
+*/
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -3875,9 +3883,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 6
 }
-import crypto from "node:crypto";
+// end duplicate bank-sheet block 5
+*/
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -4508,9 +4518,11 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 7
 }
-import crypto from "node:crypto";
+*/
+// end duplicate bank-sheet block 6
+/* import crypto from "node:crypto";
 import { pool } from "@workspace/db";
 import {
   readSpreadsheetValues,
@@ -5141,5 +5153,6 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   for (const config of result.rows) {
     summaries.push({ label: config.label, ...(await syncConfig(config)) });
   }
-  return summaries;
+  return summaries; // duplicate bank tail 8
 }
+*/
