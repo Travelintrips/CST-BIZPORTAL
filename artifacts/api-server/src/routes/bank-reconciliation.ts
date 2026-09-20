@@ -1126,9 +1126,11 @@ async function finalizeSourceJournalReuse(
             posted_at = coalesce(posted_at, now()),
             review_code = 'SOURCE_JOURNAL_REUSED',
             review_reason = 'Bank mutation linked to existing posted source journal; duplicate accounting entry suppressed',
+            linked_transaction_type = $5,
+            linked_transaction_id = $6,
             updated_at = now()
       where id = $1 and company_id = $4`,
-    [mutationId, sourceJournal.entryId, actor.email, companyId],
+    [mutationId, sourceJournal.entryId, actor.email, companyId, candidateType, candidateId],
   );
 
   await client.query(
