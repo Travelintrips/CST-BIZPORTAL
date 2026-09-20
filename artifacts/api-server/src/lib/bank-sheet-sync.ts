@@ -532,7 +532,7 @@ async function syncConfig(config: SheetConfig): Promise<{
             where rule_match.mutation_id = bm.id
               and rule.target_coa_code is not null
               and lower(coalesce(rule_match.status, '')) in (
-                'candidate', 'approved', 'posted', 'reconciled', 'superseded'
+                'candidate', 'approved', 'posted', 'reconciled'
               )
             order by rule_match.id desc
             limit 1
@@ -550,8 +550,19 @@ async function syncConfig(config: SheetConfig): Promise<{
             limit 1
          ) contra on true
          left join lateral (
-           select line.account_code as coa_code,
-                  line.account_name as coa_name
+           select
+                  case
+                    when line.account_code = '1199'
+                     and lower(trim(coalesce(line.account_name, ''))) = 'payment clearing'
+                      then canonical_clearing.code
+                    else line.account_code
+                  end as coa_code,
+                  case
+                    when line.account_code = '1199'
+                     and lower(trim(coalesce(line.account_name, ''))) = 'payment clearing'
+                      then canonical_clearing.name
+                    else line.account_name
+                  end as coa_name
              from public.bank_reconciliation_matches match
              join sport_center.payment_settlement_batches batch
                on match.candidate_type = 'qris_settlement'
@@ -562,6 +573,19 @@ async function syncConfig(config: SheetConfig): Promise<{
               and journal.status::text = 'posted'
              join sport_center.accounting_journal_lines line
                on line.journal_id = journal.id
+             left join lateral (
+               select coa.code, coa.name
+                 from public.chart_of_accounts coa
+                where coa.company_id = bm.company_id
+                  and coa.code like '1-1024-%'
+                  and coa.name ilike 'Payment Clearing Sport Center / QRIS%'
+                  and coa.account_category = 'ASSET'
+                  and coa.is_active = true
+                  and coalesce(coa.is_header, false) = false
+                  and coalesce(coa.is_postable, true) = true
+                order by coa.id
+                limit 1
+             ) canonical_clearing on true
             where match.mutation_id = bm.id
               and lower(coalesce(match.status, '')) in ('approved', 'posted', 'reconciled')
               and batch.status::text in ('reconciled', 'settled', 'completed')

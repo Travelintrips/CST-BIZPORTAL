@@ -279,8 +279,8 @@ describe("Google Sheet bank mutation sync", () => {
       match_reason: "canonical settlement dibuat dari payment terpilih",
       match_status: "approved",
       match_result: "canonical settlement dibuat dari payment terpilih",
-      coa_code: "1199",
-      coa_name: "Payment Clearing",
+      coa_code: "1-1024-CST",
+      coa_name: "Payment Clearing Sport Center / QRIS CST",
     });
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
@@ -296,6 +296,10 @@ describe("Google Sheet bank mutation sync", () => {
     expect(sql).toContain("sport_center.payment_settlement_batches");
     expect(sql).toContain("sport_center.accounting_journal_lines");
     expect(sql).toContain("canonical_contra");
+    expect(sql).toContain("line.account_code = '1199'");
+    expect(sql).toContain("canonical_clearing.code");
+    expect(sql).toContain("coa.code like '1-1024-%'");
+    expect(sql).toContain("Payment Clearing Sport Center / QRIS%");
 
     const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
       range: string;
@@ -303,8 +307,8 @@ describe("Google Sheet bank mutation sync", () => {
     }>;
     expect(updates).toEqual(expect.arrayContaining([
       { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
-      { range: "'Mutasi Bank'!G2", values: [["1199"]] },
-      { range: "'Mutasi Bank'!H2", values: [["Payment Clearing"]] },
+      { range: "'Mutasi Bank'!G2", values: [["1-1024-CST"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Payment Clearing Sport Center / QRIS CST"]] },
       { range: "'Mutasi Bank'!I2", values: [["100"]] },
     ]));
   });
@@ -340,7 +344,8 @@ describe("Google Sheet bank mutation sync", () => {
     expect(sql).toContain("rule_match.candidate_type = 'recon_rule'");
     expect(sql).toContain("rule_match.candidate_source = 'public.recon_rules'");
     expect(sql).toContain("rule.target_coa_code");
-    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled', 'superseded'");
+    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled'");
+    expect(sql).not.toContain("'candidate', 'approved', 'posted', 'reconciled', 'superseded'");
     expect(sql).toContain("Rule AI COA:");
     expect(sql.indexOf("rule_classification.coa_code")).toBeLessThan(
       sql.indexOf("contra.coa_code"),
