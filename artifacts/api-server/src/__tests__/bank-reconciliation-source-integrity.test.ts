@@ -122,4 +122,34 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("match.candidate_type = 'qris_settlement' and match.candidate_source = 'sport_center.payment_settlement_batches'");
   });
 
+  it("revalidates canonical QRIS bank evidence before link-only approval", () => {
+    expect(source).toContain('String(mutation.direction ?? "").toUpperCase() !== "IN"');
+    expect(source).toContain("Math.abs(mutationAmount - settlementAmount) <= 0.01");
+    expect(source).toContain("calendarDateValue(mutation.transaction_date) === calendarDateValue(batch.settlement_date)");
+    expect(source).toContain("CANONICAL_SETTLEMENT_EVIDENCE_INVALID");
+    expect(source).toContain("from public.company_bank_accounts");
+    expect(source).toContain("CANONICAL_SETTLEMENT_BANK_MISMATCH");
+    expect(source).toContain("CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS");
+  });
+
+  it("requires active confirmed QRIS payments and a posted settlement journal", () => {
+    expect(source).toContain("from sport_center.payment_settlement_items item");
+    expect(source).toContain("join sport_center.sport_payments payment on payment.id=item.payment_id");
+    expect(source).toContain("payment.status::text");
+    expect(source).toContain("payment.payment_method::text");
+    expect(source).toContain("CANONICAL_SETTLEMENT_PAYMENT_INVALID");
+    expect(source).toContain("journal.company_id !== mutation.company_id");
+    expect(source).toContain('journal.journal_type !== "settlement"');
+    expect(source).toContain("journal.is_reversal");
+  });
+
+  it("keeps canonical QRIS link-only and does not restore legacy candidate storage", () => {
+    const canonicalStart = source.indexOf("async function approveCanonicalSettlementLink");
+    const approvalStart = source.indexOf("async function approveBankMutation", canonicalStart);
+    const canonicalBody = source.slice(canonicalStart, approvalStart);
+    expect(canonicalBody).toContain("journal_entry_id=null");
+    expect(canonicalBody).not.toContain("insert into public.accounting_entries");
+    expect(canonicalBody).not.toContain("qris_mutation_batch_candidates");
+    expect(source).not.toContain("qris_mutation_batch_candidates");
+  });
 });
