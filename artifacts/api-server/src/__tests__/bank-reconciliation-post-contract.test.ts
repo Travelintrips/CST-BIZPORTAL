@@ -132,4 +132,17 @@ describe("bank reconciliation post contract", () => {
     expect(ui).toContain("isCanonicalReconciled && finalPostedAccounts.length > 0");
     expect(ui).toContain('key={`qris-${account.code ?? "coa"}-${index}`}');
   });
+
+  it("keeps Sport Center settlement journals on canonical metadata and MDR COA", () => {
+    const migration = readFileSync(
+      fileURLToPath(new URL("../../../../scripts/sql/20260921_harden_settlement_journal_metadata_and_mdr.sql", import.meta.url)),
+      "utf8",
+    );
+    expect(migration).toContain("5-3050-CST");
+    expect(migration).toContain("MDR_EXPENSE_COA_NOT_FOUND_FOR_COMPANY");
+    expect(migration).toContain("settlement_reference = v_settlement.settlement_reference");
+    expect(migration).toContain("settlement_status = v_settlement.status::text");
+    expect(migration).toContain("mdr_amount = v_settlement.mdr_amount");
+    expect(migration).toContain("4d7994115d187c7a5fa4ecce6411d937");
+  });
 });
