@@ -908,7 +908,7 @@ function VendorMiniFormCard() {
             size="sm"
             variant="outline"
             className="gap-2 shrink-0"
-            onClick={() => { window.location.href = "/bizportal/purchase/vendor-forms"; }}
+            onClick={() => { window.location.href = "/purchase/vendor-forms"; }}
           >
             <Link2 className="h-4 w-4" />
             Buka Manajemen Mini Form
@@ -1650,7 +1650,7 @@ function WaTemplatesCard() {
               size="sm"
               variant="outline"
               className="gap-2"
-              onClick={() => { window.location.href = "/bizportal/settings/wa-templates"; }}
+              onClick={() => { window.location.href = "/settings/wa-templates"; }}
             >
               <MessageCircle className="h-4 w-4 text-green-500" />
               Buka WA Template Manager
@@ -1989,7 +1989,7 @@ function WaLogsCard() {
               </a>
             </Button>
             <Button size="sm" variant="default" className="gap-1.5 text-xs" asChild>
-              <a href="/bizportal/notification-history">
+              <a href="/notification-history">
                 <ExternalLink className="h-3.5 w-3.5" /> Halaman Penuh
               </a>
             </Button>
@@ -2722,7 +2722,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <a href="/bizportal/settings/product-templates">
+                <a href="/settings/product-templates">
                   <Button variant="outline" size="sm">
                     <Layers className="w-4 h-4 mr-2" /> Kelola Product Templates
                   </Button>
@@ -2743,7 +2743,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <a href="/bizportal/settings/document-templates">
+                <a href="/settings/document-templates">
                   <Button variant="outline" size="sm">
                     <FileText className="w-4 h-4 mr-2" /> Kelola Template Dokumen
                   </Button>
@@ -2764,7 +2764,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <a href="/bizportal/settings/trucking-rates">
+                <a href="/settings/trucking-rates">
                   <Button variant="outline" size="sm">
                     <Truck className="w-4 h-4 mr-2 text-orange-500" /> Kelola Tarif Kendaraan
                   </Button>
@@ -2785,7 +2785,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <a href="/bizportal/settings/vehicle-images">
+                <a href="/settings/vehicle-images">
                   <Button variant="outline" size="sm">
                     <Truck className="w-4 h-4 mr-2 text-blue-500" /> Kelola Gambar Armada
                   </Button>
@@ -2805,7 +2805,7 @@ export default function SettingsPage() {
                   <p className="font-medium text-foreground">Replit Auth</p>
                   <p className="text-sm text-muted-foreground">Your account is managed via Replit authentication.</p>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => { window.location.href = "/api/logout?redirect=/bizportal/"; }}>
+                <Button variant="outline" size="sm" onClick={() => { window.location.href = "/api/logout?redirect=/"; }}>
                   Sign Out
                 </Button>
               </div>

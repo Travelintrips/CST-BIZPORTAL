@@ -1131,7 +1131,7 @@ export default function TalanganPage() {
                             <CommandItem
                               value="__new_vendor__"
                               className="text-primary"
-                              onSelect={() => { setRecipientOpen(false); window.open("/bizportal/purchase/vendors", "_blank"); }}
+                              onSelect={() => { setRecipientOpen(false); window.open("/purchase/vendors", "_blank"); }}
                             >
                               <ExternalLink size={13} className="mr-2 shrink-0" />
                               Tambah vendor baru di master data…

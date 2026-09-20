@@ -38,7 +38,7 @@ function writeCache(u: AuthUser | null) {
 }
 
 function getBase(): string {
-  return (window as unknown as Record<string, string>).__BASE_PATH__ || import.meta.env.BASE_URL || "/bizportal/";
+  return (window as unknown as Record<string, string>).__BASE_PATH__ || import.meta.env.BASE_URL || "/";
 }
 
 function getOrigin(): string {

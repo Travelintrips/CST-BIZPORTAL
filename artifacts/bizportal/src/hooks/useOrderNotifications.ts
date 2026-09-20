@@ -67,7 +67,7 @@ function showBrowserNotification(notification: OrderNotification) {
   try {
     new Notification(title, {
       body,
-      icon: "/bizportal/icon-192.png",
+      icon: "/icon-192.png",
       tag: notification.id,
       requireInteraction: false,
     });
@@ -676,7 +676,7 @@ export function useOrderNotifications() {
             toast.warning(`⚠️ Geofence Alert: ${data.driverName}`, {
               description: `Menyimpang ${data.deviationKm.toFixed(1)} km dari rute · Job #${data.jobNumber}`,
               duration: 10_000,
-              action: { label: "Lihat", onClick: () => { window.location.href = "/bizportal/logistics/drivers"; } },
+              action: { label: "Lihat", onClick: () => { window.location.href = "/logistics/drivers"; } },
             });
           }
         } catch { }

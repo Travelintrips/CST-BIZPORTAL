@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 function getBase(): string {
-  return (window as unknown as Record<string, string>).__BASE_PATH__ || import.meta.env.BASE_URL || "/bizportal/";
+  return (window as unknown as Record<string, string>).__BASE_PATH__ || import.meta.env.BASE_URL || "/";
 }
 
 /**

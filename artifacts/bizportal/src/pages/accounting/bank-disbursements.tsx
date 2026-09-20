@@ -1108,7 +1108,7 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
           </span>
         </div>
         <a
-          href="/bizportal/purchase/vendor-invoices/import"
+          href="/purchase/vendor-invoices/import"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 self-start px-2 py-1 rounded-lg text-xs font-semibold"

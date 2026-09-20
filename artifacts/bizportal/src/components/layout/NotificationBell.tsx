@@ -149,7 +149,7 @@ export function NotificationBell() {
         duration: 8_000,
         action: {
           label: "Lihat",
-          onClick: () => { window.location.href = `/bizportal${orderHref(n)}`; },
+          onClick: () => { window.location.href = orderHref(n); },
         },
       });
     });
@@ -246,7 +246,7 @@ export function NotificationBell() {
             {geofenceAlerts.map((alert) => (
               <a
                 key={alert.id}
-                href="/bizportal/logistics/drivers"
+                href="/logistics/drivers"
                 className="flex gap-2.5 px-4 py-2.5 hover:bg-destructive/5 transition-colors border-b border-destructive/10 last:border-0 cursor-pointer"
               >
                 <AlertTriangle size={13} className="text-destructive shrink-0 mt-0.5" />
@@ -275,7 +275,7 @@ export function NotificationBell() {
               {notifications.map((n) => (
                 <a
                   key={n.id}
-                  href={`/bizportal${orderHref(n)}`}
+                  href={orderHref(n)}
                   className={`flex gap-3 px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer ${n.readAt === null ? "bg-blue-50/60 dark:bg-blue-950" : ""}`}
                 >
                   <div className="mt-0.5">{typeIcon(n.type)}</div>
@@ -310,7 +310,7 @@ export function NotificationBell() {
               Tandai semua dibaca
             </button>
             <a
-              href="/bizportal/notifications"
+              href="/notifications"
               className="text-xs text-indigo-500 hover:text-indigo-400 font-medium transition-colors"
             >
               Lihat semua →
@@ -320,7 +320,7 @@ export function NotificationBell() {
         {notifications.length === 0 && (
           <div className="border-t border-border px-4 py-2 text-right">
             <a
-              href="/bizportal/notifications"
+              href="/notifications"
               className="text-xs text-indigo-500 hover:text-indigo-400 font-medium transition-colors"
             >
               Lihat riwayat →

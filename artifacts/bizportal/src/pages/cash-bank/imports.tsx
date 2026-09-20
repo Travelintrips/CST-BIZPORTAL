@@ -43,7 +43,7 @@ export default function CashBankImports() {
             <RefreshCw size={14} className={`mr-1.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
           <Button asChild className="bg-orange-500 hover:bg-orange-600 text-white">
-            <a href="/bizportal/bank-mutation-import" target="_blank" rel="noopener noreferrer">
+            <a href="/bank-mutation-import" target="_blank" rel="noopener noreferrer">
               <Upload size={14} className="mr-1.5" /> Import Baru
               <ExternalLink size={12} className="ml-1.5" />
             </a>
