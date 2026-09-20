@@ -72,7 +72,7 @@ export default function CashBankReconciliation() {
             <RefreshCw size={14} className={`mr-1.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
           <Button asChild className="bg-orange-500 hover:bg-orange-600 text-white">
-            <a href="/bizportal/accounting/reconciliation" target="_blank" rel="noopener noreferrer">
+            <a href="/accounting/reconciliation" target="_blank" rel="noopener noreferrer">
               <GitMerge size={14} className="mr-1.5" /> Buka Engine Rekonsiliasi
               <ExternalLink size={12} className="ml-1.5" />
             </a>
