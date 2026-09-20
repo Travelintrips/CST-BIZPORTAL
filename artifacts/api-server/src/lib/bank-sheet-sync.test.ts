@@ -514,6 +514,12 @@ describe("Google Sheet bank mutation sync", () => {
       reconciliation_status: null,
       journal_entry_id: null,
       company_id: 42,
+      match_score: 100,
+      match_reason: "canonical settlement dibuat dari payment terpilih",
+      match_status: "approved",
+      match_result: "canonical settlement dibuat dari payment terpilih",
+      coa_code: "1-1024-CST",
+      coa_name: "Payment Clearing Sport Center / QRIS CST",
     });
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
@@ -603,6 +609,17 @@ describe("Google Sheet bank mutation sync", () => {
     ]);
 
     await syncOneBankSheetConfig(config.id);
+    const existingLookup = mocks.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("from public.bank_mutations bm"),
+    );
+    const sql = String(existingLookup?.[0] ?? "");
+    expect(sql).toContain("sport_center.payment_settlement_batches");
+    expect(sql).toContain("sport_center.accounting_journal_lines");
+    expect(sql).toContain("canonical_contra");
+    expect(sql).toContain("line.account_code = '1199'");
+    expect(sql).toContain("canonical_clearing.code");
+    expect(sql).toContain("coa.code like '1-1024-%'");
+    expect(sql).toContain("Payment Clearing Sport Center / QRIS%");
 
     const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
       range: string;
@@ -615,6 +632,9 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!I2", values: [["98"]] },
       { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
       { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
+      { range: "'Mutasi Bank'!G2", values: [["1-1024-CST"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Payment Clearing Sport Center / QRIS CST"]] },
+      { range: "'Mutasi Bank'!I2", values: [["100"]] },
     ]));
   });
 
@@ -967,6 +987,16 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!J2", values: [["Nominal dan vendor cocok"]] },
       { range: "'Mutasi Bank'!K2", values: [[expect.any(String)]] },
     ]));
+    expect(sql).toContain("rule_classification.coa_code");
+    expect(sql).toContain("rule_match.candidate_type = 'recon_rule'");
+    expect(sql).toContain("rule_match.candidate_source = 'public.recon_rules'");
+    expect(sql).toContain("rule.target_coa_code");
+    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled'");
+    expect(sql).not.toContain("'candidate', 'approved', 'posted', 'reconciled', 'superseded'");
+    expect(sql).toContain("Rule AI COA:");
+    expect(sql.indexOf("rule_classification.coa_code")).toBeLessThan(
+      sql.indexOf("contra.coa_code"),
+    );
   });
 
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {

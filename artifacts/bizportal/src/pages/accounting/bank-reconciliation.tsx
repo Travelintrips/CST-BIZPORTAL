@@ -718,6 +718,12 @@ interface BankMutation {
     debit?: number | string | null;
     credit?: number | string | null;
   }> | null;
+  source_posted_coa_accounts?: Array<{
+    code?: string | null;
+    name?: string | null;
+    debit?: number | string | null;
+    credit?: number | string | null;
+  }> | null;
   posted_at?: string | null;
   posted_by?: string | null;
   review_reason?: string | null;
@@ -986,6 +992,35 @@ const idr = (n: number | string) =>
 
 const idrWhole = (n: number | string) =>
   idr(Math.round(Number(n) || 0));
+
+type PostedCoaAccount = NonNullable<BankMutation["posted_coa_accounts"]>[number];
+
+function finalPostedCoaAccounts(mutation: BankMutation): PostedCoaAccount[] {
+  const posted = mutation.posted_coa_accounts ?? [];
+  const source = mutation.source_posted_coa_accounts ?? [];
+  if (mutation.review_code !== "SOURCE_JOURNAL_RECLASSIFIED" || source.length === 0) {
+    return posted;
+  }
+
+  const netByAccount = new Map<string, { code: string | null; name: string | null; net: number }>();
+  for (const account of [...source, ...posted]) {
+    const code = account.code ?? null;
+    const name = account.name ?? null;
+    const key = code || name || "unknown";
+    const current = netByAccount.get(key) ?? { code, name, net: 0 };
+    current.net += Number(account.debit ?? 0) - Number(account.credit ?? 0);
+    netByAccount.set(key, current);
+  }
+
+  return [...netByAccount.values()]
+    .filter(account => Math.abs(account.net) >= 0.005)
+    .map(account => ({
+      code: account.code,
+      name: account.name,
+      debit: account.net > 0 ? account.net : 0,
+      credit: account.net < 0 ? Math.abs(account.net) : 0,
+    }));
+}
 
 type QrisAmountComparison = NonNullable<
   NonNullable<QrisCandidateAudit["auto_post_details"]>["amountComparison"]
@@ -5577,6 +5612,10 @@ function MutationCard({
     ? candidateApprovalBlockReason(selectedCandidate)
     : null;
   const amount = Number(m.amount) || 0;
+  const finalPostedAccounts = finalPostedCoaAccounts(m);
+  const hasSourceJournalReclassification =
+    m.review_code === "SOURCE_JOURNAL_RECLASSIFIED"
+    && (m.source_posted_coa_accounts?.length ?? 0) > 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
   const hasApprovedMatch = hasApprovedReconciliationMatch(m);
@@ -5691,34 +5730,39 @@ function MutationCard({
                   {m.description}
                   {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
                 </div>
-                {m.status === "posted" && (m.posted_coa_accounts?.length ?? 0) > 0 && (
+                {m.status === "posted" && finalPostedAccounts.length > 0 && (
                   <div
-                     className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/90 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-50/90"
+                    className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/90 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-50/90"
                     onClick={e => e.stopPropagation()}
                   >
-                     <p className="font-semibold text-black dark:text-black">
-                      Diposting ke akun COA
+                    <p className="font-semibold text-black dark:text-black">
+                      {hasSourceJournalReclassification ? "Hasil akuntansi final" : "Diposting ke akun COA"}
                     </p>
-                     <div className="mt-1 space-y-1 text-black dark:text-black">
-                       {m.posted_coa_accounts!.map((account, index) => {
-                         const debit = Number(account.debit ?? 0);
-                         const credit = Number(account.credit ?? 0);
-                         const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;
-                         const amount = debit > 0 ? debit : credit;
-                         return (
-                           <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
-                             <span className="font-semibold">{account.code || "—"}</span>
-                             {" — "}
-                             {account.name || "Nama akun belum tersedia"}
-                             {side && amount > 0 && (
-                               <span className="ml-1 font-medium">
-                                 · {side} {idr(amount)}
-                               </span>
-                             )}
-                           </p>
-                         );
-                       })}
-                     </div>
+                    {hasSourceJournalReclassification && (
+                      <p className="mt-0.5 text-[10px] text-emerald-900 dark:text-emerald-900">
+                        Pendapatan berasal dari jurnal sumber Sport Center/Tenant; jurnal rekonsiliasi hanya memindahkan saldo ke rekening bank aktual.
+                      </p>
+                    )}
+                    <div className="mt-1 space-y-1 text-black dark:text-black">
+                      {finalPostedAccounts.map((account, index) => {
+                        const debit = Number(account.debit ?? 0);
+                        const credit = Number(account.credit ?? 0);
+                        const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;
+                        const accountAmount = debit > 0 ? debit : credit;
+                        return (
+                          <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
+                            <span className="font-semibold">{account.code || "—"}</span>
+                            {" — "}
+                            {account.name || "Nama akun belum tersedia"}
+                            {side && accountAmount > 0 && (
+                              <span className="ml-1 font-medium">
+                                · {side} {idr(accountAmount)}
+                              </span>
+                            )}
+                          </p>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

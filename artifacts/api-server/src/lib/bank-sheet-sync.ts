@@ -9975,6 +9975,40 @@ async function syncConfig(config: SheetConfig): Promise<{
             end, m.created_at desc nulls last, m.id desc
             limit 1
          ) matched on true
+         -- The Sheet COA column is a business classification, not the technical
+         -- contra account of a bank-to-bank/source-journal reclassification.
+         -- When Rule AI matched the mutation, its validated target COA therefore
+         -- takes precedence while the real Sport Center/payment candidate remains
+         -- the reconciliation evidence and keeps its own match score/reason.
+         left join lateral (
+           select rule.target_coa_code as coa_code,
+                  target_coa.name as coa_name
+             from public.bank_reconciliation_matches rule_match
+             join public.recon_rules rule
+               on rule_match.candidate_type = 'recon_rule'
+              and rule_match.candidate_source = 'public.recon_rules'
+              and rule.id = rule_match.candidate_id
+              and rule.company_id = bm.company_id
+              and rule.is_active = true
+             join lateral (
+               select coa.name
+                 from public.chart_of_accounts coa
+                where coa.code = rule.target_coa_code
+                  and (coa.company_id = bm.company_id or coa.company_id is null)
+                  and coalesce(coa.is_active, true) = true
+                  and coalesce(coa.is_header, false) = false
+                  and coalesce(coa.is_postable, true) = true
+                order by case when coa.company_id = bm.company_id then 0 else 1 end, coa.id
+                limit 1
+             ) target_coa on true
+            where rule_match.mutation_id = bm.id
+              and rule.target_coa_code is not null
+              and lower(coalesce(rule_match.status, '')) in (
+                'candidate', 'approved', 'posted', 'reconciled'
+              )
+            order by rule_match.id desc
+            limit 1
+         ) rule_classification on true
          left join lateral (
            select coa.code as coa_code, coa.name as coa_name
              from public.accounting_entry_lines line
@@ -9987,6 +10021,54 @@ async function syncConfig(config: SheetConfig): Promise<{
             order by line.id
             limit 1
          ) contra on true
+         left join lateral (
+           select
+                  case
+                    when line.account_code = '1199'
+                     and lower(trim(coalesce(line.account_name, ''))) = 'payment clearing'
+                      then canonical_clearing.code
+                    else line.account_code
+                  end as coa_code,
+                  case
+                    when line.account_code = '1199'
+                     and lower(trim(coalesce(line.account_name, ''))) = 'payment clearing'
+                      then canonical_clearing.name
+                    else line.account_name
+                  end as coa_name
+             from public.bank_reconciliation_matches match
+             join sport_center.payment_settlement_batches batch
+               on match.candidate_type = 'qris_settlement'
+              and match.candidate_source = 'sport_center.payment_settlement_batches'
+              and batch.id = match.candidate_id
+             join sport_center.accounting_journals journal
+               on journal.id = batch.settlement_journal_id
+              and journal.status::text = 'posted'
+             join sport_center.accounting_journal_lines line
+               on line.journal_id = journal.id
+             left join lateral (
+               select coa.code, coa.name
+                 from public.chart_of_accounts coa
+                where coa.company_id = bm.company_id
+                  and coa.code like '1-1024-%'
+                  and coa.name ilike 'Payment Clearing Sport Center / QRIS%'
+                  and coa.account_category = 'ASSET'
+                  and coa.is_active = true
+                  and coalesce(coa.is_header, false) = false
+                  and coalesce(coa.is_postable, true) = true
+                order by coa.id
+                limit 1
+             ) canonical_clearing on true
+            where match.mutation_id = bm.id
+              and lower(coalesce(match.status, '')) in ('approved', 'posted', 'reconciled')
+              and batch.status::text in ('reconciled', 'settled', 'completed')
+              and coalesce(batch.canonical_bank_mutation_id, batch.bank_mutation_id) = bm.id
+              and (
+                (upper(coalesce(bm.direction, '')) = 'IN' and lower(coalesce(line.line_type::text, '')) = 'credit')
+                or (upper(coalesce(bm.direction, '')) = 'OUT' and lower(coalesce(line.line_type::text, '')) = 'debit')
+              )
+            order by line.id
+            limit 1
+         ) canonical_contra on bm.journal_entry_id is null
         where bm.source = 'google_sheet'
           and bm.company_id is not distinct from $1
           and (bm.mutation_key = any($2::text[]) or bm.canonical_key = any($3::text[]))`,

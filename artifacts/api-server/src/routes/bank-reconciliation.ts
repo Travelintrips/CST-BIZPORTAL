@@ -1126,9 +1126,11 @@ async function finalizeSourceJournalReuse(
             posted_at = coalesce(posted_at, now()),
             review_code = 'SOURCE_JOURNAL_REUSED',
             review_reason = 'Bank mutation linked to existing posted source journal; duplicate accounting entry suppressed',
+            linked_transaction_type = $5,
+            linked_transaction_id = $6,
             updated_at = now()
       where id = $1 and company_id = $4`,
-    [mutationId, sourceJournal.entryId, actor.email, companyId],
+    [mutationId, sourceJournal.entryId, actor.email, companyId, candidateType, candidateId],
   );
 
   await client.query(
@@ -1430,16 +1432,40 @@ async function approveCanonicalSettlementLink(
   actor: ApprovalActor,
   idempotencyKey: string | null,
 ): Promise<Record<string, unknown>> {
-  const mutationResult = await client.query<{ id: number; status: string; company_id: number | null; journal_entry_id: number | null }>(
-    `select id,status,company_id,journal_entry_id from public.bank_mutations where id=$1 for update`,
+  const mutationResult = await client.query<{
+    id: number;
+    status: string;
+    amount: string;
+    direction: string;
+    transaction_date: string;
+    company_id: number | null;
+    bank_account_id: string | number | null;
+    journal_entry_id: number | null;
+  }>(
+    `select id,status,amount,direction,transaction_date::text as transaction_date,
+            company_id,bank_account_id,journal_entry_id
+       from public.bank_mutations
+      where id=$1
+      for update`,
     [mutationId],
   );
   const mutation = mutationResult.rows[0];
   if (!mutation || mutation.company_id == null) throw new ApprovalError("Mutasi tidak ditemukan atau tidak memiliki company.", 404, "NOT_FOUND");
   if (actor.companyId != null && actor.companyId !== mutation.company_id) throw new ApprovalError("Mutasi berada di perusahaan yang berbeda.", 403, "COMPANY_SCOPE_FORBIDDEN");
 
-  const batchResult = await client.query<{ id: number; status: string; bank_mutation_id: number | null; settlement_journal_id: number | null }>(
-    `select id,status::text as status,bank_mutation_id,settlement_journal_id
+  const batchResult = await client.query<{
+    id: number;
+    company_id: number;
+    bank_account_id: string | null;
+    settlement_date: string;
+    net_amount: string;
+    status: string;
+    bank_mutation_id: number | null;
+    canonical_bank_mutation_id: number | null;
+    settlement_journal_id: number | null;
+  }>(
+    `select id,company_id,bank_account_id,settlement_date::text as settlement_date,net_amount,
+            status::text as status,bank_mutation_id,canonical_bank_mutation_id,settlement_journal_id
        from sport_center.payment_settlement_batches
       where id=$1 and company_id=$2
       for update`,
@@ -1447,27 +1473,124 @@ async function approveCanonicalSettlementLink(
   );
   const batch = batchResult.rows[0];
   if (!batch) throw new ApprovalError("Settlement canonical tidak ditemukan.", 409, "STALE_CANDIDATE");
-  if (batch.status === "reconciled" && batch.bank_mutation_id === mutationId) {
+  if (String(mutation.direction ?? "").toUpperCase() !== "IN") {
+    throw new ApprovalError("Settlement QRIS canonical hanya dapat ditautkan ke mutasi IN.", 422, "INVALID_DIRECTION");
+  }
+
+  const settlementStatus = String(batch.status ?? "").toLowerCase();
+  const linkedMutationId = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  const mutationAmount = Number(mutation.amount);
+  const settlementAmount = Number(batch.net_amount);
+  const amountMatches =
+    Number.isFinite(mutationAmount)
+    && Number.isFinite(settlementAmount)
+    && Math.abs(mutationAmount - settlementAmount) <= 0.01;
+  const dateMatches = calendarDateValue(mutation.transaction_date) === calendarDateValue(batch.settlement_date);
+  if (
+    batch.company_id !== mutation.company_id
+    || !amountMatches
+    || !dateMatches
+    || !["posted", "reconciled"].includes(settlementStatus)
+  ) {
+    throw new ApprovalError(
+      "Settlement canonical tidak memenuhi company/tanggal/net amount/status mutasi.",
+      409,
+      "CANONICAL_SETTLEMENT_EVIDENCE_INVALID",
+      {
+        mutation_amount: mutationAmount,
+        settlement_net_amount: settlementAmount,
+        mutation_date: mutation.transaction_date,
+        settlement_date: batch.settlement_date,
+        settlement_status: batch.status,
+      },
+    );
+  }
+  if (linkedMutationId != null && linkedMutationId !== mutationId) {
+    throw new ApprovalError("Settlement sudah digunakan oleh mutasi bank lain.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
+  }
+
+  const bankAccountResult = await client.query<{ id: number; account_number: string | null }>(
+    `select id,account_number
+       from public.company_bank_accounts
+      where company_id=$1
+        and coalesce(is_active,true)=true
+        and (
+          id::text=$2
+          or account_number::text=$2
+          or regexp_replace(coalesce(account_number, ''), '[^0-9]', '', 'g') =
+             regexp_replace($2, '[^0-9]', '', 'g')
+        )
+      order by case when id::text=$2 then 0 else 1 end,id
+      limit 1`,
+    [mutation.company_id, mutation.bank_account_id == null ? "" : String(mutation.bank_account_id)],
+  );
+  const bankAccount = bankAccountResult.rows[0];
+  const normalizeBankAccountNumber = (value: unknown): string => String(value ?? "").replace(/[^0-9]/g, "");
+  const mutationBankNumber = normalizeBankAccountNumber(bankAccount?.account_number);
+  const settlementBankNumber = normalizeBankAccountNumber(batch.bank_account_id);
+  if (!bankAccount || !mutationBankNumber || !settlementBankNumber || mutationBankNumber !== settlementBankNumber) {
+    throw new ApprovalError("Rekening settlement dan rekening mutasi tidak sama.", 409, "CANONICAL_SETTLEMENT_BANK_MISMATCH");
+  }
+
+  if (mutation.journal_entry_id != null) {
+    throw new ApprovalError(
+      "Mutasi QRIS canonical memiliki generic bank journal; canonical link diblokir sampai journal drift diperbaiki.",
+      409,
+      "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
+    );
+  }
+
+  if (settlementStatus === "reconciled" && linkedMutationId === mutationId) {
     return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: true };
   }
-  if (batch.status !== "posted" || batch.bank_mutation_id != null || batch.settlement_journal_id == null) {
+  if (settlementStatus !== "posted" || linkedMutationId != null || batch.settlement_journal_id == null) {
     throw new ApprovalError("Settlement canonical tidak lagi eligible untuk reconciliation.", 409, "CANONICAL_SETTLEMENT_NOT_ELIGIBLE");
   }
 
-  const journalResult = await client.query<{ status: string; journal_type: string; is_reversal: boolean }>(
-    `select status,journal_type::text as journal_type,is_reversal
+  const journalResult = await client.query<{ status: string; company_id: number | null; journal_type: string; is_reversal: boolean }>(
+    `select status,company_id,journal_type::text as journal_type,is_reversal
        from sport_center.accounting_journals
       where id=$1 for update`,
     [batch.settlement_journal_id],
   );
   const journal = journalResult.rows[0];
-  if (!journal || journal.status !== "posted" || journal.journal_type !== "settlement" || journal.is_reversal) {
+  if (
+    !journal
+    || journal.status !== "posted"
+    || journal.company_id !== mutation.company_id
+    || journal.journal_type !== "settlement"
+    || journal.is_reversal
+  ) {
     throw new ApprovalError("Jurnal settlement canonical tidak valid atau belum posted.", 409, "CANONICAL_SETTLEMENT_JOURNAL_INVALID");
+  }
+
+  const invalidPayment = await client.query<{ id: number }>(
+    `select item.payment_id as id
+       from sport_center.payment_settlement_items item
+       join sport_center.sport_payments payment on payment.id=item.payment_id
+      where item.settlement_id=$1
+        and item.item_status='active'
+        and (
+          lower(coalesce(payment.status::text,'')) <> 'confirmed'
+          or lower(coalesce(payment.payment_method::text,'')) not like '%qris%'
+        )
+      limit 1
+      for update of item,payment`,
+    [settlementId],
+  );
+  const itemCount = await client.query<{ count: string }>(
+    `select count(*)::text as count
+       from sport_center.payment_settlement_items
+      where settlement_id=$1 and item_status='active'`,
+    [settlementId],
+  );
+  if (Number(itemCount.rows[0]?.count ?? 0) < 1 || invalidPayment.rows[0]) {
+    throw new ApprovalError("Payment settlement tidak seluruhnya QRIS confirmed aktif.", 409, "CANONICAL_SETTLEMENT_PAYMENT_INVALID");
   }
 
   const otherMutationLink = await client.query<{ id: number }>(
     `select id from sport_center.payment_settlement_batches
-      where bank_mutation_id=$1 and id<>$2 limit 1 for update`,
+      where (bank_mutation_id=$1 or canonical_bank_mutation_id=$1) and id<>$2 limit 1 for update`,
     [mutationId, settlementId],
   );
   if (otherMutationLink.rows[0]) throw new ApprovalError("Mutasi sudah tertaut ke settlement canonical lain.", 409, "CONFLICT");
@@ -1860,9 +1983,18 @@ async function approveBankMutation(
             journal_entry_id = $1,
             approved_by = $2,
             approved_at = now(),
+            linked_transaction_type = case when $4::boolean then $5 else linked_transaction_type end,
+            linked_transaction_id = case when $4::boolean then $6 else linked_transaction_id end,
             updated_at = now()
       where id = $3`,
-    [entryId, actor.email, mutationId],
+    [
+      entryId,
+      actor.email,
+      mutationId,
+      sourceReceiptJournal != null,
+      sourceReceiptJournal ? selectedCandidateType : null,
+      sourceReceiptJournal ? selectedCandidateId : null,
+    ],
   );
 
   if (matchId != null) {
@@ -1922,6 +2054,8 @@ async function approveBankMutation(
         direction,
         note,
         manual_coa_override: manualCoaCode != null,
+        source_journal_id: sourceReceiptJournal?.entryId ?? null,
+        source_journal_number: sourceReceiptJournal?.entryNumber ?? null,
         idempotency_key: idempotencyKey,
       }),
     ],
@@ -2329,8 +2463,16 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
       ).catch(() => ({ rows: [] as any[] }));
       journal = journalResult.rows[0] ?? null;
     }
-    const resolved = mutation.status === 'posted' && mutation.journal_entry_id != null && journal != null;
+    const resolved =
+      mutation.status === 'posted'
+      && mutation.journal_entry_id != null
+      && journal?.status === 'posted';
     const staleJournal = mutation.journal_entry_id != null && journal == null;
+    const linkedJournalNotPosted =
+      mutation.journal_entry_id != null
+      && journal != null
+      && journal.status !== 'posted';
+    const developerActionRequired = staleJournal || linkedJournalNotPosted;
     const diagnosis = {
       mutation: {
         id: mutation.id, companyId: mutation.company_id, status: mutation.status,
@@ -2344,18 +2486,36 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
         status: match.status, matchScore: match.match_score, matchReason: match.match_reason,
       } : null,
       journal,
-      disposition: resolved ? 'resolved' : staleJournal ? 'developer_action_required' : 'auto_repair',
-      code: resolved ? 'RECONCILIATION_RESOLVED' : staleJournal ? 'STALE_JOURNAL_REFERENCE' : 'REMATCH_REQUIRED',
-      title: resolved ? 'Rekonsiliasi sudah selesai' : staleJournal ? 'Referensi jurnal stale' : 'Evaluasi ulang Rule AI',
-      reason: resolved ? 'Mutasi dan jurnal sudah final.' : staleJournal ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.' : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
+      disposition: resolved ? 'resolved' : developerActionRequired ? 'developer_action_required' : 'auto_repair',
+      code: resolved
+        ? 'RECONCILIATION_RESOLVED'
+        : staleJournal
+          ? 'STALE_JOURNAL_REFERENCE'
+          : linkedJournalNotPosted
+            ? 'LINKED_JOURNAL_NOT_POSTED'
+            : 'REMATCH_REQUIRED',
+      title: resolved
+        ? 'Rekonsiliasi sudah selesai'
+        : staleJournal
+          ? 'Referensi jurnal stale'
+          : linkedJournalNotPosted
+            ? 'Jurnal tertaut tidak berstatus posted'
+            : 'Evaluasi ulang Rule AI',
+      reason: resolved
+        ? 'Mutasi dan jurnal sudah final.'
+        : staleJournal
+          ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.'
+          : linkedJournalNotPosted
+            ? `Mutasi menunjuk jurnal berstatus "${journal.status}", sehingga tidak boleh dianggap sudah terposting.`
+            : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
       records: [
         { table: 'public.bank_mutations', id: mutation.id, role: 'mutation' },
         ...(match ? [{ table: 'public.bank_reconciliation_matches', id: match.id, role: 'match' }] : []),
         ...(journal ? [{ table: 'public.accounting_entries', id: journal.id, role: 'journal' }] : []),
       ],
       sql: null,
-      autoRepair: resolved || staleJournal ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
-      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, matchStatus: match?.status ?? null }, after: null },
+      autoRepair: resolved || developerActionRequired ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
+      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, journalStatus: journal?.status ?? null, matchStatus: match?.status ?? null }, after: null },
     };
     res.json({ ok: true, diagnosis });
   } finally { client.release(); }
@@ -2836,6 +2996,73 @@ const mutationListColumns = `
        and entry.company_id = bm.company_id
        and entry.status = 'posted'
   ) as posted_coa_accounts,
+  (
+    select coalesce(
+      json_agg(
+        json_build_object(
+          'code', source_coa.code,
+          'name', source_coa.name,
+          'debit', source_line.debit,
+          'credit', source_line.credit
+        )
+        order by source_line.id
+      ),
+      '[]'::json
+    )
+      from public.accounting_entry_lines source_line
+      join public.accounting_entries source_entry
+        on source_entry.id = source_line.entry_id
+      left join public.chart_of_accounts source_coa
+        on source_coa.id = source_line.account_id
+     where source_line.entry_id = (
+       select candidate_entry.id
+         from public.accounting_entries candidate_entry
+        where candidate_entry.company_id = bm.company_id
+          and candidate_entry.status = 'posted'
+          and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+          and (
+            (
+              bm.linked_transaction_type = 'sport_payment'
+              and (
+                candidate_entry.source_payment_id = bm.linked_transaction_id
+                or (
+                  candidate_entry.source::text in ('sport_center_payment','sport_center_booking','sport_center_membership')
+                  and candidate_entry.source_id = bm.linked_transaction_id
+                )
+              )
+            )
+            or (
+              bm.linked_transaction_type = 'tenant_invoice'
+              and candidate_entry.source::text = 'tenant_rent_payment'
+              and candidate_entry.source_id in (
+                bm.linked_transaction_id,
+                coalesce(
+                  (
+                    select nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '')::integer
+                      from public.tenant_payments tp
+                     where tp.id = bm.linked_transaction_id
+                       and tp.company_id = bm.company_id
+                     limit 1
+                  ),
+                  bm.linked_transaction_id
+                )
+              )
+            )
+          )
+        order by
+          case
+            when bm.linked_transaction_type = 'sport_payment'
+             and candidate_entry.source_payment_id = bm.linked_transaction_id then 0
+            when bm.linked_transaction_type = 'tenant_invoice'
+             and candidate_entry.source_id = bm.linked_transaction_id then 0
+            else 1
+          end,
+          candidate_entry.id desc
+        limit 1
+     )
+       and source_entry.company_id = bm.company_id
+       and source_entry.status = 'posted'
+  ) as source_posted_coa_accounts,
   (
     select coalesce(json_agg(json_build_object(
       'id', match.id,
