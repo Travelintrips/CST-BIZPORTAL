@@ -26,6 +26,13 @@ router.patch("/recon-classification/ai-rules/:id",async(req,res)=>{
   const q=await pool.query(`update public.recon_rules set name=$3,description=$4,priority=$5,direction=$6,bank_account_id=$7,condition_field=$8,condition_operator=$9,condition_value=$10,target_type=$11,target_id=$12,target_coa_code=$13,confidence_score=$14,stop_processing=$15,conditions_json=$16::jsonb,logic=$17,specificity=$18,amount_tolerance=$19,reference_amount=$20,requires_document_upload=$21,tax_type=$22,candidate_requirement=$23,updated_at=now() where id=$1 and company_id=$2 returning *`,[id,cid,b.name,b.description??null,b.priority??50,b.direction??null,b.bank_account_id??null,b.condition_field,b.condition_operator,b.condition_value,b.target_type??null,b.target_id??null,b.action_coa_code??b.target_coa_code??null,conf,b.stop_processing??true,JSON.stringify(b.conditions??[]),b.logic??"AND",b.specificity??1,b.amount_tolerance??0,b.reference_amount??null,!!b.requires_document_upload,b.tax_type??"none",b.candidate_requirement??"not_required"]);
   if(!q.rowCount){res.status(404).json({error:"Rule tidak ditemukan"});return;} res.json({data:mapRule(q.rows[0])});
 });
+router.post("/recon-classification/ai-rules/:id/activate",async(req,res)=>{
+  const cid=companyId(req),id=Number(req.params.id);
+  if(!cid||!Number.isSafeInteger(id)){res.status(400).json({error:"ID/company tidak valid"});return;}
+  const q=await pool.query("update public.recon_rules set is_active=true,updated_at=now() where id=$1 and company_id=$2 returning id,is_active",[id,cid]);
+  if(!q.rowCount){res.status(404).json({error:"Rule tidak ditemukan"});return;}
+  res.json({ok:true,data:q.rows[0]});
+});
 router.delete("/recon-classification/ai-rules/:id",async(req,res)=>{
   const cid=companyId(req),id=Number(req.params.id);if(!cid||!Number.isSafeInteger(id)){res.status(400).json({error:"ID/company tidak valid"});return;}
   const q=await pool.query("update public.recon_rules set is_active=false,updated_at=now() where id=$1 and company_id=$2 returning id",[id,cid]);if(!q.rowCount){res.status(404).json({error:"Rule tidak ditemukan"});return;}res.json({ok:true});
