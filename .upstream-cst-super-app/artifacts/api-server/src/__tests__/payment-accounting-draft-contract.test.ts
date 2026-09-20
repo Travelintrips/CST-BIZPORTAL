@@ -98,19 +98,31 @@ describe("Sport Center payment accounting draft contract", () => {
     );
   });
 
-  it("preserves payment, tax, account, journal, and validation behavior", () => {
+  it("uses canonical company-scoped COA classifications for every payment path", () => {
     expect(ownerFunction).toContain("v_dpp := ROUND(");
     expect(ownerFunction).toContain("v_tax := v_gross - v_dpp");
-    expect(ownerFunction).toContain("'PAYMENT_CLEARING'");
-    expect(ownerFunction).toContain("'CASH'");
-    expect(ownerFunction).toContain("'BANK_RECEIPT'");
+    expect(ownerFunction).toContain("'1-1024-CST'");
+    expect(ownerFunction).toContain("'1-1010-CST'");
+    expect(ownerFunction).toContain("'1-1023-CST'");
+    expect(ownerFunction).toContain("'4-1016-CST'");
+    expect(ownerFunction).toContain("'4-1017-CST'");
+    expect(ownerFunction).toContain("'4-1022-CST'");
+    expect(ownerFunction).toContain("'2-1020-CST'");
+    expect(ownerFunction).toContain(
+      "lower(coalesce(v_payment_provider, '')) NOT IN ('', 'unknown', 'manual')",
+    );
+    expect(ownerFunction).toContain("v_payment.source_membership_payment_id IS NOT NULL");
+    expect(ownerFunction).toContain("revenue_booking.booking_type = 'event'");
+    expect(ownerFunction).not.toContain("'PAYMENT_CLEARING'");
+    expect(ownerFunction).not.toContain("'BANK_RECEIPT'");
+    expect(ownerFunction).not.toContain("'REVENUE'");
+    expect(ownerFunction).not.toContain("'PPN_OUTPUT'");
+    expect(ownerFunction).not.toContain("OR v_payment_provider IS NOT NULL");
     expect(ownerFunction).toContain(
       "sport_center.resolve_internal_bank_account_id(\n                    v_company_id,\n                    v_payment.bank_account_id::text",
     );
     expect(ownerFunction).toContain("INSERT INTO sport_center.accounting_journals");
     expect(ownerFunction).toContain("INSERT INTO sport_center.accounting_journal_lines");
-    expect(ownerFunction).toContain("'REVENUE'");
-    expect(ownerFunction).toContain("'PPN_OUTPUT'");
     expect(ownerFunction).toContain("IF v_tax > 0 THEN");
     expect(ownerFunction).toContain("sport_center.validate_accounting_journal");
     expect(ownerFunction).toContain("RETURN v_journal_id");

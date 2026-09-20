@@ -1732,10 +1732,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
         v_debit_account_code text;
         v_debit_account_name text;
-        v_revenue_account_code text := 'REVENUE';
-        v_revenue_account_name text := 'Pendapatan Sport Center';
-        v_tax_account_code text := 'PPN_OUTPUT';
-        v_tax_account_name text := 'PPN Keluaran';
+        v_revenue_account_code text := '4-1017-CST';
+        v_revenue_account_name text := 'Pendapatan Booking Sport Center CST';
+        v_tax_account_code text := '2-1020-CST';
+        v_tax_account_name text := 'PPN Keluaran CST';
 
         v_payment_method text;
         v_payment_provider text;
@@ -2038,42 +2038,52 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
 
         -- --------------------------------------------------------
-        -- IMPORTANT ACCOUNTING RULE
+        -- CANONICAL ACCOUNTING CLASSIFICATION
         --
-        -- Payment provider / QRIS is NOT bank settlement yet.
-        -- Use Payment Clearing first.
+        -- Product decides revenue:
+        -- membership -> membership revenue, event -> event revenue,
+        -- otherwise regular Sport Center booking revenue.
         --
-        -- Direct cash / bank-transfer can use cash/bank account.
+        -- Receipt decides debit:
+        -- QRIS/provider settlement -> Payment Clearing;
+        -- cash -> Kas Besar; direct transfer -> Bank Mandiri Ciputat.
+        -- Provider placeholders such as unknown/manual are NOT QRIS evidence.
         -- --------------------------------------------------------
 
-        IF lower(v_payment_method) LIKE '%qris%'
-           OR v_payment_provider IS NOT NULL
+        IF v_payment.source_membership_payment_id IS NOT NULL
+           OR lower(coalesce(v_payment.payment_channel::text, '')) = 'membership'
         THEN
+            v_revenue_account_code := '4-1016-CST';
+            v_revenue_account_name := 'Pendapatan Membership Sport Center CST';
+        ELSIF EXISTS (
+            SELECT 1
+              FROM sport_center.sport_bookings revenue_booking
+             WHERE revenue_booking.id = v_booking_id
+               AND revenue_booking.booking_type = 'event'
+        ) THEN
+            v_revenue_account_code := '4-1022-CST';
+            v_revenue_account_name := 'Pendapatan Booking Event Sport Center CST';
+        ELSE
+            v_revenue_account_code := '4-1017-CST';
+            v_revenue_account_name := 'Pendapatan Booking Sport Center CST';
+        END IF;
 
-            v_debit_account_code :=
-                'PAYMENT_CLEARING';
+        v_tax_account_code := '2-1020-CST';
+        v_tax_account_name := 'PPN Keluaran CST';
 
-            v_debit_account_name :=
-                'Payment Clearing';
-
+        IF lower(v_payment_method) LIKE '%qris%'
+           OR lower(coalesce(v_payment_provider, '')) NOT IN ('', 'unknown', 'manual')
+        THEN
+            v_debit_account_code := '1-1024-CST';
+            v_debit_account_name := 'Payment Clearing Sport Center / QRIS CST';
         ELSIF lower(v_payment_method) LIKE '%cash%'
            OR lower(v_payment_method) LIKE '%tunai%'
         THEN
-
-            v_debit_account_code :=
-                'CASH';
-
-            v_debit_account_name :=
-                'Kas';
-
+            v_debit_account_code := '1-1010-CST';
+            v_debit_account_name := 'Kas Besar CST';
         ELSE
-
-            v_debit_account_code :=
-                'BANK_RECEIPT';
-
-            v_debit_account_name :=
-                'Bank / Kas Masuk';
-
+            v_debit_account_code := '1-1023-CST';
+            v_debit_account_name := 'Bank Mandiri Ciputat';
         END IF;
 
 

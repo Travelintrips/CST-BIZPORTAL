@@ -1,9 +1,9 @@
 -- Patch sport_center.create_payment_accounting_draft_owner idempotency.
 --
 -- This migration intentionally changes only the function definition. It does
--- not update, delete, or repair historical journals. The function source is
--- read from pg_proc so every existing tax/COA/QRIS clearing branch remains
--- byte-for-byte intact outside the two idempotency guards below.
+-- not update, delete, or repair historical journals. Besides the idempotency
+-- guards, it canonicalizes the function's COA classification so future retries
+-- cannot restore legacy symbolic codes or classify provider=unknown as QRIS.
 
 BEGIN;
 
@@ -238,6 +238,58 @@ BEGIN
     IF strpos(v_definition, 'v_reversed_canonical_journal_found') = 0 THEN
         RAISE EXCEPTION
             'PAYMENT_ACCOUNTING_DRAFT_OWNER_PUBLIC_IDEMPOTENCY_MARKER_NOT_FOUND';
+    END IF;
+
+    -- Canonical COA classification. These replacements are deliberately
+    -- marker-driven and fail closed if the expected legacy source changes.
+    IF strpos(v_definition, 'v_revenue_account_code text := ''REVENUE'';') = 0
+       OR strpos(v_definition, 'OR v_payment_provider IS NOT NULL') = 0
+       OR strpos(v_definition, '''PAYMENT_CLEARING''') = 0
+    THEN
+        RAISE EXCEPTION
+            'PAYMENT_ACCOUNTING_DRAFT_OWNER_CANONICAL_MARKERS_NOT_FOUND';
+    END IF;
+
+    v_definition := replace(
+        v_definition,
+        'v_revenue_account_code text := ''REVENUE'';',
+        'v_revenue_account_code text := ''4-1017-CST'';'
+    );
+    v_definition := replace(
+        v_definition,
+        'v_revenue_account_name text := ''Pendapatan Sport Center'';',
+        'v_revenue_account_name text := ''Pendapatan Booking Sport Center CST'';'
+    );
+    v_definition := replace(
+        v_definition,
+        'v_tax_account_code text := ''PPN_OUTPUT'';',
+        'v_tax_account_code text := ''2-1020-CST'';'
+    );
+    v_definition := replace(
+        v_definition,
+        'v_tax_account_name text := ''PPN Keluaran'';',
+        'v_tax_account_name text := ''PPN Keluaran CST'';'
+    );
+    v_definition := replace(
+        v_definition,
+        'OR v_payment_provider IS NOT NULL',
+        'OR lower(coalesce(v_payment_provider, '''')) NOT IN ('''', ''unknown'', ''manual'')'
+    );
+    v_definition := replace(v_definition, '''PAYMENT_CLEARING''', '''1-1024-CST''');
+    v_definition := replace(v_definition, '''Payment Clearing''', '''Payment Clearing Sport Center / QRIS CST''');
+    v_definition := replace(v_definition, '''CASH''', '''1-1010-CST''');
+    v_definition := replace(v_definition, '''Kas''', '''Kas Besar CST''');
+    v_definition := replace(v_definition, '''BANK_RECEIPT''', '''1-1023-CST''');
+    v_definition := replace(v_definition, '''Bank / Kas Masuk''', '''Bank Mandiri Ciputat''');
+
+    IF strpos(v_definition, '''REVENUE''') > 0
+       OR strpos(v_definition, '''PPN_OUTPUT''') > 0
+       OR strpos(v_definition, '''PAYMENT_CLEARING''') > 0
+       OR strpos(v_definition, '''BANK_RECEIPT''') > 0
+       OR strpos(v_definition, 'OR v_payment_provider IS NOT NULL') > 0
+    THEN
+        RAISE EXCEPTION
+            'PAYMENT_ACCOUNTING_DRAFT_OWNER_LEGACY_COA_MARKERS_REMAIN';
     END IF;
 
     EXECUTE v_definition;
