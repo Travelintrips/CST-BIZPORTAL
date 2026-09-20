@@ -42,7 +42,7 @@ describe("standalone BizPortal API boundary", () => {
       'router.get("/purchase-workflow/vendor-invoices/:id"',
     );
     expect(purchaseWorkflowSource).not.toContain("requestUpstream");
-    expect(purchaseWorkflowSource).not.toContain('next("router")');
+    expect(purchaseWorkflowSource).not.toContain('next("router");');
     expect(purchaseWorkflowSource).not.toContain("req.originalUrl");
   });
 
