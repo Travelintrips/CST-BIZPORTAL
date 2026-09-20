@@ -3934,6 +3934,50 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
   });
 });
 
+router.get("/bank-reconciliation/mutations/:mutationId", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) {
+    res.status(400).json({ error: "ID mutasi tidak valid" });
+    return;
+  }
+
+  try {
+    const values: unknown[] = [mutationId];
+    const filters = ["bm.id = $1"];
+    if (actor.companyId != null) {
+      values.push(actor.companyId);
+      filters.push(`bm.company_id = ${values.length}`);
+    }
+
+    const result = await pool.query(
+      `select ${mutationListColumns}
+         from public.bank_mutations bm
+        where ${filters.join(" and ")}
+        limit 1`,
+      values,
+    );
+    const rows = result.rows as MutationCandidateRow[];
+    await hydrateMutationCandidateDetails(rows);
+    const mutation = rows[0];
+    if (!mutation) {
+      res.status(404).json({ error: "Mutasi tidak ditemukan" });
+      return;
+    }
+    res.json({ mutation });
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Failed to load bank mutation detail");
+    res.status(503).json({
+      error: "Detail mutasi bank tidak dapat dimuat",
+      code: "BANK_RECONCILIATION_DETAIL_UNAVAILABLE",
+    });
+  }
+});
 router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => {
   try {
     const { where, values } = buildMutationFilters(req);
