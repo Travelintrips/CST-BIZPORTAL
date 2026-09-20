@@ -252,6 +252,9 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain("const cands = detailCandidates(m);");
     expect(componentSource).toContain("const candidate = detailCandidates(m)[0];");
     expect(componentSource).toContain("Journal Settlement Canonical #");
+    expect(componentSource).toContain("function canonicalSettlementIsPostedForMutation");
+    expect(componentSource).toContain('if (canonicalSettlementIsPostedForMutation(m)) return STATUS_LABELS.posted;');
+    expect(componentSource).toContain("getLifecycleIndex(lifecycleStatus(m))");
     expect(componentSource).toContain(
       "if (m.status === \"matched\" && hasApprovedReconciliationMatch(m)) return \"Perlu Diperiksa\";",
     );
