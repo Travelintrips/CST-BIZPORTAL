@@ -15,11 +15,13 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+const host = process.env["HOST"]?.trim() || "0.0.0.0";
 
-  logger.info({ port }, "Server listening");
+const server = app.listen(port, host, () => {
+  logger.info({ port, host }, "Server listening");
+});
+
+server.on("error", (err) => {
+  logger.error({ err, port, host }, "Error listening on host/port");
+  process.exit(1);
 });
