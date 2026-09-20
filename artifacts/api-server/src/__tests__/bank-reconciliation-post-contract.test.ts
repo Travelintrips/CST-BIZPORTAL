@@ -100,6 +100,15 @@ describe("bank reconciliation post contract", () => {
     expect(ui).toContain("jurnal rekonsiliasi hanya memindahkan saldo ke rekening bank aktual");
   });
 
+  it("includes Sport Center source PPN corrections in the final COA projection", () => {
+    expect(api).toContain("as source_correction_coa_accounts");
+    expect(api).toContain("correction_entry.source::text = 'sport_center_ppn_correction'");
+    expect(api).toContain("select sp.booking_id");
+    expect(ui).toContain("source_correction_coa_accounts");
+    expect(ui).toContain("accountsToNet");
+    expect(ui).toContain("Nilai ini sudah memasukkan jurnal koreksi sumber");
+  });
+
   it("projects the actual posted journal COA lines into the mutation list", () => {
     expect(api).toContain("as journal_status");
     expect(api).toContain("as posted_coa_accounts");
