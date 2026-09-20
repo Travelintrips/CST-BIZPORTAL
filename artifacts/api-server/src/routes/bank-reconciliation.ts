@@ -383,7 +383,7 @@ async function loadLocalMatchCandidates(
            left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
            left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
           where tp.company_id = $1
-            and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid')
+            and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
             and lower(coalesce(tp.method::text, '')) not like '%qris%'
             and abs(tp.amount::numeric - $2::numeric) < 0.01
             and coalesce(
