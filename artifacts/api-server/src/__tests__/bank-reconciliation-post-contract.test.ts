@@ -82,6 +82,13 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("&& !realCandidate");
   });
 
+  it("does not diagnose a voided or non-posted linked journal as resolved", () => {
+    expect(api).toContain("journal?.status === 'posted'");
+    expect(api).toContain("linkedJournalNotPosted");
+    expect(api).toContain("LINKED_JOURNAL_NOT_POSTED");
+    expect(api).toContain("journalStatus: journal?.status ?? null");
+  });
+
   it("projects the actual posted journal COA lines into the mutation list", () => {
     expect(api).toContain("as journal_status");
     expect(api).toContain("as posted_coa_accounts");
