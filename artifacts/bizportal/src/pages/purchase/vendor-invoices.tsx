@@ -151,6 +151,26 @@ interface VendorInvoicePage {
   hasMore: boolean;
 }
 
+
+function vendorInvoiceWithholdingLabel(invoice: Record<string, unknown>): string {
+  const labels = new Set<string>();
+  const directType = String(invoice.withholdingTaxType ?? "").trim();
+  if (directType) labels.add(directType);
+
+  const breakdown = invoice.invoiceBreakdown && typeof invoice.invoiceBreakdown === "object"
+    ? invoice.invoiceBreakdown as Record<string, unknown>
+    : null;
+  const components = Array.isArray(breakdown?.components) ? breakdown.components : [];
+  for (const componentValue of components) {
+    if (!componentValue || typeof componentValue !== "object") continue;
+    const component = componentValue as Record<string, unknown>;
+    const label = String(component.withholding_tax_type ?? component.tax_type ?? "").trim();
+    if (label) labels.add(label);
+  }
+
+  return Array.from(labels).join(", ");
+}
+
 function parseVendorInvoicePage(payload: unknown): VendorInvoicePage {
   if (Array.isArray(payload)) {
     const data = payload as VendorInvoiceListItem[];
@@ -560,6 +580,7 @@ export function VendorInvoicesListPage() {
                     <th className="text-left py-2 px-3">Status</th>
                     <th className="text-left py-2 px-3">3-Way Match</th>
                     <th className="text-right py-2 px-3">Grand Total</th>
+                    <th className="text-right py-2 px-3">PPh</th>
                     <th className="text-right py-2 px-3">Terbayar</th>
                     <th className="text-right py-2 px-3">Sisa</th>
                     <th className="text-right py-2 px-3">Aksi</th>
@@ -576,6 +597,14 @@ export function VendorInvoicesListPage() {
                         </td>
                         <td className="py-2 px-3"><Badge variant={vi.threeWayMatchStatus === "matched" ? "default" : vi.threeWayMatchStatus === "partial" ? "secondary" : "outline"} className="text-xs">{String(vi.threeWayMatchStatus)}</Badge></td>
                         <td className="py-2 px-3 text-right font-mono">{idr(canonicalGrandTotal(vi))}</td>
+                        <td className="py-2 px-3 text-right">
+                          <div className="font-mono text-amber-600">{idr(canonicalWithholdingAmount(vi))}</div>
+                          {vendorInvoiceWithholdingLabel(vi) && (
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">
+                              {vendorInvoiceWithholdingLabel(vi)}
+                            </div>
+                          )}
+                        </td>
                         <td className="py-2 px-3 text-right font-mono text-muted-foreground">{idr(canonicalAmountPaid(vi))}</td>
                         <td className="py-2 px-3 text-right font-mono text-red-600">{idr(outstandingNetPayment(vi))}</td>
                         <td className="py-2 px-3">
