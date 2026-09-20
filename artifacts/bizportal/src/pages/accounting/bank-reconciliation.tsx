@@ -616,6 +616,15 @@ interface CandidateDetails {
   settlementPartial?: boolean;
   settlementItemCount?: number | null;
   settlementJournalId?: number | null;
+  settlementJournalStatus?: string | null;
+  settlementJournalLines?: Array<{
+    id?: number;
+    lineType?: "debit" | "credit" | string | null;
+    accountCode?: string | null;
+    accountName?: string | null;
+    amount?: number | string | null;
+    description?: string | null;
+  }>;
   bankMutationId?: number | null;
   canonicalBankMutationId?: number | null;
   expectedAmount?: number | string | null;
@@ -1938,8 +1947,23 @@ function visibleCandidates(m: BankMutation): Candidate[] {
   });
 }
 
+/**
+ * Candidate evidence shown in the detail/audit panel.
+ *
+ * An approved match must remain visible after reconciliation so the reviewer
+ * can see what transaction/settlement was actually linked. visibleCandidates
+ * intentionally stays action-oriented and returns [] after approval to prevent
+ * a second approval. This helper is read-only evidence only.
+ */
+function detailCandidates(m: BankMutation): Candidate[] {
+  const approved = (m.candidates ?? []).filter(candidate =>
+    ["approved", "posted"].includes(String(candidate.status ?? "").toLowerCase()),
+  );
+  return approved.length > 0 ? approved : visibleCandidates(m);
+}
+
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
-  const candidate = visibleCandidates(m)[0];
+  const candidate = detailCandidates(m)[0];
   const d = candidate?.details;
   const audit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const bankAmount = numericValue(d?.actualBankAmount) ?? numericValue(m.amount) ?? 0;
@@ -2506,7 +2530,77 @@ function JournalPreview({
     return <JournalEntryLines entryId={journalEntryId} companyId={mutation.company_id} mutationId={mutation.id} />;
   }
 
-  // Case 2: candidate from matching API → show candidate-based estimate
+  // Case 2: canonical QRIS settlement already owns a posted Sport Center journal.
+  // This is not a public.accounting_entries journal, so show its canonical
+  // journal evidence instead of the misleading preview-unavailable state.
+  if (
+    candidate?.candidate_type === "qris_settlement"
+    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+    && candidate.details?.settlementJournalId
+  ) {
+    const d = candidate.details;
+    const lines = d.settlementJournalLines ?? [];
+    const journalStatus = String(d.settlementJournalStatus ?? "posted").toLowerCase();
+    const totalDebit = lines
+      .filter(line => String(line.lineType ?? "").toLowerCase() === "debit")
+      .reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+    const totalCredit = lines
+      .filter(line => String(line.lineType ?? "").toLowerCase() === "credit")
+      .reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
+    return (
+      <div className="rounded-lg border bg-muted/40 p-3 space-y-2 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Journal Settlement Canonical #{d.settlementJournalId}
+          </p>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+            journalStatus === "posted"
+              ? "bg-green-50 text-green-700 border-green-200"
+              : "bg-yellow-50 text-yellow-700 border-yellow-200"
+          }`}>
+            {journalStatus.toUpperCase()}
+          </span>
+        </div>
+        {lines.length > 0 ? (
+          <div className="space-y-1">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 text-[10px] font-semibold text-muted-foreground uppercase pb-1 border-b">
+              <span>Akun</span><span className="text-right">Debit</span><span className="text-right">Kredit</span>
+            </div>
+            {lines.map((line, index) => {
+              const isDebit = String(line.lineType ?? "").toLowerCase() === "debit";
+              const amount = Number(line.amount) || 0;
+              return (
+                <div key={line.id ?? index} className="grid grid-cols-[1fr_auto_auto] gap-x-3 text-xs">
+                  <span className="truncate font-medium">
+                    {line.accountName ?? line.accountCode ?? "Akun"}
+                    {line.description && <span className="text-muted-foreground ml-1 text-[10px]">({line.description})</span>}
+                  </span>
+                  <span className="font-mono text-right tabular-nums">{isDebit && amount > 0 ? idr(amount) : "—"}</span>
+                  <span className="font-mono text-right tabular-nums">{!isDebit && amount > 0 ? idr(amount) : "—"}</span>
+                </div>
+              );
+            })}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 text-xs font-bold border-t pt-1 mt-1">
+              <span>Total</span>
+              <span className="font-mono text-right tabular-nums">{idr(totalDebit)}</span>
+              <span className="font-mono text-right tabular-nums">{idr(totalCredit)}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p>Gross settlement: {idr(d.grossAmount ?? 0)}</p>
+            <p>MDR: {idr(d.mdrAmount ?? 0)}</p>
+            <p>Net ke bank: {idr(d.netAmount ?? mutation.amount)}</p>
+          </div>
+        )}
+        <p className="text-[10px] text-muted-foreground border-t pt-1.5">
+          Settlement {d.settlementReference ?? `#${candidate.candidate_id}`} · {d.settlementStatus ?? "reconciled"}
+        </p>
+      </div>
+    );
+  }
+
+  // Case 3: candidate from matching API → show candidate-based estimate
   if (candidate) {
     const t = candidate.candidate_type;
     const isIN = mutation.direction === "IN";
@@ -2568,7 +2662,7 @@ function JournalPreview({
     );
   }
 
-  // Case 3: nothing available
+  // Case 4: nothing available
   return (
     <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-center text-sm text-muted-foreground">
       <FileText className="w-6 h-6 mx-auto mb-2 opacity-40" />
@@ -6690,7 +6784,7 @@ function MutationDetailPanel({
   );
   if (!mutation) return null;
   const m     = mutation;
-  const cands = visibleCandidates(m);
+  const cands = detailCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const canonicalStateResolved =
     canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
