@@ -384,6 +384,7 @@ async function loadLocalMatchCandidates(
            left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
           where tp.company_id = $1
             and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+            and nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '') is null
             and lower(coalesce(tp.method::text, '')) not like '%qris%'
             and abs(tp.amount::numeric - $2::numeric) < 0.01
             and coalesce(
@@ -544,6 +545,7 @@ async function matchLocalMutation(
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
     const autoPostEligible = confidence === 100
       && matchedRule.candidateRequirement !== 'required'
+      && !realCandidate
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
       && !ruleResult.ambiguityCode
@@ -815,6 +817,276 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
   }
 });
 
+type SourceReceiptJournal = {
+  entryId: number;
+  entryNumber: string;
+  debitAccountId: number;
+  debitAccountCode: string;
+  debitAccountName: string;
+  debitAmount: number;
+};
+
+function isSourceOwnedInboundCandidate(candidateType: string | null): boolean {
+  const type = String(candidateType ?? "").toLowerCase();
+  return type === "sport_payment" || type === "tenant_invoice";
+}
+
+async function resolvePostedSourceReceiptJournal(
+  client: ApprovalClient,
+  companyId: number,
+  candidateType: string,
+  candidateId: number,
+  amount: number,
+): Promise<SourceReceiptJournal> {
+  const type = candidateType.toLowerCase();
+  let sourceEntries: { rows: Array<{ id: number; entry_number: string; total_debit: string }> };
+
+  if (type === "sport_payment") {
+    sourceEntries = await client.query(
+      `select ae.id, ae.entry_number, ae.total_debit::text
+         from public.accounting_entries ae
+        where ae.company_id = $1
+          and ae.status = 'posted'
+          and abs(ae.total_debit::numeric - $3::numeric) < 0.01
+          and (
+            ae.source_payment_id = $2
+            or (
+              ae.source::text in ('sport_center_payment','sport_center_booking','sport_center_membership')
+              and ae.source_id = $2
+            )
+          )
+        order by
+          case when ae.source_payment_id = $2 then 0 else 1 end,
+          ae.id desc
+        limit 2`,
+      [companyId, candidateId, amount],
+    );
+  } else if (type === "tenant_invoice") {
+    sourceEntries = await client.query(
+      `select ae.id, ae.entry_number, ae.total_debit::text
+         from public.accounting_entries ae
+        where ae.company_id = $1
+          and ae.status = 'posted'
+          and abs(ae.total_debit::numeric - $3::numeric) < 0.01
+          and ae.source::text = 'tenant_rent_payment'
+          and ae.source_id in (
+            $2,
+            coalesce(
+              (
+                select nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '')::integer
+                  from public.tenant_payments tp
+                 where tp.id = $2
+                   and tp.company_id = $1
+                 limit 1
+              ),
+              $2
+            )
+          )
+        order by
+          case when ae.source_id = $2 then 0 else 1 end,
+          ae.id desc
+        limit 2`,
+      [companyId, candidateId, amount],
+    );
+  } else {
+    throw new ApprovalError(
+      `Tipe kandidat "${candidateType}" tidak memiliki kontrak jurnal sumber.`,
+      422,
+      "SOURCE_JOURNAL_REQUIRED",
+    );
+  }
+
+  if (sourceEntries.rows.length === 0) {
+    throw new ApprovalError(
+      type === "sport_payment"
+        ? "Payment Sport Center belum memiliki jurnal sumber posted yang sesuai nominal. Rekonsiliasi diblokir agar tidak membuat pendapatan/piutang ganda."
+        : "Pembayaran tenant belum memiliki jurnal sumber pendapatan posted yang sesuai nominal. Rekonsiliasi diblokir agar tidak membuat pendapatan/piutang ganda.",
+      422,
+      "SOURCE_JOURNAL_REQUIRED",
+    );
+  }
+  if (sourceEntries.rows.length > 1) {
+    throw new ApprovalError(
+      "Lebih dari satu jurnal sumber posted cocok dengan transaksi ini. Periksa duplikasi jurnal sumber sebelum rekonsiliasi.",
+      409,
+      "SOURCE_JOURNAL_AMBIGUOUS",
+    );
+  }
+
+  const sourceEntry = sourceEntries.rows[0]!;
+  const debitLines = await client.query<{
+    account_id: number;
+    code: string;
+    name: string;
+    debit: string;
+  }>(
+    `select line.account_id, coa.code, coa.name, line.debit::text
+       from public.accounting_entry_lines line
+       join public.chart_of_accounts coa on coa.id = line.account_id
+      where line.entry_id = $1
+        and line.debit > 0
+        and abs(line.debit::numeric - $2::numeric) < 0.01
+        and (coa.company_id = $3 or coa.company_id is null)
+        and coalesce(coa.is_active, true) = true
+      order by
+        case when coa.type::text = 'asset' then 0 else 1 end,
+        line.id
+      limit 2`,
+    [sourceEntry.id, amount, companyId],
+  );
+
+  if (debitLines.rows.length === 0) {
+    throw new ApprovalError(
+      "Jurnal sumber ditemukan, tetapi akun debit penerimaan/clearing tidak dapat ditentukan secara aman.",
+      422,
+      "SOURCE_RECEIPT_ACCOUNT_UNRESOLVED",
+    );
+  }
+  if (debitLines.rows.length > 1) {
+    throw new ApprovalError(
+      "Jurnal sumber memiliki lebih dari satu akun debit dengan nominal penuh. Rekonsiliasi perlu review manual.",
+      409,
+      "SOURCE_RECEIPT_ACCOUNT_AMBIGUOUS",
+    );
+  }
+
+  const debitLine = debitLines.rows[0]!;
+  return {
+    entryId: sourceEntry.id,
+    entryNumber: sourceEntry.entry_number,
+    debitAccountId: debitLine.account_id,
+    debitAccountCode: debitLine.code,
+    debitAccountName: debitLine.name,
+    debitAmount: Number(debitLine.debit),
+  };
+}
+
+async function assertSourceOwnedCandidateNotReconciledElsewhere(
+  client: ApprovalClient,
+  mutationId: number,
+  candidateType: string,
+  candidateId: number,
+  candidateSource: string,
+): Promise<void> {
+  const existing = await client.query<{ mutation_id: number }>(
+    `select mutation_id
+       from public.bank_reconciliation_matches
+      where candidate_type = $1
+        and candidate_id = $2
+        and candidate_source = $3
+        and mutation_id <> $4
+        and status in ('approved','posted')
+      order by id desc
+      limit 1`,
+    [candidateType, candidateId, candidateSource, mutationId],
+  );
+  if (existing.rows[0]) {
+    throw new ApprovalError(
+      `Kandidat transaksi ini sudah direkonsiliasi oleh mutasi bank #${existing.rows[0].mutation_id}. Approval ganda diblokir.`,
+      409,
+      "SOURCE_CANDIDATE_ALREADY_RECONCILED",
+    );
+  }
+}
+
+async function finalizeSourceJournalReuse(
+  client: ApprovalClient,
+  mutationId: number,
+  companyId: number,
+  matchId: number | null,
+  candidateType: string,
+  candidateId: number,
+  candidateSource: string,
+  sourceJournal: SourceReceiptJournal,
+  actor: ApprovalActor,
+): Promise<Record<string, unknown>> {
+  await client.query(
+    `update public.bank_reconciliation_matches
+        set status = 'superseded'
+      where mutation_id = $1
+        and ($2::bigint is null or id <> $2)
+        and status not in ('approved','posted')`,
+    [mutationId, matchId],
+  );
+
+  if (matchId != null) {
+    await client.query(
+      `update public.bank_reconciliation_matches
+          set status = 'posted',
+              candidate_source = coalesce(candidate_source, $3)
+        where id = $1 and mutation_id = $2`,
+      [matchId, mutationId, candidateSource],
+    );
+  } else {
+    const promoted = await client.query(
+      `update public.bank_reconciliation_matches
+          set status = 'posted',
+              candidate_source = coalesce(candidate_source, $4)
+        where mutation_id = $1
+          and candidate_type = $2
+          and candidate_id = $3
+          and (candidate_source = $4 or candidate_source is null)
+          and status not in ('approved','posted')
+        returning id`,
+      [mutationId, candidateType, candidateId, candidateSource],
+    );
+    if (promoted.rowCount === 0) {
+      await client.query(
+        `insert into public.bank_reconciliation_matches
+          (mutation_id,candidate_type,candidate_id,match_score,match_reason,
+           amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source)
+         values ($1,$2,$3,100,'source journal reuse',true,true,false,false,false,'posted',$4)`,
+        [mutationId, candidateType, candidateId, candidateSource],
+      );
+    }
+  }
+
+  await client.query(
+    `update public.bank_mutations
+        set status = 'posted',
+            reconciliation_status = 'reconciled',
+            accounting_posted = true,
+            journal_entry_id = $2,
+            approved_by = $3,
+            approved_at = coalesce(approved_at, now()),
+            posted_at = coalesce(posted_at, now()),
+            review_code = 'SOURCE_JOURNAL_REUSED',
+            review_reason = 'Bank mutation linked to existing posted source journal; duplicate accounting entry suppressed',
+            updated_at = now()
+      where id = $1 and company_id = $4`,
+    [mutationId, sourceJournal.entryId, actor.email, companyId],
+  );
+
+  await client.query(
+    `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+     values($1,'SOURCE_JOURNAL_REUSED',$2,$3::jsonb)`,
+    [
+      mutationId,
+      actor.email,
+      JSON.stringify({
+        candidate_type: candidateType,
+        candidate_id: candidateId,
+        candidate_source: candidateSource,
+        source_journal_id: sourceJournal.entryId,
+        source_journal_number: sourceJournal.entryNumber,
+        receipt_account_id: sourceJournal.debitAccountId,
+        receipt_account_code: sourceJournal.debitAccountCode,
+        contract: "source-journal-reuse-v1",
+      }),
+    ],
+  );
+
+  return {
+    ok: true,
+    status: "posted",
+    journal_entry_id: sourceJournal.entryId,
+    journal_entry_number: sourceJournal.entryNumber,
+    source_journal_reused: true,
+    candidate_source: candidateSource,
+    idempotent: false,
+  };
+}
+
 async function resolveApprovalContraAccount(
   client: ApprovalClient,
   companyId: number,
@@ -860,19 +1132,23 @@ async function resolveApprovalContraAccount(
   const configured = settings.rows[0];
   const type = (candidateType ?? "").toLowerCase();
 
-  // Resolve the contra account from the accounting meaning of the canonical
-  // candidate, not from a broad substring such as "invoice".
-  //
-  // IN  sport_payment / tenant_invoice: cash receipt settles receivable.
+  // Source-owned inbound candidates must derive their contra account from the
+  // already-posted source journal. Falling back to AR here caused duplicate bank
+  // debits and negative receivables when Sport Center/Tenant had already posted
+  // revenue. Fail closed if this function is ever reached for those candidates.
+  if (direction === "IN" && (type === "sport_payment" || type === "tenant_invoice")) {
+    throw new ApprovalError(
+      "Jurnal sumber wajib digunakan untuk pembayaran Sport Center/Tenant; fallback otomatis ke Piutang Usaha dinonaktifkan.",
+      422,
+      "SOURCE_JOURNAL_REQUIRED",
+    );
+  }
+
   // OUT vendor_invoice: cash payment settles payable.
   // OUT without a payable candidate: use the configured purchase/expense COA.
   let configuredId: number | null | undefined;
   if (direction === "IN") {
-    if (type === "sport_payment" || type === "tenant_invoice") {
-      configuredId = configured?.ar_account_id;
-    } else {
-      configuredId = undefined;
-    }
+    configuredId = undefined;
   } else if (type === "vendor_invoice") {
     configuredId = configured?.ap_account_id;
   } else {
@@ -1037,7 +1313,7 @@ async function assertApprovalCandidateExists(
          from public.tenant_payments
         where id = $1
           and company_id = $2
-          and lower(coalesce(status::text, '')) in ('confirmed', 'paid')
+          and lower(coalesce(status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
         limit 1
         for update`,
       [candidateId, companyId],
@@ -1356,13 +1632,62 @@ async function approveBankMutation(
       "COA_NOT_FOUND",
     );
   }
-  const contra = await resolveApprovalContraAccount(
-    client,
-    companyId,
-    direction,
-    selectedCandidateType,
-    manualCoaCode,
-  );
+  let sourceReceiptJournal: SourceReceiptJournal | null = null;
+  if (
+    direction === "IN"
+    && isSourceOwnedInboundCandidate(selectedCandidateType)
+    && selectedCandidateId != null
+  ) {
+    if (manualCoaCode) {
+      throw new ApprovalError(
+        "COA manual tidak boleh menggantikan jurnal sumber Sport Center/Tenant. Perbaiki jurnal sumber bila mapping akuntansinya salah.",
+        422,
+        "SOURCE_OWNED_COA_OVERRIDE_BLOCKED",
+      );
+    }
+    await assertSourceOwnedCandidateNotReconciledElsewhere(
+      client,
+      mutationId,
+      selectedCandidateType!,
+      selectedCandidateId,
+      selectedCandidateSource!,
+    );
+    sourceReceiptJournal = await resolvePostedSourceReceiptJournal(
+      client,
+      companyId,
+      selectedCandidateType!,
+      selectedCandidateId,
+      amount,
+    );
+
+    if (sourceReceiptJournal.debitAccountId === bankCoaId) {
+      return finalizeSourceJournalReuse(
+        client,
+        mutationId,
+        companyId,
+        matchId,
+        selectedCandidateType!,
+        selectedCandidateId,
+        selectedCandidateSource!,
+        sourceReceiptJournal,
+        actor,
+      );
+    }
+  }
+
+  const contra = sourceReceiptJournal
+    ? {
+        id: sourceReceiptJournal.debitAccountId,
+        code: sourceReceiptJournal.debitAccountCode,
+        name: sourceReceiptJournal.debitAccountName,
+      }
+    : await resolveApprovalContraAccount(
+        client,
+        companyId,
+        direction,
+        selectedCandidateType,
+        manualCoaCode,
+      );
 
   const journalResult = await client.query<{ id: number; code: string }>(
     `select id, code
@@ -1424,7 +1749,11 @@ async function approveBankMutation(
     entryId = insertedEntry.id;
     entryNumber = insertedEntry.entry_number;
 
-    const lineDescription = (note ?? description ?? `Rekon ${mutationId}`).slice(0, 200);
+    const lineDescription = (
+      sourceReceiptJournal
+        ? `Reklasifikasi penerimaan dari ${sourceReceiptJournal.debitAccountCode} ke bank mutasi — ${note ?? description ?? `Rekon ${mutationId}`}`
+        : (note ?? description ?? `Rekon ${mutationId}`)
+    ).slice(0, 200);
     if (direction === "IN") {
       await client.query(
         `insert into public.accounting_entry_lines
@@ -1638,8 +1967,9 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
     const mutationResult = await pool.query<{
       journal_entry_id: number | null;
       company_id: number | null;
+      review_code: string | null;
     }>(
-      `select journal_entry_id, company_id
+      `select journal_entry_id, company_id, review_code
          from public.bank_mutations
         where id=$1 and ($2::int is null or company_id=$2)
         limit 1`,
@@ -1661,9 +1991,14 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
     }>(
       `select id,status::text status,ref,total_debit::text total_debit,total_credit::text total_credit
          from public.accounting_entries
-        where id=$1 and company_id=$2 and source='bank_reconciliation' and source_id=$3
+        where id=$1
+          and company_id=$2
+          and (
+            (source='bank_reconciliation' and source_id=$3)
+            or $4::text in ('SOURCE_JOURNAL_REUSED','SOURCE_JOURNAL_RECLASSIFIED')
+          )
         limit 1`,
-      [mutation.journal_entry_id, mutation.company_id, mutationId],
+      [mutation.journal_entry_id, mutation.company_id, mutationId, mutation.review_code],
     );
     const entry = entryResult.rows[0];
     if (!entry) { res.status(404).json({ error: "Journal entry mutasi tidak ditemukan" }); return; }
@@ -1838,6 +2173,9 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
       );
     }
 
+    const sourceOwnedReclassification =
+      approvedMatch?.candidate_type === "sport_payment"
+      || approvedMatch?.candidate_type === "tenant_invoice";
     const result = await postBankMutationCanonical(
       client,
       mutationId,
@@ -1845,8 +2183,12 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
       approvedMatch?.id ?? null,
       actor,
       {
-        reason: "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",
-        review_code: "CANONICAL_POSTED",
+        reason: sourceOwnedReclassification
+          ? "Reklasifikasi akun penerimaan jurnal sumber ke rekening bank mutasi."
+          : "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",
+        review_code: sourceOwnedReclassification
+          ? "SOURCE_JOURNAL_RECLASSIFIED"
+          : "CANONICAL_POSTED",
         trigger: "manual-post",
       },
     );
@@ -1990,7 +2332,13 @@ router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promis
       res.status(error.status).json({
         error: error.message,
         ...(error.code ? { code: error.code } : {}),
-        ...(error.code === "JOURNAL_MAPPING_REQUIRED" || error.code === "COA_NOT_FOUND"
+        ...([
+          "JOURNAL_MAPPING_REQUIRED",
+          "COA_NOT_FOUND",
+          "SOURCE_JOURNAL_REQUIRED",
+          "SOURCE_RECEIPT_ACCOUNT_UNRESOLVED",
+          "SOURCE_OWNED_COA_OVERRIDE_BLOCKED",
+        ].includes(error.code ?? "")
           ? { manual_review_required: true }
           : {}),
       });
