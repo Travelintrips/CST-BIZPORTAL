@@ -1862,9 +1862,18 @@ async function approveBankMutation(
             journal_entry_id = $1,
             approved_by = $2,
             approved_at = now(),
+            linked_transaction_type = case when $4::boolean then $5 else linked_transaction_type end,
+            linked_transaction_id = case when $4::boolean then $6 else linked_transaction_id end,
             updated_at = now()
       where id = $3`,
-    [entryId, actor.email, mutationId],
+    [
+      entryId,
+      actor.email,
+      mutationId,
+      sourceReceiptJournal != null,
+      sourceReceiptJournal ? selectedCandidateType : null,
+      sourceReceiptJournal ? selectedCandidateId : null,
+    ],
   );
 
   if (matchId != null) {
