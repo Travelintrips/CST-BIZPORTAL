@@ -353,7 +353,7 @@ export default function ProductTemplatesPage() {
 
   const handleCopyLink = (tpl: ProductTemplateRow, e: React.MouseEvent) => {
     e.preventDefault();
-    const url = `${window.location.origin}/bizportal/product-templates/${tpl.id}`;
+    const url = `${window.location.origin}/product-templates/${tpl.id}`;
     navigator.clipboard.writeText(url);
     toast({ title: "Link disalin", description: tpl.label });
   };
