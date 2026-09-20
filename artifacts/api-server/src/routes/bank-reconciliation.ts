@@ -3064,6 +3064,35 @@ const mutationListColumns = `
        and source_entry.status = 'posted'
   ) as source_posted_coa_accounts,
   (
+    select coalesce(
+      json_agg(
+        json_build_object(
+          'code', correction_coa.code,
+          'name', correction_coa.name,
+          'debit', correction_line.debit,
+          'credit', correction_line.credit
+        )
+        order by correction_entry.id, correction_line.id
+      ),
+      '[]'::json
+    )
+      from public.accounting_entries correction_entry
+      join public.accounting_entry_lines correction_line
+        on correction_line.entry_id = correction_entry.id
+      left join public.chart_of_accounts correction_coa
+        on correction_coa.id = correction_line.account_id
+     where bm.linked_transaction_type = 'sport_payment'
+       and correction_entry.company_id = bm.company_id
+       and correction_entry.status = 'posted'
+       and correction_entry.source::text = 'sport_center_ppn_correction'
+       and correction_entry.source_id = (
+         select sp.booking_id
+           from sport_center.sport_payments sp
+          where sp.id = bm.linked_transaction_id
+          limit 1
+       )
+  ) as source_correction_coa_accounts,
+  (
     select coalesce(json_agg(json_build_object(
       'id', match.id,
       'mutation_id', match.mutation_id,
