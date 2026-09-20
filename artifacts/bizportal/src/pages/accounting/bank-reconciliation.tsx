@@ -9685,6 +9685,23 @@ export default function BankReconciliationPage() {
     : statusFilteredMutations.length;
   const totalPages  = Math.ceil(total / PAGE_SIZE);
 
+  const openMutationDetail = async (mutation: BankMutation) => {
+    // Open immediately from the list, then replace it with an authoritative
+    // detail payload. This avoids stale card snapshots and guarantees that
+    // approved canonical matches remain visible after reconciliation.
+    setDetailMutation(mutation);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/mutations/${mutation.id}`, {
+        credentials: "include",
+      });
+      if (!response.ok) return;
+      const body = await response.json() as { mutation?: BankMutation };
+      if (body.mutation?.id === mutation.id) setDetailMutation(body.mutation);
+    } catch {
+      // Keep the already-open list snapshot when the additive detail endpoint
+      // is temporarily unavailable. No write/action depends on this fallback.
+    }
+  };
   const handleOpenQrisMutation = async (candidate: QrisCandidateAudit) => {
     const mutationId = Number(candidate.mutation_id);
     if (!Number.isInteger(mutationId) || mutationId <= 0 || qrisCompanyId == null) {
@@ -9698,25 +9715,20 @@ export default function BankReconciliationPage() {
 
     const currentMutation = mutations.find((mutation) => mutation.id === mutationId);
     if (currentMutation) {
-      setDetailMutation(currentMutation);
+      await openMutationDetail(currentMutation);
       return;
     }
 
     setQrisDetailLoadingId(mutationId);
     try {
-      const params = new URLSearchParams({
-        company_id: String(qrisCompanyId),
-        mutation_id: String(mutationId),
-        limit: "1",
-      });
-      const response = await fetch(`/api/bank-reconciliation/mutations?${params}`, {
+      const response = await fetch(`/api/bank-reconciliation/mutations/${mutationId}`, {
         credentials: "include",
       });
       const result = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error(result?.error ?? "Gagal mengambil detail mutasi");
       }
-      const mutation = result?.mutations?.[0] as BankMutation | undefined;
+      const mutation = result?.mutation as BankMutation | undefined;
       if (!mutation) {
         throw new Error(`Mutasi #${mutationId} tidak ditemukan pada perusahaan aktif`);
       }
@@ -10756,7 +10768,7 @@ export default function BankReconciliationPage() {
                   onReverse={handleOpenReverse}
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
-                  onDetail={setDetailMutation}
+                  onDetail={mutation => void openMutationDetail(mutation)}
                   onMultiAllocate={mutation => {
                     setLocation(`/finance/bank-allocation?mutationId=${mutation.id}`);
                   }}
