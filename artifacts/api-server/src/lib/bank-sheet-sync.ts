@@ -736,3 +736,4 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   }
   return summaries;
 }
+*/

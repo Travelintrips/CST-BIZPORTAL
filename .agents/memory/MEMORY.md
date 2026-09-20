@@ -38,3 +38,4 @@
 - [Accounting journal detail endpoint](journal-detail-endpoint.md) — posting confirmation needs a company-scoped journal header/lines endpoint by entry ID.
 - [Supabase array filter casts](supabase-array-filter-cast.md) — use literal status lists for filtered queries; pooler-bound text-array casts can fail as PostgreSQL 42846.
 - [Merge-block cleanup](merge-block-cleanup.md) — duplicate merge blocks can contain newer endpoint/test contracts; preserve those contracts before removing stale code.
+- [Deployment duplicate-comment failures](deployment-duplicate-comments.md) — merged duplicate modules can leave unterminated comments that only fail during publish-time parsing.
