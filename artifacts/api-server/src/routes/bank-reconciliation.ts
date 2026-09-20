@@ -1528,7 +1528,7 @@ async function postBankMutationCanonical(
   client: ApprovalClient,
   mutationId: number,
   entryId: number,
-  matchId: number,
+  matchId: number | null,
   actor: ApprovalActor,
   meta: Record<string, unknown>,
 ): Promise<{ journal_entry_id: number; status: "posted"; idempotent: boolean }> {
@@ -1567,14 +1567,19 @@ async function postBankMutationCanonical(
   if (Math.abs(Number(journal.total_debit)-debit) > 0.0001 || Math.abs(Number(journal.total_credit)-credit) > 0.0001) {
     throw new ApprovalError("Total header jurnal tidak sama dengan journal lines.", 409, "JOURNAL_TOTAL_MISMATCH");
   }
-  const selected = await client.query<{ id: number }>(
-    `select id from public.bank_reconciliation_matches where id=$1 and mutation_id=$2 for update`,
-    [matchId, mutationId],
-  );
-  if (!selected.rows[0]) throw new ApprovalError("Approved match canonical tidak ditemukan.", 409, "MATCH_NOT_FOUND");
+  if (matchId != null) {
+    const selected = await client.query<{ id: number }>(
+      `select id from public.bank_reconciliation_matches where id=$1 and mutation_id=$2 for update`,
+      [matchId, mutationId],
+    );
+    if (!selected.rows[0]) throw new ApprovalError("Approved match canonical tidak ditemukan.", 409, "MATCH_NOT_FOUND");
+  }
   const otherFinal = await client.query<{ id: number }>(
     `select id from public.bank_reconciliation_matches
-      where mutation_id=$1 and id<>$2 and status in ('approved','posted') limit 1 for update`,
+      where mutation_id=$1
+        and ($2::bigint is null or id<>$2)
+        and status in ('approved','posted')
+      limit 1 for update`,
     [mutationId, matchId],
   );
   if (otherFinal.rows[0]) throw new ApprovalError("Mutasi sudah memiliki final match lain.", 409, "CONFLICT");
@@ -1587,12 +1592,20 @@ async function postBankMutationCanonical(
   } else if (journal.status !== "posted") {
     throw new ApprovalError(`Jurnal berstatus "${journal.status}" tidak dapat diposting.`, 409, "INVALID_JOURNAL_STATUS");
   }
-  await client.query(`update public.bank_reconciliation_matches set status='approved' where id=$1`, [matchId]);
-  await client.query(
-    `update public.bank_reconciliation_matches set status='superseded'
-      where mutation_id=$1 and id<>$2 and status not in ('approved','posted')`,
-    [mutationId, matchId],
-  );
+  if (matchId != null) {
+    await client.query(`update public.bank_reconciliation_matches set status='approved' where id=$1`, [matchId]);
+    await client.query(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and id<>$2 and status not in ('approved','posted')`,
+      [mutationId, matchId],
+    );
+  } else {
+    await client.query(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and status not in ('approved','posted')`,
+      [mutationId],
+    );
+  }
   await client.query(
     `update public.bank_mutations
         set status='posted',reconciliation_status='reconciled',accounting_posted=true,
@@ -1774,26 +1787,48 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
           for update`,
         [mutationId],
       );
-      if (recoverableMatch.rows.length !== 1) {
+      if (recoverableMatch.rows.length > 1) {
         throw new ApprovalError(
-          "Approved match tidak ditemukan dan kandidat canonical tidak dapat dipulihkan secara deterministik.",
+          "Approved match tidak ditemukan dan terdapat lebih dari satu kandidat yang dapat dipulihkan.",
           409,
-          recoverableMatch.rows.length === 0 ? "MATCH_NOT_FOUND" : "CONFLICT",
+          "CONFLICT",
         );
       }
-      approvedMatch = recoverableMatch.rows[0]!;
-      await client.query(
-        `update public.bank_reconciliation_matches set status='approved' where id=$1 and mutation_id=$2`,
-        [approvedMatch.id, mutationId],
-      );
-      await client.query(
-        `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
-         values($1,'APPROVED_MATCH_REPAIRED',$2,$3::jsonb)`,
-        [mutationId, actor.email, JSON.stringify({ match_id: approvedMatch.id, journal_entry_id: mutation.journal_entry_id, reason: "Draft jurnal canonical existed but approved match status was missing." })],
-      );
+      if (recoverableMatch.rows.length === 1) {
+        approvedMatch = recoverableMatch.rows[0]!;
+        await client.query(
+          `update public.bank_reconciliation_matches set status='approved' where id=$1 and mutation_id=$2`,
+          [approvedMatch.id, mutationId],
+        );
+        await client.query(
+          `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+           values($1,'APPROVED_MATCH_REPAIRED',$2,$3::jsonb)`,
+          [mutationId, actor.email, JSON.stringify({ match_id: approvedMatch.id, journal_entry_id: mutation.journal_entry_id, reason: "Draft jurnal canonical existed but approved match status was missing." })],
+        );
+      } else {
+        const governedDirectAllocation = await client.query<{ id: number }>(
+          `select id
+             from public.bank_reconciliation_audit
+            where mutation_id=$1
+              and action='MATCH_APPROVED'
+              and coalesce(meta->>'manual_coa_override','false')='true'
+              and nullif(meta->>'journal_entry_id','')::bigint=$2
+            order by id desc
+            limit 1
+            for update`,
+          [mutationId, mutation.journal_entry_id],
+        );
+        if (!governedDirectAllocation.rows[0]) {
+          throw new ApprovalError(
+            "Approved match tidak ditemukan dan direct-bank allocation yang sah tidak ditemukan.",
+            409,
+            "MATCH_NOT_FOUND",
+          );
+        }
+      }
     }
     if (
-      approvedMatch.candidate_type === "qris_settlement"
+      approvedMatch?.candidate_type === "qris_settlement"
       && approvedMatch.candidate_source === "sport_center.payment_settlement_batches"
     ) {
       throw new ApprovalError(
@@ -1807,7 +1842,7 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
       client,
       mutationId,
       mutation.journal_entry_id,
-      approvedMatch.id,
+      approvedMatch?.id ?? null,
       actor,
       {
         reason: "Draft jurnal rekonsiliasi diposting melalui canonical bank posting contract.",

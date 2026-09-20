@@ -25,6 +25,14 @@ describe("bank reconciliation post contract", () => {
     expect(ui).toContain('/api/bank-reconciliation/${mutId}/post');
   });
 
+  it("allows governed direct-bank posting when the rule does not require a candidate", () => {
+    expect(api).toContain("governedDirectAllocation");
+    expect(api).toContain("meta->>'manual_coa_override'");
+    expect(api).toContain("approvedMatch?.id ?? null");
+    expect(api).toContain("matchId: number | null");
+    expect(api).toContain("if (matchId != null)");
+  });
+
   it("does not label manual canonical posting as Rule AI", () => {
     expect(api).toContain('String(meta.review_code ?? "CANONICAL_POSTED")');
     expect(api).toContain("review_code: 'RULE_AI_AUTO_POSTED'");
