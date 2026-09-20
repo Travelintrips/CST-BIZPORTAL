@@ -53,3 +53,40 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      - name: Production runtime smoke
+        shell: bash
+        env:
+          NODE_ENV: production
+          APP_ENV: production
+          PORT: "3000"
+          SUPABASE_DATABASE_URL: ""
+          SUPABASE_DATABASE_URL_DEV: ""
+          SUPABASE_PG_URL: ""
+          GCP_SECRET_MANAGER_BOOTSTRAP_JSON: ""
+        run: |
+          set -euo pipefail
+          node --max-http-header-size=65536 --enable-source-maps ./dist/index.mjs > /tmp/bizportal-runtime.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat /tmp/bizportal-runtime.log
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1:3000/api/health/live | grep -q '"status":"ok"'; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/bizportal-runtime.log
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:3000/ >/dev/null
+          cat /tmp/bizportal-runtime.log
