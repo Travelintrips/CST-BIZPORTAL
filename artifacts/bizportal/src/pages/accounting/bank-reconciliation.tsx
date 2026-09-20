@@ -5578,15 +5578,26 @@ function MutationCard({
                      <p className="font-semibold text-black dark:text-black">
                       Diposting ke akun COA
                     </p>
-                     <div className="mt-1 space-y-0.5 text-black dark:text-black">
-                      {m.posted_coa_accounts!.map((account, index) => (
-                        <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
-                          <span className="font-semibold">{account.code || "—"}</span>
-                          {" — "}
-                          {account.name || "Nama akun belum tersedia"}
-                        </p>
-                      ))}
-                    </div>
+                     <div className="mt-1 space-y-1 text-black dark:text-black">
+                       {m.posted_coa_accounts!.map((account, index) => {
+                         const debit = Number(account.debit ?? 0);
+                         const credit = Number(account.credit ?? 0);
+                         const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;
+                         const amount = debit > 0 ? debit : credit;
+                         return (
+                           <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
+                             <span className="font-semibold">{account.code || "—"}</span>
+                             {" — "}
+                             {account.name || "Nama akun belum tersedia"}
+                             {side && amount > 0 && (
+                               <span className="ml-1 font-medium">
+                                 · {side} {idr(amount)}
+                               </span>
+                             )}
+                           </p>
+                         );
+                       })}
+                     </div>
                   </div>
                 )}
               </div>

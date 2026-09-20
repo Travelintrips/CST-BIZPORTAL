@@ -37,4 +37,14 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain('String(meta.review_code ?? "CANONICAL_POSTED")');
     expect(api).toContain("review_code: 'RULE_AI_AUTO_POSTED'");
   });
+
+  it("projects the actual posted journal COA lines into the mutation list", () => {
+    expect(api).toContain("as journal_status");
+    expect(api).toContain("as posted_coa_accounts");
+    expect(api).toContain("entry.status = 'posted'");
+    expect(api).toContain("entry.company_id = bm.company_id");
+    expect(ui).toContain("Diposting ke akun COA");
+    expect(ui).toContain('const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;');
+    expect(ui).toContain("· {side} {idr(amount)}");
+  });
 });
