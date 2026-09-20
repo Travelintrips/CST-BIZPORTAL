@@ -66,7 +66,7 @@ export function DevUserSwitcher() {
       });
       qc.clear();
       sessionStorage.removeItem("biz_user_role_v1");
-      window.location.href = "/bizportal/";
+      window.location.href = "/";
     } catch {
       setLoading(false);
       setSwitching(null);
