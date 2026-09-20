@@ -1991,7 +1991,7 @@ function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
   const transactions: ReconciliationEvidence["transactions"] = settlementItems.length > 0
     ? settlementItems.map((item, index) => ({
         label: item.paymentNumber ?? `Booking ${item.bookingId != null ? `SC-${String(item.bookingId).padStart(4, "0")}` : `#${index + 1}`}`,
-        amount: numericValue(item.netAmount ?? item.grossAmount) ?? 0,
+        amount: numericValue(item.grossAmount ?? item.netAmount) ?? 0,
         date: null,
         customer: null,
         facility: "Sport Center",
