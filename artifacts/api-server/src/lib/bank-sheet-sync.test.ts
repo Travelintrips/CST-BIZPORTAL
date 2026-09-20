@@ -266,6 +266,48 @@ describe("Google Sheet bank mutation sync", () => {
     ]));
   });
 
+  it("projects the canonical QRIS settlement contra COA when bank mutation has no public journal", async () => {
+    storedMutations.push({
+      id: 12,
+      mutation_key: "canonical-qris-key",
+      canonical_key: "canonical-qris-fallback",
+      status: "approved",
+      reconciliation_status: "reconciled",
+      journal_entry_id: null,
+      company_id: 42,
+      match_score: 100,
+      match_reason: "canonical settlement dibuat dari payment terpilih",
+      match_status: "approved",
+      match_result: "canonical settlement dibuat dari payment terpilih",
+      coa_code: "1199",
+      coa_name: "Payment Clearing",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
+      ["2026-06-13", "QRTRAVELI DR", "0", "685170", "canonical-qris-key", "", "", "", "", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+
+    const existingLookup = mocks.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("from public.bank_mutations bm"),
+    );
+    const sql = String(existingLookup?.[0] ?? "");
+    expect(sql).toContain("sport_center.payment_settlement_batches");
+    expect(sql).toContain("sport_center.accounting_journal_lines");
+    expect(sql).toContain("canonical_contra");
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["1199"]] },
+      { range: "'Mutasi Bank'!H2", values: [["Payment Clearing"]] },
+      { range: "'Mutasi Bank'!I2", values: [["100"]] },
+    ]));
+  });
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
