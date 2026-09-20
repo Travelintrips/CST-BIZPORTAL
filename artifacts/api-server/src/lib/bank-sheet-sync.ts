@@ -460,8 +460,8 @@ async function syncConfig(config: SheetConfig): Promise<{
               matched.match_reason,
               matched.match_status,
               matched.match_result,
-              contra.coa_code,
-              contra.coa_name
+              coalesce(contra.coa_code, canonical_contra.coa_code) as coa_code,
+              coalesce(contra.coa_name, canonical_contra.coa_name) as coa_name
          from public.bank_mutations bm
          left join lateral (
            select m.match_score,
@@ -492,6 +492,30 @@ async function syncConfig(config: SheetConfig): Promise<{
             order by line.id
             limit 1
          ) contra on true
+         left join lateral (
+           select line.account_code as coa_code,
+                  line.account_name as coa_name
+             from public.bank_reconciliation_matches match
+             join sport_center.payment_settlement_batches batch
+               on match.candidate_type = 'qris_settlement'
+              and match.candidate_source = 'sport_center.payment_settlement_batches'
+              and batch.id = match.candidate_id
+             join sport_center.accounting_journals journal
+               on journal.id = batch.settlement_journal_id
+              and journal.status::text = 'posted'
+             join sport_center.accounting_journal_lines line
+               on line.journal_id = journal.id
+            where match.mutation_id = bm.id
+              and lower(coalesce(match.status, '')) in ('approved', 'posted', 'reconciled')
+              and batch.status::text in ('reconciled', 'settled', 'completed')
+              and coalesce(batch.canonical_bank_mutation_id, batch.bank_mutation_id) = bm.id
+              and (
+                (upper(coalesce(bm.direction, '')) = 'IN' and lower(coalesce(line.line_type::text, '')) = 'credit')
+                or (upper(coalesce(bm.direction, '')) = 'OUT' and lower(coalesce(line.line_type::text, '')) = 'debit')
+              )
+            order by line.id
+            limit 1
+         ) canonical_contra on bm.journal_entry_id is null
         where bm.source = 'google_sheet'
           and bm.company_id is not distinct from $1
           and (bm.mutation_key = any($2::text[]) or bm.canonical_key = any($3::text[]))`,
