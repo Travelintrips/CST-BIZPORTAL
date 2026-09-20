@@ -961,6 +961,34 @@ async function resolvePostedSourceReceiptJournal(
   };
 }
 
+async function assertSourceOwnedCandidateNotReconciledElsewhere(
+  client: ApprovalClient,
+  mutationId: number,
+  candidateType: string,
+  candidateId: number,
+  candidateSource: string,
+): Promise<void> {
+  const existing = await client.query<{ mutation_id: number }>(
+    `select mutation_id
+       from public.bank_reconciliation_matches
+      where candidate_type = $1
+        and candidate_id = $2
+        and candidate_source = $3
+        and mutation_id <> $4
+        and status in ('approved','posted')
+      order by id desc
+      limit 1`,
+    [candidateType, candidateId, candidateSource, mutationId],
+  );
+  if (existing.rows[0]) {
+    throw new ApprovalError(
+      `Kandidat transaksi ini sudah direkonsiliasi oleh mutasi bank #${existing.rows[0].mutation_id}. Approval ganda diblokir.`,
+      409,
+      "SOURCE_CANDIDATE_ALREADY_RECONCILED",
+    );
+  }
+}
+
 async function finalizeSourceJournalReuse(
   client: ApprovalClient,
   mutationId: number,
@@ -1285,7 +1313,7 @@ async function assertApprovalCandidateExists(
          from public.tenant_payments
         where id = $1
           and company_id = $2
-          and lower(coalesce(status::text, '')) in ('confirmed', 'paid')
+          and lower(coalesce(status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
         limit 1
         for update`,
       [candidateId, companyId],
@@ -1617,6 +1645,13 @@ async function approveBankMutation(
         "SOURCE_OWNED_COA_OVERRIDE_BLOCKED",
       );
     }
+    await assertSourceOwnedCandidateNotReconciledElsewhere(
+      client,
+      mutationId,
+      selectedCandidateType!,
+      selectedCandidateId,
+      selectedCandidateSource!,
+    );
     sourceReceiptJournal = await resolvePostedSourceReceiptJournal(
       client,
       companyId,
