@@ -9125,11 +9125,13 @@ export default function BankReconciliationPage() {
       }
       setManualReviewWarning(null);
       toast({
-        title: d?.candidate_source === CANONICAL_SETTLEMENT_SOURCE
-          ? d?.manual_override
-            ? "Settlement diselesaikan dengan override manual ✓"
-            : "Settlement disetujui dan direconcile ✓"
-          : "Approve berhasil — draft jurnal dibuat ✓",
+        title: d?.source_journal_reused
+          ? "Approve berhasil — jurnal sumber direuse, tanpa jurnal duplikat ✓"
+          : d?.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+            ? d?.manual_override
+              ? "Settlement diselesaikan dengan override manual ✓"
+              : "Settlement disetujui dan direconcile ✓"
+            : "Approve berhasil — draft jurnal dibuat ✓",
       });
       setActionDialog(null);
       invalidate();
