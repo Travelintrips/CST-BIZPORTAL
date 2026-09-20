@@ -22,6 +22,28 @@ describe("standalone BizPortal API boundary", () => {
     expect(routeSource).not.toContain("establishProductionUpstreamSession");
   });
 
+
+
+  it("keeps Vendor Invoice AP endpoints owned by the standalone BizPortal backend", () => {
+    const purchaseWorkflowSource = readFileSync(
+      new URL("../routes/purchase-workflow.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(routeSource).toContain('import purchaseWorkflowRouter from "./purchase-workflow";');
+    expect(routeSource).toContain("router.use(purchaseWorkflowRouter);");
+    expect(routeSource.indexOf("router.use(purchaseWorkflowRouter);")).toBeLessThan(
+      routeSource.indexOf("BIZPORTAL_LOCAL_ENDPOINT_NOT_FOUND"),
+    );
+    expect(purchaseWorkflowSource).toContain(
+      'router.get("/purchase-workflow/vendor-invoices"',
+    );
+    expect(purchaseWorkflowSource).toContain(
+      'router.get("/purchase-workflow/vendor-invoices/:id"',
+    );
+    expect(purchaseWorkflowSource).not.toContain("requestUpstream");
+  });
+
   it("implements local bank reconciliation approval with an atomic journal transaction", () => {
     const bankReconciliationSource = readFileSync(
       new URL("../routes/bank-reconciliation.ts", import.meta.url),
