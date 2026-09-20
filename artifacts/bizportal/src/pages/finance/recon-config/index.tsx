@@ -796,6 +796,7 @@ function AiRulesTab() {
   const [previewing, setPreviewing] = useState(false);
   const [ruleSearch, setRuleSearch] = useState("");
   const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
+  const [showInactiveRules, setShowInactiveRules] = useState(false);
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -1147,9 +1148,33 @@ function AiRulesTab() {
   };
 
   const deactivate = async (row: any) => {
+    if (!row.is_active) return;
     if (!confirm(`Nonaktifkan rule "${row.name}"?`)) return;
-    await fetch(`${API}/recon-classification/ai-rules/${row.id}?company_id=${activeCompanyId}`, { method: "DELETE", credentials: "include" });
-    load();
+    const response = await fetch(
+      `${API}/recon-classification/ai-rules/${row.id}?company_id=${activeCompanyId}`,
+      { method: "DELETE", credentials: "include" },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      alert(body?.error ?? "Rule gagal dinonaktifkan.");
+      return;
+    }
+    await load();
+  };
+
+  const activate = async (row: any) => {
+    if (row.is_active) return;
+    if (!confirm(`Aktifkan kembali rule "${row.name}"?`)) return;
+    const response = await fetch(
+      `${API}/recon-classification/ai-rules/${row.id}/activate?company_id=${activeCompanyId}`,
+      { method: "POST", credentials: "include" },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      alert(body?.error ?? "Rule gagal diaktifkan kembali.");
+      return;
+    }
+    await load();
   };
 
   const coaDetails = (row: any) => {
@@ -1178,6 +1203,7 @@ function AiRulesTab() {
 
   const normalizedRuleSearch = ruleSearch.trim().toLowerCase();
   const filteredRows = rows.filter((row) => {
+    if (!showInactiveRules && row.is_active === false) return false;
     const matchesDirection = coaDirectionFilter === "all" || coaDirection(row) === coaDirectionFilter;
     if (!matchesDirection) return false;
     if (!normalizedRuleSearch) return true;
@@ -1246,6 +1272,14 @@ function AiRulesTab() {
               Reset filter
             </Button>
           )}
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <Switch
+              checked={showInactiveRules}
+              onCheckedChange={setShowInactiveRules}
+              aria-label="Tampilkan rule nonaktif"
+            />
+            <span className="text-xs text-slate-400">Tampilkan nonaktif</span>
+          </div>
           <span className="text-xs text-slate-500 whitespace-nowrap">
             {filteredRows.length} dari {rows.length} rule
           </span>
@@ -1363,8 +1397,13 @@ function AiRulesTab() {
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(row)}
                         className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"><Pencil size={13} /></button>
-                      <button onClick={() => deactivate(row)}
-                        className="p-1.5 rounded hover:bg-red-900 text-slate-400 hover:text-red-300"><PowerOff size={13} /></button>
+                      {row.is_active ? (
+                        <button onClick={() => deactivate(row)} title="Nonaktifkan"
+                          className="p-1.5 rounded hover:bg-red-900 text-slate-400 hover:text-red-300"><PowerOff size={13} /></button>
+                      ) : (
+                        <button onClick={() => activate(row)} title="Aktifkan kembali"
+                          className="p-1.5 rounded hover:bg-emerald-900 text-slate-400 hover:text-emerald-300"><RefreshCw size={13} /></button>
+                      )}
                     </div>
                   </td>
                 </tr>
