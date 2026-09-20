@@ -1483,7 +1483,34 @@ function QrisCandidateDiagnosticBlock({
   );
 }
 
+function canonicalSettlementIsPostedForMutation(m: BankMutation): boolean {
+  return detailCandidates(m).some(candidate => {
+    if (
+      candidate.candidate_type !== "qris_settlement"
+      || candidate.candidate_source !== CANONICAL_SETTLEMENT_SOURCE
+    ) return false;
+
+    const details = candidate.details;
+    const settlementStatus = String(details?.settlementStatus ?? "").toLowerCase();
+    const journalStatus = String(details?.settlementJournalStatus ?? "").toLowerCase();
+    const linkedMutationId = Number(details?.canonicalBankMutationId ?? details?.bankMutationId ?? 0);
+
+    return ["approved", "posted"].includes(String(candidate.status ?? "").toLowerCase())
+      && ["reconciled", "settled", "completed"].includes(settlementStatus)
+      && journalStatus === "posted"
+      && linkedMutationId === m.id;
+  });
+}
+
+function lifecycleStatus(m: BankMutation): string {
+  // Canonical QRIS is link-only on public.bank_mutations: the mutation stays
+  // "approved" while its Sport Center settlement journal is already posted.
+  // The UI lifecycle must reflect the canonical owner, not fall back to step 0.
+  if (canonicalSettlementIsPostedForMutation(m)) return "posted";
+  return m.status;
+}
 function statusLabel(m: BankMutation): string {
+  if (canonicalSettlementIsPostedForMutation(m)) return STATUS_LABELS.posted;
   if (m.status === "approved") return STATUS_LABELS.approved;
   if (m.status === "posted") return STATUS_LABELS.posted;
   if (m.status === "rejected") return STATUS_LABELS.rejected;
@@ -6833,7 +6860,7 @@ function MutationDetailPanel({
     && availableQrisPaymentIds.every((id) => selectedQrisPayments.includes(id));
   const qrisPaymentIdsForApproval = selectedQrisPayments;
   const isIN  = m.direction === "IN";
-  const currentStep = getLifecycleIndex(m.status);
+  const currentStep = getLifecycleIndex(lifecycleStatus(m));
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
