@@ -459,9 +459,32 @@ async function syncConfig(config: SheetConfig): Promise<{
               matched.match_score,
               matched.match_reason,
               matched.match_status,
-              matched.match_result,
-              coalesce(contra.coa_code, canonical_contra.coa_code) as coa_code,
-              coalesce(contra.coa_name, canonical_contra.coa_name) as coa_name
+              case
+                when rule_classification.coa_code is not null then concat_ws(
+                  ' | ',
+                  concat(
+                    'Rule AI COA: ',
+                    rule_classification.coa_code,
+                    case
+                      when rule_classification.coa_name is not null
+                        then concat(' — ', rule_classification.coa_name)
+                      else ''
+                    end
+                  ),
+                  matched.match_result
+                )
+                else matched.match_result
+              end as match_result,
+              coalesce(
+                rule_classification.coa_code,
+                contra.coa_code,
+                canonical_contra.coa_code
+              ) as coa_code,
+              coalesce(
+                rule_classification.coa_name,
+                contra.coa_name,
+                canonical_contra.coa_name
+              ) as coa_name
          from public.bank_mutations bm
          left join lateral (
            select m.match_score,
@@ -480,6 +503,40 @@ async function syncConfig(config: SheetConfig): Promise<{
             end, m.created_at desc nulls last, m.id desc
             limit 1
          ) matched on true
+         -- The Sheet COA column is a business classification, not the technical
+         -- contra account of a bank-to-bank/source-journal reclassification.
+         -- When Rule AI matched the mutation, its validated target COA therefore
+         -- takes precedence while the real Sport Center/payment candidate remains
+         -- the reconciliation evidence and keeps its own match score/reason.
+         left join lateral (
+           select rule.target_coa_code as coa_code,
+                  target_coa.name as coa_name
+             from public.bank_reconciliation_matches rule_match
+             join public.recon_rules rule
+               on rule_match.candidate_type = 'recon_rule'
+              and rule_match.candidate_source = 'public.recon_rules'
+              and rule.id = rule_match.candidate_id
+              and rule.company_id = bm.company_id
+              and rule.is_active = true
+             join lateral (
+               select coa.name
+                 from public.chart_of_accounts coa
+                where coa.code = rule.target_coa_code
+                  and (coa.company_id = bm.company_id or coa.company_id is null)
+                  and coalesce(coa.is_active, true) = true
+                  and coalesce(coa.is_header, false) = false
+                  and coalesce(coa.is_postable, true) = true
+                order by case when coa.company_id = bm.company_id then 0 else 1 end, coa.id
+                limit 1
+             ) target_coa on true
+            where rule_match.mutation_id = bm.id
+              and rule.target_coa_code is not null
+              and lower(coalesce(rule_match.status, '')) in (
+                'candidate', 'approved', 'posted', 'reconciled', 'superseded'
+              )
+            order by rule_match.id desc
+            limit 1
+         ) rule_classification on true
          left join lateral (
            select coa.code as coa_code, coa.name as coa_name
              from public.accounting_entry_lines line
