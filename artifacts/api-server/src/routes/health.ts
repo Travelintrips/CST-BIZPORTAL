@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { pool, runtimeDatabaseUrl } from "@workspace/db";
+import { getRuntimeDatabaseUrl, pool } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -16,6 +16,7 @@ router.get("/healthz", (_req, res) => {
 router.get("/health/ready", async (_req, res) => {
   try {
     await pool.query<{ ok: number }>("select 1 as ok");
+    const runtimeDatabaseUrl = await getRuntimeDatabaseUrl();
     res.json({
       status: "ok",
       ready: true,
