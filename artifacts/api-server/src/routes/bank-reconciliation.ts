@@ -1933,6 +1933,8 @@ async function approveBankMutation(
         direction,
         note,
         manual_coa_override: manualCoaCode != null,
+        source_journal_id: sourceReceiptJournal?.entryId ?? null,
+        source_journal_number: sourceReceiptJournal?.entryNumber ?? null,
         idempotency_key: idempotencyKey,
       }),
     ],
