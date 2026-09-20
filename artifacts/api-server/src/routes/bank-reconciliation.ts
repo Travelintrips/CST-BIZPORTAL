@@ -544,6 +544,7 @@ async function matchLocalMutation(
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
     const autoPostEligible = confidence === 100
       && matchedRule.candidateRequirement !== 'required'
+      && !realCandidate
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
       && !ruleResult.ambiguityCode
@@ -1939,7 +1940,12 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
     }>(
       `select id,status::text status,ref,total_debit::text total_debit,total_credit::text total_credit
          from public.accounting_entries
-        where id=$1 and company_id=$2 and source='bank_reconciliation' and source_id=$3
+        where id=$1
+          and company_id=$2
+          and (
+            (source='bank_reconciliation' and source_id=$3)
+            or id=$1
+          )
         limit 1`,
       [mutation.journal_entry_id, mutation.company_id, mutationId],
     );
