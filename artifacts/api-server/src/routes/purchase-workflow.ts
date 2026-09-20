@@ -18,6 +18,9 @@ interface VendorInvoiceListRow {
   invoice_date: string | Date | null;
   journal_entry_id: number | null;
   journal_status: string | null;
+  withholding_tax_amount: string | null;
+  withholding_tax_type: string | null;
+  invoice_breakdown: unknown;
   total_count: number;
 }
 
@@ -576,6 +579,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
 
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
              vi.journal_entry_id, ae.status::text journal_status,
+             vi.withholding_tax_amount, vi.withholding_tax_type, vi.invoice_breakdown,
              count(*) over()::int total_count
         from public.vendor_invoices vi
         left join public.accounting_entries ae on ae.id = vi.journal_entry_id
@@ -599,6 +603,9 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
         companyId: row.company_id,
         invoiceDate: row.invoice_date,
         journalStatus: row.journal_status,
+        withholdingTaxAmount: row.withholding_tax_amount,
+        withholdingTaxType: row.withholding_tax_type,
+        invoiceBreakdown: row.invoice_breakdown,
       })),
       page,
       pageSize,
