@@ -1,6 +1,9 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -30,5 +33,36 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+
+if (process.env.NODE_ENV === "production") {
+  const distDir = path.dirname(fileURLToPath(import.meta.url));
+  const publicDir = path.join(distDir, "public");
+  const indexFile = path.join(publicDir, "index.html");
+
+  if (!existsSync(indexFile)) {
+    throw new Error(
+      `Production frontend bundle is missing: ${indexFile}. Run the root build before starting the app.`,
+    );
+  }
+
+  app.use(express.static(publicDir, { index: false }));
+
+  app.use((req, res, next) => {
+    if (
+      req.method !== "GET" ||
+      req.path === "/api" ||
+      req.path.startsWith("/api/")
+    ) {
+      next();
+      return;
+    }
+
+    res.sendFile(indexFile, (err) => {
+      if (err) {
+        next(err);
+      }
+    });
+  });
+}
 
 export default app;
