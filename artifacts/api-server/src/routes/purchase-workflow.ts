@@ -21,6 +21,7 @@ interface VendorInvoiceListRow {
   withholding_tax_amount: string | null;
   withholding_tax_type: string | null;
   invoice_breakdown: unknown;
+  pph_paid_amount: string;
   total_count: number;
 }
 
@@ -580,10 +581,20 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
              vi.journal_entry_id, ae.status::text journal_status,
              vi.withholding_tax_amount, vi.withholding_tax_type, vi.invoice_breakdown,
+             coalesce(pph_payment.paid_amount, 0) pph_paid_amount,
              count(*) over()::int total_count
         from public.vendor_invoices vi
         left join public.accounting_entries ae on ae.id = vi.journal_entry_id
         ${RECONCILED_PAYMENT_JOIN}
+        left join lateral (
+          select coalesce(sum(bdi.amount), 0) paid_amount
+          from public.bank_disbursement_items bdi
+          join public.bank_disbursements bd on bd.id = bdi.disbursement_id
+          where bdi.vendor_invoice_id = vi.id
+            and bdi.transaction_type = 'tax_payment'
+            and bd.company_id = vi.company_id
+            and bd.status = 'posted'
+        ) pph_payment on true
        where vi.company_id = $1
        order by vi.created_at desc nulls last, vi.id desc
        limit $2 offset $3
@@ -606,6 +617,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
         withholdingTaxAmount: row.withholding_tax_amount,
         withholdingTaxType: row.withholding_tax_type,
         invoiceBreakdown: row.invoice_breakdown,
+        pphPaidAmount: Number(row.pph_paid_amount),
       })),
       page,
       pageSize,
