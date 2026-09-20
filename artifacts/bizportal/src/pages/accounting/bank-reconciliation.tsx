@@ -724,6 +724,12 @@ interface BankMutation {
     debit?: number | string | null;
     credit?: number | string | null;
   }> | null;
+  source_correction_coa_accounts?: Array<{
+    code?: string | null;
+    name?: string | null;
+    debit?: number | string | null;
+    credit?: number | string | null;
+  }> | null;
   posted_at?: string | null;
   posted_by?: string | null;
   review_reason?: string | null;
@@ -998,12 +1004,18 @@ type PostedCoaAccount = NonNullable<BankMutation["posted_coa_accounts"]>[number]
 function finalPostedCoaAccounts(mutation: BankMutation): PostedCoaAccount[] {
   const posted = mutation.posted_coa_accounts ?? [];
   const source = mutation.source_posted_coa_accounts ?? [];
-  if (mutation.review_code !== "SOURCE_JOURNAL_RECLASSIFIED" || source.length === 0) {
+  const corrections = mutation.source_correction_coa_accounts ?? [];
+  const isSourceReclassified =
+    mutation.review_code === "SOURCE_JOURNAL_RECLASSIFIED" && source.length > 0;
+  if (!isSourceReclassified && corrections.length === 0) {
     return posted;
   }
 
+  const accountsToNet = isSourceReclassified
+    ? [...source, ...posted, ...corrections]
+    : [...posted, ...corrections];
   const netByAccount = new Map<string, { code: string | null; name: string | null; net: number }>();
-  for (const account of [...source, ...posted]) {
+  for (const account of accountsToNet) {
     const code = account.code ?? null;
     const name = account.name ?? null;
     const key = code || name || "unknown";
@@ -5616,6 +5628,7 @@ function MutationCard({
   const hasSourceJournalReclassification =
     m.review_code === "SOURCE_JOURNAL_RECLASSIFIED"
     && (m.source_posted_coa_accounts?.length ?? 0) > 0;
+  const hasSourceAccountingCorrection = (m.source_correction_coa_accounts?.length ?? 0) > 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
   const hasApprovedMatch = hasApprovedReconciliationMatch(m);
@@ -5736,11 +5749,15 @@ function MutationCard({
                     onClick={e => e.stopPropagation()}
                   >
                     <p className="font-semibold text-black dark:text-black">
-                      {hasSourceJournalReclassification ? "Hasil akuntansi final" : "Diposting ke akun COA"}
+                      {hasSourceJournalReclassification || hasSourceAccountingCorrection
+                        ? "Hasil akuntansi final"
+                        : "Diposting ke akun COA"}
                     </p>
-                    {hasSourceJournalReclassification && (
+                    {(hasSourceJournalReclassification || hasSourceAccountingCorrection) && (
                       <p className="mt-0.5 text-[10px] text-emerald-900 dark:text-emerald-900">
-                        Pendapatan berasal dari jurnal sumber Sport Center/Tenant; jurnal rekonsiliasi hanya memindahkan saldo ke rekening bank aktual.
+                        {hasSourceJournalReclassification
+                          ? "Pendapatan berasal dari jurnal sumber Sport Center/Tenant; jurnal rekonsiliasi hanya memindahkan saldo ke rekening bank aktual."
+                          : "Nilai ini sudah memasukkan jurnal koreksi sumber, termasuk koreksi PPN Sport Center bila ada."}
                       </p>
                     )}
                     <div className="mt-1 space-y-1 text-black dark:text-black">
