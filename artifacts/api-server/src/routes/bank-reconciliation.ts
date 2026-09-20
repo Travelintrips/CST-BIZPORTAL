@@ -961,6 +961,80 @@ async function resolvePostedSourceReceiptJournal(
   };
 }
 
+async function assertSportPaymentSourceReceiptAccount(
+  client: ApprovalClient,
+  companyId: number,
+  candidateId: number,
+  sourceJournal: SourceReceiptJournal,
+): Promise<void> {
+  const paymentResult = await client.query<{
+    payment_method: string | null;
+    payment_provider: string | null;
+    bank_account_id: string | null;
+  }>(
+    `select payment_method::text, payment_provider::text, bank_account_id::text
+       from sport_center.sport_payments
+      where id = $1
+        and coalesce(company_id, 1) = $2
+      limit 1`,
+    [candidateId, companyId],
+  );
+  const payment = paymentResult.rows[0];
+  if (!payment) {
+    throw new ApprovalError(
+      "Payment Sport Center tidak ditemukan saat memvalidasi akun penerimaan sumber.",
+      422,
+      "SOURCE_JOURNAL_REQUIRED",
+    );
+  }
+
+  const method = String(payment.payment_method ?? "").trim().toLowerCase();
+  const provider = String(payment.payment_provider ?? "").trim().toLowerCase();
+  const isDirectBankTransfer =
+    method.includes("transfer")
+    && (!provider || provider === "unknown" || provider === "manual");
+  if (!isDirectBankTransfer) return;
+
+  const externalBankAccountId = String(payment.bank_account_id ?? "").trim();
+  if (!externalBankAccountId) {
+    throw new ApprovalError(
+      "Transfer Bank Sport Center tidak memiliki identitas rekening penerima canonical.",
+      422,
+      "SOURCE_PAYMENT_BANK_UNRESOLVED",
+    );
+  }
+
+  const bankResult = await client.query<{ coa_id: number; code: string; name: string }>(
+    `select cba.coa_id, coa.code, coa.name
+       from public.company_bank_accounts cba
+       join public.chart_of_accounts coa on coa.id = cba.coa_id
+      where cba.company_id = $1
+        and cba.account_number::text = $2
+        and coalesce(cba.is_active, true) = true
+        and coalesce(coa.is_active, true) = true
+        and coalesce(coa.is_postable, true) = true
+      order by cba.id
+      limit 2`,
+    [companyId, externalBankAccountId],
+  );
+  if (bankResult.rows.length !== 1) {
+    throw new ApprovalError(
+      `Rekening penerima Sport Center "${externalBankAccountId}" tidak memiliki tepat satu mapping COA aktif.`,
+      422,
+      "SOURCE_PAYMENT_BANK_UNRESOLVED",
+    );
+  }
+
+  const expected = bankResult.rows[0]!;
+  if (expected.coa_id !== sourceJournal.debitAccountId) {
+    throw new ApprovalError(
+      `Jurnal sumber Sport Center memakai ${sourceJournal.debitAccountCode} — ${sourceJournal.debitAccountName}, padahal payment Transfer Bank menunjuk ${expected.code} — ${expected.name}. Rekonsiliasi diblokir sampai jurnal sumber dikoreksi/reversal agar tidak membuat reklasifikasi palsu.`,
+      409,
+      "SOURCE_JOURNAL_BANK_MISMATCH",
+    );
+  }
+}
+
 async function assertSourceOwnedCandidateNotReconciledElsewhere(
   client: ApprovalClient,
   mutationId: number,
@@ -1659,6 +1733,14 @@ async function approveBankMutation(
       selectedCandidateId,
       amount,
     );
+    if (selectedCandidateType === "sport_payment") {
+      await assertSportPaymentSourceReceiptAccount(
+        client,
+        companyId,
+        selectedCandidateId,
+        sourceReceiptJournal,
+      );
+    }
 
     if (sourceReceiptJournal.debitAccountId === bankCoaId) {
       return finalizeSourceJournalReuse(
@@ -2338,6 +2420,8 @@ router.post("/bank-reconciliation/:mutationId/approve", async (req, res): Promis
           "SOURCE_JOURNAL_REQUIRED",
           "SOURCE_RECEIPT_ACCOUNT_UNRESOLVED",
           "SOURCE_OWNED_COA_OVERRIDE_BLOCKED",
+          "SOURCE_PAYMENT_BANK_UNRESOLVED",
+          "SOURCE_JOURNAL_BANK_MISMATCH",
         ].includes(error.code ?? "")
           ? { manual_review_required: true }
           : {}),

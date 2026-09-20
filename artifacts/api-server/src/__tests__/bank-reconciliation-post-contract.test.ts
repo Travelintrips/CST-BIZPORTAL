@@ -60,6 +60,15 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("status in ('approved','posted')");
   });
 
+  it("fails closed when a direct Sport Center transfer source journal uses the wrong bank COA", () => {
+    expect(api).toContain("assertSportPaymentSourceReceiptAccount(");
+    expect(api).toContain('method.includes("transfer")');
+    expect(api).toContain('provider === "unknown" || provider === "manual"');
+    expect(api).toContain("cba.account_number::text = $2");
+    expect(api).toContain("SOURCE_PAYMENT_BANK_UNRESOLVED");
+    expect(api).toContain("SOURCE_JOURNAL_BANK_MISMATCH");
+  });
+
   it("reuses the source journal when the receipt account is already the actual bank", () => {
     expect(api).toContain("sourceReceiptJournal.debitAccountId === bankCoaId");
     expect(api).toContain("finalizeSourceJournalReuse(");
