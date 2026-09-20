@@ -152,23 +152,42 @@ interface VendorInvoicePage {
 }
 
 
-function vendorInvoiceWithholdingLabel(invoice: Record<string, unknown>): string {
-  const labels = new Set<string>();
-  const directType = String(invoice.withholdingTaxType ?? "").trim();
-  if (directType) labels.add(directType);
-
+function vendorInvoicePphBreakdown(invoice: Record<string, unknown>): Array<{ type: string; amount: number }> {
   const breakdown = invoice.invoiceBreakdown && typeof invoice.invoiceBreakdown === "object"
     ? invoice.invoiceBreakdown as Record<string, unknown>
     : null;
-  const components = Array.isArray(breakdown?.components) ? breakdown.components : [];
+  const repaired = Array.isArray(breakdown?.withholding_repair_components)
+    ? breakdown.withholding_repair_components
+    : [];
+  const components = repaired.length > 0
+    ? repaired
+    : Array.isArray(breakdown?.components) ? breakdown.components : [];
+
+  const byType = new Map<string, number>();
   for (const componentValue of components) {
     if (!componentValue || typeof componentValue !== "object") continue;
     const component = componentValue as Record<string, unknown>;
-    const label = String(component.withholding_tax_type ?? component.tax_type ?? "").trim();
-    if (label) labels.add(label);
+    const type = String(
+      component.tax_type ?? component.withholding_tax_type ?? invoice.withholdingTaxType ?? "",
+    ).trim();
+    const amount = Number(component.tax_amount ?? component.withholding_tax_amount ?? 0);
+    if (!type || !Number.isFinite(amount) || amount <= 0) continue;
+    byType.set(type, (byType.get(type) ?? 0) + amount);
   }
 
-  return Array.from(labels).join(", ");
+  if (byType.size === 0) {
+    const type = String(invoice.withholdingTaxType ?? "").trim();
+    const amount = canonicalWithholdingAmount(invoice);
+    if (type && amount > 0) byType.set(type, amount);
+  }
+  return Array.from(byType.entries()).map(([type, amount]) => ({ type, amount }));
+}
+
+function vendorInvoicePphPayment(invoice: Record<string, unknown>) {
+  const total = canonicalWithholdingAmount(invoice);
+  const rawPaid = Number(invoice.pphPaidAmount ?? 0);
+  const paid = Math.min(total, Number.isFinite(rawPaid) ? Math.max(0, rawPaid) : 0);
+  return { total, paid, outstanding: Math.max(0, total - paid) };
 }
 
 function parseVendorInvoicePage(payload: unknown): VendorInvoicePage {
@@ -580,7 +599,9 @@ export function VendorInvoicesListPage() {
                     <th className="text-left py-2 px-3">Status</th>
                     <th className="text-left py-2 px-3">3-Way Match</th>
                     <th className="text-right py-2 px-3">Grand Total</th>
-                    <th className="text-right py-2 px-3">PPh</th>
+                    <th className="text-right py-2 px-3">PPh Total</th>
+                    <th className="text-right py-2 px-3">PPh Terbayar</th>
+                    <th className="text-right py-2 px-3">PPh Belum Dibayar</th>
                     <th className="text-right py-2 px-3">Terbayar</th>
                     <th className="text-right py-2 px-3">Sisa</th>
                     <th className="text-right py-2 px-3">Aksi</th>
@@ -598,11 +619,20 @@ export function VendorInvoicesListPage() {
                         <td className="py-2 px-3"><Badge variant={vi.threeWayMatchStatus === "matched" ? "default" : vi.threeWayMatchStatus === "partial" ? "secondary" : "outline"} className="text-xs">{String(vi.threeWayMatchStatus)}</Badge></td>
                         <td className="py-2 px-3 text-right font-mono">{idr(canonicalGrandTotal(vi))}</td>
                         <td className="py-2 px-3 text-right">
-                          <div className="font-mono text-amber-600">{idr(canonicalWithholdingAmount(vi))}</div>
-                          {vendorInvoiceWithholdingLabel(vi) && (
-                            <div className="mt-0.5 text-[10px] text-muted-foreground">
-                              {vendorInvoiceWithholdingLabel(vi)}
+                          <div className="font-mono text-amber-600">{idr(vendorInvoicePphPayment(vi).total)}</div>
+                          {vendorInvoicePphBreakdown(vi).map((part) => (
+                            <div key={part.type} className="mt-0.5 whitespace-nowrap text-[10px] text-muted-foreground">
+                              {part.type}: {idr(part.amount)}
                             </div>
+                          ))}
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono text-emerald-600">
+                          {idr(vendorInvoicePphPayment(vi).paid)}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <div className="font-mono text-red-600">{idr(vendorInvoicePphPayment(vi).outstanding)}</div>
+                          {vendorInvoicePphPayment(vi).outstanding > 0.01 && (
+                            <div className="mt-0.5 text-[10px] font-medium text-red-600">Harus dibayar</div>
                           )}
                         </td>
                         <td className="py-2 px-3 text-right font-mono text-muted-foreground">{idr(canonicalAmountPaid(vi))}</td>
