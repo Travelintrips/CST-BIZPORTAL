@@ -1176,7 +1176,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
                   </div>
                   {IS_DEV && (
                     <DropdownMenuItem
-                      onClick={() => { window.location.href = "/api/logout?redirect=/bizportal/"; }}
+                      onClick={() => { window.location.href = "/api/logout?redirect=/"; }}
                       className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
                     >
                       <LogOut className="mr-2 h-4 w-4" />
