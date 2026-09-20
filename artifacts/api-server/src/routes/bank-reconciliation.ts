@@ -2341,6 +2341,35 @@ const mutationListColumns = `
   bm.linked_transaction_id,
   bm.journal_entry_id,
   (
+    select entry.status::text
+      from public.accounting_entries entry
+     where entry.id = bm.journal_entry_id
+       and entry.company_id = bm.company_id
+     limit 1
+  ) as journal_status,
+  (
+    select coalesce(
+      json_agg(
+        json_build_object(
+          'code', coa.code,
+          'name', coa.name,
+          'debit', line.debit,
+          'credit', line.credit
+        )
+        order by line.id
+      ),
+      '[]'::json
+    )
+      from public.accounting_entry_lines line
+      join public.accounting_entries entry
+        on entry.id = line.entry_id
+      left join public.chart_of_accounts coa
+        on coa.id = line.account_id
+     where line.entry_id = bm.journal_entry_id
+       and entry.company_id = bm.company_id
+       and entry.status = 'posted'
+  ) as posted_coa_accounts,
+  (
     select coalesce(json_agg(json_build_object(
       'id', match.id,
       'mutation_id', match.mutation_id,
