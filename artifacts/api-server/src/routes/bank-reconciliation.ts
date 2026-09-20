@@ -384,6 +384,7 @@ async function loadLocalMatchCandidates(
            left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
           where tp.company_id = $1
             and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+            and nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '') is null
             and lower(coalesce(tp.method::text, '')) not like '%qris%'
             and abs(tp.amount::numeric - $2::numeric) < 0.01
             and coalesce(
@@ -868,8 +869,22 @@ async function resolvePostedSourceReceiptJournal(
           and ae.status = 'posted'
           and abs(ae.total_debit::numeric - $3::numeric) < 0.01
           and ae.source::text = 'tenant_rent_payment'
-          and ae.source_id = $2
-        order by ae.id desc
+          and ae.source_id in (
+            $2,
+            coalesce(
+              (
+                select nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '')::integer
+                  from public.tenant_payments tp
+                 where tp.id = $2
+                   and tp.company_id = $1
+                 limit 1
+              ),
+              $2
+            )
+          )
+        order by
+          case when ae.source_id = $2 then 0 else 1 end,
+          ae.id desc
         limit 2`,
       [companyId, candidateId, amount],
     );
