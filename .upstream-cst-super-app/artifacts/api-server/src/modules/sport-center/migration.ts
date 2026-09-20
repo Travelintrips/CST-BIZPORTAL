@@ -1799,6 +1799,24 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
          LIMIT 1;
 
         IF v_existing_journal_id IS NOT NULL THEN
+            IF EXISTS (
+                SELECT 1
+                  FROM sport_center.accounting_journals existing_journal
+                 WHERE existing_journal.id = v_existing_journal_id
+                   AND (
+                       ABS(COALESCE(existing_journal.gross_amount, -1)::numeric - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                       OR ABS(COALESCE(existing_journal.debit_amount, -1)::numeric - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                       OR ABS((COALESCE(existing_journal.credit_revenue_amount, 0) + COALESCE(existing_journal.credit_ppn_amount, 0))::numeric - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                       OR ABS(COALESCE((SELECT SUM(line.amount) FROM sport_center.accounting_journal_lines line WHERE line.journal_id = existing_journal.id AND line.line_type = 'debit'), -1)::numeric - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                       OR ABS(COALESCE((SELECT SUM(line.amount) FROM sport_center.accounting_journal_lines line WHERE line.journal_id = existing_journal.id AND line.line_type = 'credit'), -1)::numeric - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   )
+            ) THEN
+                RAISE EXCEPTION
+                    'PAYMENT_ACCOUNTING_EXISTING_JOURNAL_AMOUNT_MISMATCH: payment=% journal=% payment_amount=%',
+                    p_payment_id,
+                    v_existing_journal_id,
+                    v_payment.amount;
+            END IF;
             RETURN v_existing_journal_id;
         END IF;
 

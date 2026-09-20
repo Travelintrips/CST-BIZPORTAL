@@ -64,6 +64,10 @@ describe("Sport Center payment accounting draft contract", () => {
     expect(ownerFunction).toContain("is_reversal = false");
     expect(ownerFunction).toContain("ORDER BY id");
     expect(ownerFunction).toContain("LIMIT 1");
+    expect(ownerFunction).toContain("PAYMENT_ACCOUNTING_EXISTING_JOURNAL_AMOUNT_MISMATCH");
+    expect(ownerFunction).toContain("existing_journal.gross_amount");
+    expect(ownerFunction).toContain("existing_journal.debit_amount");
+    expect(ownerFunction).toContain("SUM(line.amount)");
     expect(ownerFunction).toContain("RETURN v_existing_journal_id");
   });
 
