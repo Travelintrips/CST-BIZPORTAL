@@ -66,9 +66,10 @@ jobs:
           GCP_SECRET_MANAGER_BOOTSTRAP_JSON: ""
         run: |
           set -euo pipefail
+          test -f ./index.js
           test -f ./dist/index.js
           test -f ./dist/index.mjs
-          node --max-http-header-size=65536 --enable-source-maps ./dist/index.js > /tmp/bizportal-runtime.log 2>&1 &
+          node --max-http-header-size=65536 --enable-source-maps ./index.js > /tmp/bizportal-runtime.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
 
