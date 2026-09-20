@@ -2967,34 +2967,114 @@ const mutationListColumns = `
   bm.linked_transaction_type,
   bm.linked_transaction_id,
   bm.journal_entry_id,
-  (
-    select entry.status::text
-      from public.accounting_entries entry
-     where entry.id = bm.journal_entry_id
-       and entry.company_id = bm.company_id
-     limit 1
+  coalesce(
+    (
+      select entry.status::text
+        from public.accounting_entries entry
+       where entry.id = bm.journal_entry_id
+         and entry.company_id = bm.company_id
+       limit 1
+    ),
+    (
+      select settlement_journal.status::text
+        from public.bank_reconciliation_matches settlement_match
+        join sport_center.payment_settlement_batches settlement_batch
+          on settlement_match.candidate_type = 'qris_settlement'
+         and settlement_match.candidate_source = 'sport_center.payment_settlement_batches'
+         and settlement_batch.id = settlement_match.candidate_id
+        join sport_center.accounting_journals settlement_journal
+          on settlement_journal.id = settlement_batch.settlement_journal_id
+       where settlement_match.mutation_id = bm.id
+         and settlement_match.status in ('approved','posted','reconciled')
+         and settlement_journal.status::text = 'posted'
+       order by settlement_match.id desc
+       limit 1
+    )
   ) as journal_status,
   (
     select coalesce(
       json_agg(
         json_build_object(
-          'code', coa.code,
-          'name', coa.name,
-          'debit', line.debit,
-          'credit', line.credit
+          'code', posted_line.code,
+          'name', posted_line.name,
+          'debit', posted_line.debit,
+          'credit', posted_line.credit
         )
-        order by line.id
+        order by posted_line.sort_group, posted_line.sort_id
       ),
       '[]'::json
     )
+    from (
+      select
+        coa.code,
+        coa.name,
+        line.debit,
+        line.credit,
+        0 as sort_group,
+        line.id as sort_id
       from public.accounting_entry_lines line
       join public.accounting_entries entry
         on entry.id = line.entry_id
       left join public.chart_of_accounts coa
         on coa.id = line.account_id
-     where line.entry_id = bm.journal_entry_id
-       and entry.company_id = bm.company_id
-       and entry.status = 'posted'
+      where line.entry_id = bm.journal_entry_id
+        and entry.company_id = bm.company_id
+        and entry.status = 'posted'
+
+      union all
+
+      select
+        case
+          when settlement_line.account_code = '1199'
+           and lower(trim(coalesce(settlement_line.account_name, ''))) = 'payment clearing'
+            then coalesce(canonical_clearing.code, settlement_line.account_code)
+          else settlement_line.account_code
+        end as code,
+        case
+          when settlement_line.account_code = '1199'
+           and lower(trim(coalesce(settlement_line.account_name, ''))) = 'payment clearing'
+            then coalesce(canonical_clearing.name, settlement_line.account_name)
+          else settlement_line.account_name
+        end as name,
+        case when lower(settlement_line.line_type::text) = 'debit'
+          then settlement_line.amount else 0 end as debit,
+        case when lower(settlement_line.line_type::text) = 'credit'
+          then settlement_line.amount else 0 end as credit,
+        1 as sort_group,
+        settlement_line.id as sort_id
+      from public.bank_reconciliation_matches settlement_match
+      join sport_center.payment_settlement_batches settlement_batch
+        on settlement_match.candidate_type = 'qris_settlement'
+       and settlement_match.candidate_source = 'sport_center.payment_settlement_batches'
+       and settlement_batch.id = settlement_match.candidate_id
+      join sport_center.accounting_journals settlement_journal
+        on settlement_journal.id = settlement_batch.settlement_journal_id
+       and settlement_journal.status::text = 'posted'
+      join sport_center.accounting_journal_lines settlement_line
+        on settlement_line.journal_id = settlement_journal.id
+      left join lateral (
+        select clearing_coa.code, clearing_coa.name
+        from public.chart_of_accounts clearing_coa
+        where clearing_coa.company_id = bm.company_id
+          and clearing_coa.code like '1-1024-%'
+          and clearing_coa.name ilike 'Payment Clearing Sport Center / QRIS%'
+          and clearing_coa.account_category = 'ASSET'
+          and clearing_coa.is_active = true
+          and coalesce(clearing_coa.is_header, false) = false
+          and coalesce(clearing_coa.is_postable, true) = true
+        order by clearing_coa.id
+        limit 1
+      ) canonical_clearing on true
+      where bm.journal_entry_id is null
+        and settlement_match.mutation_id = bm.id
+        and settlement_match.status in ('approved','posted','reconciled')
+        and settlement_batch.company_id = bm.company_id
+        and settlement_batch.status::text in ('reconciled','settled','completed')
+        and coalesce(
+          settlement_batch.canonical_bank_mutation_id,
+          settlement_batch.bank_mutation_id
+        ) = bm.id
+    ) posted_line
   ) as posted_coa_accounts,
   (
     select coalesce(

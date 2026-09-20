@@ -4670,6 +4670,7 @@ function QrisMutationCard({
   // REVIEW candidates are explicitly approvable through the existing override
   // flow, so they must be selectable in the card as well as in the batch toolbar.
   const bankAmount = numericValue(m.amount) ?? 0;
+  const finalPostedAccounts = finalPostedCoaAccounts(m);
   const snapshotGross = numericValue(audit.gross_amount)
     ?? allItems.reduce(
       (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
@@ -4858,6 +4859,36 @@ function QrisMutationCard({
                   Mutasi: {m.description}
                   {m.provider_order_id && <span> · Ref: {m.provider_order_id}</span>}
                 </p>
+                {isCanonicalReconciled && finalPostedAccounts.length > 0 && (
+                  <div
+                    className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/90 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-50/90"
+                    onClick={event => event.stopPropagation()}
+                  >
+                    <p className="font-semibold text-black dark:text-black">
+                      Diposting ke akun COA
+                    </p>
+                    <div className="mt-1 space-y-1 text-black dark:text-black">
+                      {finalPostedAccounts.map((account, index) => {
+                        const debit = Number(account.debit ?? 0);
+                        const credit = Number(account.credit ?? 0);
+                        const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;
+                        const accountAmount = debit > 0 ? debit : credit;
+                        return (
+                          <p key={`qris-${account.code ?? "coa"}-${index}`} className="break-words">
+                            <span className="font-semibold">{account.code || "—"}</span>
+                            {" — "}
+                            {account.name || "Nama akun belum tersedia"}
+                            {side && accountAmount > 0 && (
+                              <span className="ml-1 font-medium">
+                                · {side} {idr(accountAmount)}
+                              </span>
+                            )}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
               <Badge
                 variant="outline"

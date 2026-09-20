@@ -118,4 +118,18 @@ describe("bank reconciliation post contract", () => {
     expect(ui).toContain('const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;');
     expect(ui).toContain("· {side} {idr(accountAmount)}");
   });
+
+  it("projects canonical QRIS settlement journal COA lines even without a public journal entry", () => {
+    expect(api).toContain("sport_center.payment_settlement_batches settlement_batch");
+    expect(api).toContain("sport_center.accounting_journals settlement_journal");
+    expect(api).toContain("sport_center.accounting_journal_lines settlement_line");
+    expect(api).toContain("where bm.journal_entry_id is null");
+    expect(api).toContain("settlement_match.candidate_type = 'qris_settlement'");
+    expect(api).toContain("settlement_match.candidate_source = 'sport_center.payment_settlement_batches'");
+    expect(api).toContain("settlement_line.account_code = '1199'");
+    expect(api).toContain("clearing_coa.code like '1-1024-%'");
+    expect(api).toContain("Payment Clearing Sport Center / QRIS%");
+    expect(ui).toContain("isCanonicalReconciled && finalPostedAccounts.length > 0");
+    expect(ui).toContain('key={`qris-${account.code ?? "coa"}-${index}`}');
+  });
 });
