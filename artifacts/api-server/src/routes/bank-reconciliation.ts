@@ -3026,6 +3026,114 @@ async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Pr
     }
   }
 
+  const qrisSettlementIds = idsFor("qris_settlement");
+  if (qrisSettlementIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select
+           psb.id,
+           psb.gross_amount,
+           psb.mdr_amount,
+           psb.provider_fee_amount,
+           psb.fee_tax_amount,
+           psb.tax_withheld_amount,
+           psb.adjustment_amount,
+           psb.net_amount,
+           psb.settlement_date::text as settlement_date,
+           psb.settlement_reference,
+           psb.status::text as settlement_status,
+           psb.settlement_journal_id,
+           psb.bank_mutation_id,
+           psb.canonical_bank_mutation_id,
+           psb.settlement_rule_version,
+           (
+             select sj.status::text
+               from sport_center.accounting_journals sj
+              where sj.id = psb.settlement_journal_id
+              limit 1
+           ) as settlement_journal_status,
+           (
+             select count(*)::int
+               from sport_center.payment_settlement_items psi
+              where psi.settlement_id = psb.id
+                and psi.item_status = 'active'
+           ) as settlement_item_count,
+           coalesce((
+             select json_agg(
+               json_build_object(
+                 'id', psi.id,
+                 'sportPaymentId', psi.payment_id,
+                 'paymentNumber', coalesce(
+                   nullif(to_jsonb(sp)->>'payment_number', ''),
+                   nullif(sp.reference_number, ''),
+                   nullif(sp.provider_order_id, '')
+                 ),
+                 'bookingId', sp.booking_id,
+                 'grossAmount', psi.gross_amount,
+                 'mdrAmount', sp.mdr_amount,
+                 'netAmount', sp.net_amount
+               )
+               order by psi.id
+             )
+               from sport_center.payment_settlement_items psi
+               left join sport_center.sport_payments sp on sp.id = psi.payment_id
+              where psi.settlement_id = psb.id
+                and psi.item_status = 'active'
+           ), '[]'::json) as settlement_items,
+           coalesce((
+             select json_agg(
+               json_build_object(
+                 'id', line.id,
+                 'lineType', line.line_type,
+                 'accountCode', line.account_code,
+                 'accountName', line.account_name,
+                 'amount', line.amount,
+                 'description', line.description
+               )
+               order by line.id
+             )
+               from sport_center.accounting_journal_lines line
+              where line.journal_id = psb.settlement_journal_id
+           ), '[]'::json) as settlement_journal_lines
+         from sport_center.payment_settlement_batches psb
+        where psb.id = any($1::bigint[])`,
+        [qrisSettlementIds],
+      );
+      for (const row of result.rows) {
+        const providerFees =
+          Number(row.provider_fee_amount ?? 0) + Number(row.fee_tax_amount ?? 0);
+        details.set(candidateDetailKey("qris_settlement", row.id), {
+          amount: row.net_amount,
+          date: row.settlement_date,
+          reference: row.settlement_reference,
+          status: row.settlement_status,
+          sourceType: "sport_center",
+          sportPaymentType: "qris",
+          grossAmount: row.gross_amount,
+          mdrAmount: row.mdr_amount,
+          taxWithheldAmount: row.tax_withheld_amount,
+          otherFeeAmount: providerFees,
+          netAmount: row.net_amount,
+          settlementDate: row.settlement_date,
+          settlementReference: row.settlement_reference,
+          settlementStatus: row.settlement_status,
+          settlementItemCount: row.settlement_item_count,
+          settlementJournalId: row.settlement_journal_id,
+          settlementJournalStatus: row.settlement_journal_status,
+          bankMutationId: row.bank_mutation_id,
+          canonicalBankMutationId: row.canonical_bank_mutation_id,
+          expectedAmount: row.net_amount,
+          settlementRuleVersion: row.settlement_rule_version,
+          settlementItems: row.settlement_items,
+          settlementJournalLines: row.settlement_journal_lines,
+        });
+      }
+    } catch {
+      // Canonical QRIS settlement details are additive. Keep the mutation
+      // list usable on installations that do not have the Sport Center schema.
+    }
+  }
+
   for (const row of rows) {
     for (const candidate of Array.isArray(row.candidates) ? row.candidates : []) {
       candidate.details = details.get(
