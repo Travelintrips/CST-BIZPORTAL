@@ -107,6 +107,6 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("entry.company_id = bm.company_id");
     expect(ui).toContain("Diposting ke akun COA");
     expect(ui).toContain('const side = debit > 0 ? "Debit" : credit > 0 ? "Kredit" : null;');
-    expect(ui).toContain("· {side} {idr(amount)}");
+    expect(ui).toContain("· {side} {idr(accountAmount)}");
   });
 });
