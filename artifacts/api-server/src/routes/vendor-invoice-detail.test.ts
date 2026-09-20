@@ -147,6 +147,34 @@ describe("vendor invoice detail read path", () => {
             event.company_id === params?.[0] && event.entity_id === params?.[1]),
         };
       }
+      if (sql.includes("from public.vendor_invoices vi") && sql.includes("count(*) over()")) {
+        return {
+          rows: [{
+            id: 12,
+            company_id: 1,
+            invoice_number: "VI/2026/00004",
+            vendor_invoice_ref: "AP-00004",
+            supplier_name: "PT. ANGKASA PURA INDONESIA",
+            status: "posted",
+            grand_total: "26852296",
+            reconciled_amount_paid: "0",
+            three_way_match_status: "unmatched",
+            invoice_date: new Date("2026-09-17T00:00:00.000Z"),
+            journal_entry_id: 44,
+            journal_status: "posted",
+            withholding_tax_amount: "537045.92",
+            withholding_tax_type: "PPh 23",
+            invoice_breakdown: {
+              totals: { withholding_tax_amount: 537045.92, payable_amount: 26315250.08 },
+              components: [{
+                withholding_tax_type: "PPh 23",
+                withholding_tax_amount: 537045.92,
+              }],
+            },
+            total_count: 1,
+          }],
+        };
+      }
       if (sql.includes("from public.vendor_invoices vi")) {
         return {
           rows: [{
@@ -178,6 +206,37 @@ describe("vendor invoice detail read path", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
+  });
+
+  it("returns PPh amount and breakdown on the AP list projection", async () => {
+    const response = await request(
+      server,
+      "/purchase-workflow/vendor-invoices?company=1&page=1&pageSize=50",
+      makeDevelopmentCookie(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      total: 1,
+      data: [{
+        id: 12,
+        invoiceNumber: "VI/2026/00004",
+        grandTotal: 26852296,
+        withholdingTaxAmount: "537045.92",
+        withholdingTaxType: "PPh 23",
+        invoiceBreakdown: {
+          totals: {
+            withholding_tax_amount: 537045.92,
+            payable_amount: 26315250.08,
+          },
+        },
+      }],
+    });
+
+    const listSql = String(queryMock.mock.calls[0]?.[0] ?? "");
+    expect(listSql).toContain("vi.withholding_tax_amount");
+    expect(listSql).toContain("vi.withholding_tax_type");
+    expect(listSql).toContain("vi.invoice_breakdown");
   });
 
   it("returns the canonical local invoice without invoking the upstream fallback", async () => {
