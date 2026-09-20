@@ -1932,8 +1932,9 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
     const mutationResult = await pool.query<{
       journal_entry_id: number | null;
       company_id: number | null;
+      review_code: string | null;
     }>(
-      `select journal_entry_id, company_id
+      `select journal_entry_id, company_id, review_code
          from public.bank_mutations
         where id=$1 and ($2::int is null or company_id=$2)
         limit 1`,
@@ -1959,10 +1960,10 @@ router.get("/bank-reconciliation/:mutationId/journal-entry", async (req, res): P
           and company_id=$2
           and (
             (source='bank_reconciliation' and source_id=$3)
-            or id=$1
+            or $4::text = 'SOURCE_JOURNAL_REUSED'
           )
         limit 1`,
-      [mutation.journal_entry_id, mutation.company_id, mutationId],
+      [mutation.journal_entry_id, mutation.company_id, mutationId, mutation.review_code],
     );
     const entry = entryResult.rows[0];
     if (!entry) { res.status(404).json({ error: "Journal entry mutasi tidak ditemukan" }); return; }
