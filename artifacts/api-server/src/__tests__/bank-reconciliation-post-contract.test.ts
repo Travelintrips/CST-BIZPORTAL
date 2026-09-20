@@ -45,6 +45,7 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("SOURCE_JOURNAL_REQUIRED");
     expect(api).toContain("SOURCE_OWNED_COA_OVERRIDE_BLOCKED");
     expect(api).toContain("SOURCE_JOURNAL_REUSED");
+    expect(api).toContain("SOURCE_JOURNAL_RECLASSIFIED");
   });
 
   it("does not rematch tenant payment rows already marked as duplicates", () => {
