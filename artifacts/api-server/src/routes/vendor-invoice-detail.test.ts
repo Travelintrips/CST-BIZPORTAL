@@ -171,6 +171,7 @@ describe("vendor invoice detail read path", () => {
                 withholding_tax_amount: 537045.92,
               }],
             },
+            pph_paid_amount: "137045.92",
             total_count: 1,
           }],
         };
@@ -230,6 +231,7 @@ describe("vendor invoice detail read path", () => {
             payable_amount: 26315250.08,
           },
         },
+        pphPaidAmount: 137045.92,
       }],
     });
 
@@ -237,6 +239,9 @@ describe("vendor invoice detail read path", () => {
     expect(listSql).toContain("vi.withholding_tax_amount");
     expect(listSql).toContain("vi.withholding_tax_type");
     expect(listSql).toContain("vi.invoice_breakdown");
+    expect(listSql).toContain("bdi.transaction_type = 'tax_payment'");
+    expect(listSql).toContain("bdi.vendor_invoice_id = vi.id");
+    expect(listSql).toContain("bd.status = 'posted'");
   });
 
   it("returns the canonical local invoice without invoking the upstream fallback", async () => {
