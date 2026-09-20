@@ -308,6 +308,45 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!I2", values: [["100"]] },
     ]));
   });
+  it("prefers the validated Rule AI target COA over a technical bank reclassification contra", async () => {
+    storedMutations.push({
+      id: 13,
+      mutation_key: "sport-center-rule-key",
+      canonical_key: "sport-center-rule-fallback",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: 34184,
+      company_id: 42,
+      match_score: 85,
+      match_reason: "Nominal dan tanggal payment cocok.",
+      match_status: "posted",
+      match_result: "Nominal dan tanggal payment cocok.",
+      coa_code: "4-1017-CST",
+      coa_name: "Pendapatan Booking Sport Center CST",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
+      ["2026-06-03", "PEMB TAGIHAN MEI 2026", "0", "800000", "sport-center-rule-key", "", "", "", "", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+
+    const existingLookup = mocks.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("from public.bank_mutations bm"),
+    );
+    const sql = String(existingLookup?.[0] ?? "");
+
+    expect(sql).toContain("rule_classification.coa_code");
+    expect(sql).toContain("rule_match.candidate_type = 'recon_rule'");
+    expect(sql).toContain("rule_match.candidate_source = 'public.recon_rules'");
+    expect(sql).toContain("rule.target_coa_code");
+    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled', 'superseded'");
+    expect(sql).toContain("Rule AI COA:");
+    expect(sql.indexOf("rule_classification.coa_code")).toBeLessThan(
+      sql.indexOf("contra.coa_code"),
+    );
+  });
+
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
