@@ -54,6 +54,12 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("ae.source_id in (");
   });
 
+  it("blocks one source-owned payment from being finalized by multiple bank mutations", () => {
+    expect(api).toContain("assertSourceOwnedCandidateNotReconciledElsewhere(");
+    expect(api).toContain("SOURCE_CANDIDATE_ALREADY_RECONCILED");
+    expect(api).toContain("status in ('approved','posted')");
+  });
+
   it("reuses the source journal when the receipt account is already the actual bank", () => {
     expect(api).toContain("sourceReceiptJournal.debitAccountId === bankCoaId");
     expect(api).toContain("finalizeSourceJournalReuse(");
