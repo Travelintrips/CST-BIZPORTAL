@@ -47,6 +47,12 @@ describe("bank reconciliation post contract", () => {
     expect(api).toContain("SOURCE_JOURNAL_REUSED");
   });
 
+  it("does not rematch tenant payment rows already marked as duplicates", () => {
+    expect(api).toContain("duplicate_of_payment_id");
+    expect(api).toContain("nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '') is null");
+    expect(api).toContain("ae.source_id in (");
+  });
+
   it("reuses the source journal when the receipt account is already the actual bank", () => {
     expect(api).toContain("sourceReceiptJournal.debitAccountId === bankCoaId");
     expect(api).toContain("finalizeSourceJournalReuse(");
