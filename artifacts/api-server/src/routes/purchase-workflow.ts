@@ -237,28 +237,9 @@ async function authenticatePurchaseUser(
 
 router.use("/purchase-workflow", authenticatePurchaseUser);
 
-// Purchase Workflow owns vendor-invoice writes and non-local endpoints. Keep
-// canonical invoice reads in this service so opening an invoice cannot trigger
-// the upstream legacy withholding-repair path.
-router.use("/purchase-workflow/vendor-invoices", (req, _res, next) => {
-  const path = new URL(req.originalUrl, "http://local-request").pathname;
-  const isLocalRead = req.method === "GET" && (
-    path === "/purchase-workflow/vendor-invoices"
-    || path === "/purchase-workflow/vendor-invoices/"
-    || path === "/purchase-workflow/vendor-invoices/liability-accounts"
-    || path === "/purchase-workflow/vendor-invoices/legacy-withholding-repairs"
-    || /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair$/.test(path)
-    || /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair-history$/.test(path)
-    || /^\/purchase-workflow\/vendor-invoices\/\d+$/.test(path)
-  );
-  const isLocalRepair = req.method === "POST"
-    && /^\/purchase-workflow\/vendor-invoices\/\d+\/legacy-withholding-repair$/.test(path);
-  if (isLocalRead || isLocalRepair) {
-    next();
-    return;
-  }
-  next("router");
-});
+// CST-BIZPORTAL is standalone: vendor-invoice requests stay in this router.
+// Unknown vendor-invoice endpoints naturally fall through to the API 404 after
+// local route matching; do not escape this router with next("router").
 
 function first(value: unknown): string | undefined {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : undefined;
