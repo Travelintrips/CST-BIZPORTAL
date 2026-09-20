@@ -2329,8 +2329,16 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
       ).catch(() => ({ rows: [] as any[] }));
       journal = journalResult.rows[0] ?? null;
     }
-    const resolved = mutation.status === 'posted' && mutation.journal_entry_id != null && journal != null;
+    const resolved =
+      mutation.status === 'posted'
+      && mutation.journal_entry_id != null
+      && journal?.status === 'posted';
     const staleJournal = mutation.journal_entry_id != null && journal == null;
+    const linkedJournalNotPosted =
+      mutation.journal_entry_id != null
+      && journal != null
+      && journal.status !== 'posted';
+    const developerActionRequired = staleJournal || linkedJournalNotPosted;
     const diagnosis = {
       mutation: {
         id: mutation.id, companyId: mutation.company_id, status: mutation.status,
@@ -2344,18 +2352,36 @@ router.get("/bank-reconciliation/:mutationId/repair-diagnosis", async (req, res)
         status: match.status, matchScore: match.match_score, matchReason: match.match_reason,
       } : null,
       journal,
-      disposition: resolved ? 'resolved' : staleJournal ? 'developer_action_required' : 'auto_repair',
-      code: resolved ? 'RECONCILIATION_RESOLVED' : staleJournal ? 'STALE_JOURNAL_REFERENCE' : 'REMATCH_REQUIRED',
-      title: resolved ? 'Rekonsiliasi sudah selesai' : staleJournal ? 'Referensi jurnal stale' : 'Evaluasi ulang Rule AI',
-      reason: resolved ? 'Mutasi dan jurnal sudah final.' : staleJournal ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.' : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
+      disposition: resolved ? 'resolved' : developerActionRequired ? 'developer_action_required' : 'auto_repair',
+      code: resolved
+        ? 'RECONCILIATION_RESOLVED'
+        : staleJournal
+          ? 'STALE_JOURNAL_REFERENCE'
+          : linkedJournalNotPosted
+            ? 'LINKED_JOURNAL_NOT_POSTED'
+            : 'REMATCH_REQUIRED',
+      title: resolved
+        ? 'Rekonsiliasi sudah selesai'
+        : staleJournal
+          ? 'Referensi jurnal stale'
+          : linkedJournalNotPosted
+            ? 'Jurnal tertaut tidak berstatus posted'
+            : 'Evaluasi ulang Rule AI',
+      reason: resolved
+        ? 'Mutasi dan jurnal sudah final.'
+        : staleJournal
+          ? 'Mutasi menunjuk jurnal yang tidak lagi tersedia.'
+          : linkedJournalNotPosted
+            ? `Mutasi menunjuk jurnal berstatus "${journal.status}", sehingga tidak boleh dianggap sudah terposting.`
+            : 'Mutasi belum final dan aman dievaluasi ulang melalui matcher canonical.',
       records: [
         { table: 'public.bank_mutations', id: mutation.id, role: 'mutation' },
         ...(match ? [{ table: 'public.bank_reconciliation_matches', id: match.id, role: 'match' }] : []),
         ...(journal ? [{ table: 'public.accounting_entries', id: journal.id, role: 'journal' }] : []),
       ],
       sql: null,
-      autoRepair: resolved || staleJournal ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
-      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, matchStatus: match?.status ?? null }, after: null },
+      autoRepair: resolved || developerActionRequired ? null : { method: 'POST', path: '/api/bank-reconciliation/run-matching', label: 'Evaluasi ulang Rule AI' },
+      verification: { before: { status: mutation.status, journalEntryId: mutation.journal_entry_id, journalStatus: journal?.status ?? null, matchStatus: match?.status ?? null }, after: null },
     };
     res.json({ ok: true, diagnosis });
   } finally { client.release(); }
