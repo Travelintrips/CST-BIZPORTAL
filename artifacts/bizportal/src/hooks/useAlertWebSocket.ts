@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
+import { preferPollingRealtime } from "@/lib/realtimeTransport";
 import {
   getListLogisticOrdersQueryKey,
   getListLogisticOrderRfqsQueryKey,
@@ -154,6 +155,25 @@ export function useAlertWebSocket({ enabled = true }: { enabled?: boolean } = {}
   useEffect(() => {
     if (!enabled) return;
     destroyedRef.current = false;
+
+    if (preferPollingRealtime()) {
+      _setConnected(true);
+      const poll = () => {
+        void qc.invalidateQueries({ queryKey: ["intelligence-alerts"] });
+        void qc.invalidateQueries({ queryKey: ["intelligence-alerts-summary"] });
+        void qc.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
+        void qc.invalidateQueries({ queryKey: getListFreightShipmentsQueryKey() });
+        void qc.invalidateQueries({ queryKey: getListSalesDocumentsQueryKey() });
+        void qc.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey() });
+        void qc.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+      };
+      const timer = setInterval(poll, 30_000);
+      return () => {
+        destroyedRef.current = true;
+        clearInterval(timer);
+        _setConnected(false);
+      };
+    }
 
     function connect() {
       if (destroyedRef.current) return;
