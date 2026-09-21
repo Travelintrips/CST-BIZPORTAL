@@ -3,6 +3,7 @@ modules = ["nodejs-20", "python-3.12", "bash", "postgresql-16"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
+run = ["node", "--max-http-header-size=65536", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -29,10 +30,6 @@ SUPABASE_URL = "https://nzdweipzckfszczzqtuw.supabase.co"
 
 [userenv.production]
 BIZPORTAL_API_ORIGIN_PROD = "https://bizportal.cstlogistic.co.id"
-SUPABASE_DATABASE_URL = "postgresql://postgres:9WzfJzyNQxOn5Owu@db.nzdweipzckfszczzqtuw.supabase.co:6543/postgres"
-
-[userenv.shared]
-GCP_SECRET_MANAGER_BOOTSTRAP_JSON = '{   "type": "service_account",   "project_id": "secret-504012",   "private_key_id": "2959d18632c6dd58e0434c8e683d6dbcebbaabdd",   "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDqYbAvy4a9g8w8\ng+kNizm6J08UCWjCU8caHjZkyPe5Hy9m3RQWnxb2bxXKRdvngNjkuTlksN8TaFBj\nu6l6t1nNzGEDivE/E2mfd27EU5foUKLNjadmpC4EYI1Of4n3lVS7XWsfKbHG/mmw\nFG6RjPB4PjBu29RDAT77ZEqckW7r1tRyMd4u8Ta+7FoTxuglEC5QI7/T4/52d+0z\nDVqbYw1f6yQymlxzjInp1B/bgkRy+QpXjnEMVUy73PRH2bwOknQEfm4run1YjZsl\n5MWc2hIge+7jD9KiTSz45PNQVsRjLSm8XTWMX3JyHLpVd+vXM5kz6ZQB0O3bbPRk\nLRFQqCHDAgMBAAECggEAZIUO9gCYwfCjiBSev/NFB8RSEurSJf2eN2Jbu6/BJoDs\naHZKZkVGqNwNgVmirU/CNZ4Gslt04LLtP0i9r+awuiV8OfO98WpW81BajhK35Keo\nmvW0pL2nCrOKBu+F8Uv3MgAnsA7Gsuxr0VuB7CSBAWDSjsjy6OXA6DokEbAB3VzM\nVhozZvUn3H1y8FGlFC2FkV8GRWZmYr1ocVOZx37GSm77vjydG6AkIQtQgr1t3vm2\ngavFNYbfYm4uTAEKQNCArw4oMXTon40VLwAoB2nkJ61xHx7Imar/n5HAoNM4QGY9\nYmRIvNYU+VmmJ6FOrR9ibHjluXt1D4gcWR9hf1QPiQKBgQD1Xn+lrK+jThn0A4Gu\np3Xl2K9X2abXlvVdqrRZGtCXNL9lCM4tcUEMxfgrJP7k0WvN/ygquW+54GRID6zq\nn83vcz9qUrODJy4T2uK+ivXr0ceIdgsCtnL/tvpevfbTwRhikDYmioRRa+VNc9qB\nbhkU2mAwUqGF1bvBjordmM4VpwKBgQD0iVJfQxreTZIlhqkgje2NGxpQBPryhyCa\nF1yl637fQ7lEGjXhIgi/TJ0a9QgJLs/wTswO6rWC41znntaEV+1H677FerZjd/jr\nasO8xTO/szc4iyGBTjtiZdXGmNfGHsZnu4jXa3J/V+RPS7qFr20hkwFsMBJRwyNZ\n0u5UoNJOhQKBgD8McTBZFyiXQQP6grAmR50v+J5SRxTOrW3MF1tuEHtKCoQjpxb2\nKwjlNcegUf7p8RGVpvSTgan5hssdfAkt1vTYYEspxQbGYoinjev4OQjHdsYRzvJ7\nf0FF+z+tAGeZDnMFK2Tr4uQpHVqxkkv/xmIdWuoP0YFaUkyCHBykzw+xAoGAI5XM\nL+KzCUCekOlsuTkOJaeZB6YB4sM5QlM9/0Mq3lCbqEZsKsvqG/SJNEAOIE/4oI7G\n8TDEozx065vYub+V3w52X4SBAC6YQaHyxAiqhC4PTiIpCQkaaTJKjrD1TXZzButq\neXbAXbmrlsJ9bTDfH7Cl11mTgOR1w3+HgTc6A4UCgYAHOPPeUu1vyKpjc9BrLP/x\n/J4MBglcixBAsO55SYh0FVjzZU0Zu6A3mLgiH46UjIyq474iAlexebpzKwEjywYm\nuExYP4/sqj1uxwvdWq4vrvR6wGReHNtTBHHhg3ltnXi00X87HevwpaLZod5TPHeL\nJWw57TbXTVGn5HdG/l2WHQ==\n-----END PRIVATE KEY-----\n",   "client_email": "replit-secret@secret-504012.iam.gserviceaccount.com",   "client_id": "107068519026204255769",   "auth_uri": "https://accounts.google.com/o/oauth2/auth",   "token_uri": "https://oauth2.googleapis.com/token",   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",   "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/replit-secret%40secret-504012.iam.gserviceaccount.com",   "universe_domain": "googleapis.com" }'
 
 [nix]
 channel = "stable-25_05"
