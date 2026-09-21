@@ -7,10 +7,11 @@ const adminConnections = new Set<Response>();
 function openStream(response: Response, event: string): void {
   response.setHeader("Content-Type", "text/event-stream");
   response.setHeader("Cache-Control", "no-cache, no-transform");
-  response.setHeader("Connection", "keep-alive");
   response.setHeader("X-Accel-Buffering", "no");
+  response.setHeader("Content-Encoding", "identity");
   response.flushHeaders();
-  response.write(`event: ${event}\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  response.write(`retry: 15000\nevent: ${event}\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  response.flush?.();
 }
 
 function addAdminStream(request: Request, response: Response, event: string): void {
@@ -20,6 +21,7 @@ function addAdminStream(request: Request, response: Response, event: string): vo
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
+      response.flush?.();
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
@@ -37,15 +39,17 @@ function addAdminStream(request: Request, response: Response, event: string): vo
 function addMessageStream(request: Request, response: Response, payload: unknown): void {
   response.setHeader("Content-Type", "text/event-stream");
   response.setHeader("Cache-Control", "no-cache, no-transform");
-  response.setHeader("Connection", "keep-alive");
   response.setHeader("X-Accel-Buffering", "no");
+  response.setHeader("Content-Encoding", "identity");
   response.flushHeaders();
-  response.write(`data: ${JSON.stringify(payload)}\n\n`);
+  response.write(`retry: 15000\ndata: ${JSON.stringify(payload)}\n\n`);
+  response.flush?.();
   adminConnections.add(response);
 
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
+      response.flush?.();
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
@@ -73,11 +77,13 @@ router.get("/sport-center/events", (request, response) => {
 router.get("/alerts/stream", (request, response) => {
   openStream(response, "message");
   response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
+  response.flush?.();
   adminConnections.add(response);
 
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
+      response.flush?.();
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
