@@ -11,6 +11,7 @@ import { AppRoutes } from "@/routes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OrderNotificationsProvider } from "@/contexts/OrderNotificationsContext";
 import { BIZ_ASSETS } from "@/lib/staticAssets";
+import { resolveEmailLoginMode } from "@/lib/authLoginMode";
 
 
 
@@ -364,15 +365,43 @@ function WaLoginSection() {
 }
 
 function EmailLoginSection() {
-  const { signInWithEmail, sendEmailOtp, verifyEmailOtp } = useSupabaseAuth();
+  const { signInWithEmail, sendEmailOtp, verifyEmailOtp, devLogin } = useSupabaseAuth();
   const [mode, setMode] = React.useState<"password" | "otp">("password");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [devUsers, setDevUsers] = React.useState<DevUser[] | null>(null);
   const [code, setCode] = React.useState("");
   const [otpSent, setOtpSent] = React.useState(false);
   const [countdown, setCountdown] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    fetch("/api/auth/dev-users", {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return { users: [] };
+        return await response.json() as { users?: DevUser[] };
+      })
+      .then((data) => {
+        if (!cancelled) setDevUsers(Array.isArray(data.users) ? data.users : []);
+      })
+      .catch(() => {
+        // A failed or unavailable DEV probe must fall back to normal auth.
+        if (!cancelled) setDevUsers([]);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
 
   React.useEffect(() => {
     if (countdown <= 0) return;
@@ -382,15 +411,41 @@ function EmailLoginSection() {
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password || loading) return;
+    if (!email.trim() || loading) return;
     setLoading(true);
     setError(null);
-    const result = await signInWithEmail(email, password);
+    let availableDevUsers = devUsers;
+    if (password === "" && availableDevUsers === null) {
+      try {
+        const response = await fetch("/api/auth/dev-users", {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const data = response.ok
+          ? await response.json() as { users?: DevUser[] }
+          : { users: [] };
+        availableDevUsers = Array.isArray(data.users) ? data.users : [];
+      } catch {
+        availableDevUsers = [];
+      }
+      setDevUsers(availableDevUsers);
+    }
+    const loginMode = resolveEmailLoginMode({
+      email,
+      password,
+      devEmails: availableDevUsers?.map((user) => user.email) ?? [],
+    });
+    const result = loginMode === "dev"
+      ? await devLogin(email)
+      : await signInWithEmail(email, password);
     if (result.error) {
       setError(result.error);
       setLoading(false);
     } else {
-      writeRoleCache("admin");
+      const devUser = availableDevUsers?.find(
+        (user) => user.email.trim().toLowerCase() === email.trim().toLowerCase(),
+      );
+      writeRoleCache(loginMode === "dev" ? devUser?.role ?? null : "admin");
       window.location.href = appRootPath;
     }
   };
@@ -458,17 +513,25 @@ function EmailLoginSection() {
           <input
             type="password"
             aria-label="Password admin"
-            placeholder="Password"
+            placeholder="Password (kosong untuk DEV)"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            required
             autoComplete="current-password"
             className="rounded-lg bg-slate-800/70 border border-slate-700 px-3 py-2.5 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
+          {resolveEmailLoginMode({
+            email,
+            password,
+            devEmails: devUsers?.map((user) => user.email) ?? [],
+          }) === "dev" && (
+            <p className="text-xs text-amber-400 text-center">
+              DEV: login tanpa password menggunakan akses development.
+            </p>
+          )}
           {error && <p className="text-xs text-red-400 text-center">{error}</p>}
           <button
             type="submit"
-            disabled={loading || !email.trim() || !password}
+            disabled={loading || !email.trim()}
             className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-50"
           >
             {loading ? "Memproses..." : "Masuk"}
