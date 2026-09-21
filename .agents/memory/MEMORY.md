@@ -1,4 +1,5 @@
 - [GCP API origin separation](gcp-api-origin.md) — the development secret currently has a frontend URL, so a separate backend API origin is required.
+- [Hostinger noexec bootstrap](hostinger-noexec-build.md) — bootstrap pnpm in workspace/home and expose a local wrapper so recursive scripts never resolve tooling from `/tmp`.
 - [Sport Center payment company scope](sport-payment-company-scope.md) — legacy payments with NULL company_id use the same company-1 fallback in matching and approval.
 - [Production purchase proxy auth](production-purchase-proxy-auth.md) — OTP login must establish both local and upstream sessions because purchase routes have split ownership.
 - [Production verification prerequisites](production-verification.md) — Replit production SQL and a published URL are unavailable until the app has a deployment.
