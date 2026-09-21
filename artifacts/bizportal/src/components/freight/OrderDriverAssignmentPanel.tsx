@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { preferPollingRealtime } from "@/lib/realtimeTransport";
 import {
   Truck, User, Phone, Copy, ExternalLink, Plus, RefreshCw,
   CheckCircle2, XCircle, Clock, MessageCircle,
@@ -120,6 +121,8 @@ function useDriverSSE(orderId: number, onJobUpdate: (data: Record<string, unknow
   cbRef.current = onJobUpdate;
 
   useEffect(() => {
+    if (preferPollingRealtime()) return;
+
     const es = new EventSource("/api/drivers/events", { withCredentials: true });
 
     es.addEventListener("job_status_changed", (e: MessageEvent) => {
