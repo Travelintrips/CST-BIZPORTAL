@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           unset PORT
-          node --max-http-header-size=65536 --enable-source-maps ./dist/index.mjs > /tmp/bizportal-runtime.log 2>&1 &
+          node --max-http-header-size=65536 --enable-source-maps ./index.js > /tmp/bizportal-runtime.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
 
