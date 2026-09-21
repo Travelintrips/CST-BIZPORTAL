@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
 import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
+import { preferPollingRealtime } from "@/lib/realtimeTransport";
 import {
   getListLogisticOrdersQueryKey,
   getGetLogisticOrderQueryKey,
@@ -337,6 +338,14 @@ export function useOrderNotifications() {
     if (!isAuthenticated) return;
     let retryTimer: ReturnType<typeof setTimeout>;
     let mounted = true;
+
+    if (preferPollingRealtime()) {
+      setConnected(true);
+      return () => {
+        mounted = false;
+        setConnected(false);
+      };
+    }
 
     function connect() {
       if (!mounted) return;
