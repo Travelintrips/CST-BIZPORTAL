@@ -14,3 +14,9 @@ Commenting a duplicate block is only a temporary compiler fix: raw-source integr
 **Why:** The publish tree had concatenated implementations, and source-contract tests counted the inactive copies even after the TypeScript compiler ignored them.
 
 **How to apply:** Preserve the first canonical implementation only after comparing contracts; if comments are used as a short-lived safety boundary, make integrity checks comment-aware and schedule permanent removal of the stale text.
+
+After resolving one merged file, validate every related file named in the task for orphaned comment delimiters before declaring the rebase complete.
+
+**Why:** A rebase can restore a sibling source file with a stray closing delimiter even when the visible conflict is limited to the test file; repository-wide validation catches this only after the merge.
+
+**How to apply:** Run the full typecheck and production builds after conflict resolution, and inspect comment delimiters in the task's related source files when the failure involves merged blocks.
