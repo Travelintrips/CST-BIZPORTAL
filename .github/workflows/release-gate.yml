@@ -59,13 +59,13 @@ jobs:
         env:
           NODE_ENV: production
           APP_ENV: production
-          PORT: "3000"
           SUPABASE_DATABASE_URL: ""
           SUPABASE_DATABASE_URL_DEV: ""
           SUPABASE_PG_URL: ""
           GCP_SECRET_MANAGER_BOOTSTRAP_JSON: ""
         run: |
           set -euo pipefail
+          unset PORT
           node --max-http-header-size=65536 --enable-source-maps ./dist/index.mjs > /tmp/bizportal-runtime.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
