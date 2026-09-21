@@ -10,6 +10,7 @@ out-tsc
 
 # dependencies
 node_modules
+.hostinger-tools/
 
 # IDEs and editors
 /.idea
