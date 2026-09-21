@@ -352,6 +352,55 @@ describe("Google Sheet bank mutation sync", () => {
     );
   });
 
+  it("excludes stale matches and deterministically prefers the latest valid canonical QRIS evidence", async () => {
+    storedMutations.push({
+      id: 14,
+      mutation_key: "stale-guard-key",
+      canonical_key: "stale-guard-fallback",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: null,
+      company_id: 42,
+      match_score: 97,
+      match_reason: "current canonical evidence",
+      match_status: "reconciled",
+      match_result: "current canonical evidence",
+      coa_code: "1-1024-CST",
+      coa_name: "Payment Clearing Sport Center / QRIS CST",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
+      ["2026-09-07", "QRIS CURRENT", "0", "500000", "stale-guard-key", "", "", "", "", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+
+    const existingLookup = mocks.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("from public.bank_mutations bm"),
+    );
+    const sql = String(existingLookup?.[0] ?? "");
+
+    expect(sql).toContain("and lower(coalesce(m.status, '')) in (");
+    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled'");
+    expect(sql).not.toContain("'superseded'");
+    expect(sql).not.toContain("'rejected'");
+    expect(sql).toContain("when lower(coalesce(match.status, '')) = 'reconciled' then 0");
+    expect(sql).toContain("when lower(coalesce(match.status, '')) = 'posted' then 1");
+    expect(sql).toContain("match.created_at desc nulls last");
+    expect(sql).toContain("match.id desc");
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["1-1024-CST"]] },
+      { range: "'Mutasi Bank'!I2", values: [["97"]] },
+      { range: "'Mutasi Bank'!J2", values: [["current canonical evidence"]] },
+    ]));
+  });
+
   it("deduplicates repeated keyed and canonical rows within one sheet read", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
