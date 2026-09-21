@@ -9,6 +9,11 @@ function run(command, args, env = process.env) {
   if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
 }
 
+function canExecute(command, env) {
+  const result = spawnSync(command, ['--version'], { stdio: 'inherit', env });
+  return !result.error && (result.status ?? 1) === 0;
+}
+
 const ua = process.env.npm_config_user_agent || '';
 const viaNpm = ua.startsWith('npm/');
 const pnpm = viaNpm
@@ -39,12 +44,33 @@ if (fs.existsSync(pnpmStore)) {
     );
 
     if (fs.existsSync(source)) {
-      const target = path.join(os.tmpdir(), `bizportal-esbuild-${process.pid}`);
-      fs.copyFileSync(source, target);
-      fs.chmodSync(target, 0o755);
-      console.log(`[hostinger-build] Using executable esbuild copy: ${target}`);
-      run(target, ['--version'], buildEnv);
-      buildEnv.ESBUILD_BINARY_PATH = target;
+      let executable = null;
+
+      try {
+        fs.chmodSync(source, 0o755);
+        if (canExecute(source, buildEnv)) {
+          executable = source;
+        }
+      } catch (error) {
+        console.warn('[hostinger-build] Direct esbuild execution unavailable:', error.message);
+      }
+
+      if (!executable) {
+        const cacheDir = path.join(os.homedir(), '.cache', 'bizportal-hostinger');
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const target = path.join(cacheDir, `esbuild-${process.pid}`);
+        fs.copyFileSync(source, target);
+        fs.chmodSync(target, 0o755);
+
+        if (!canExecute(target, buildEnv)) {
+          throw new Error(`Unable to execute esbuild from Hostinger cache path: ${target}`);
+        }
+
+        executable = target;
+      }
+
+      console.log(`[hostinger-build] Using executable esbuild: ${executable}`);
+      buildEnv.ESBUILD_BINARY_PATH = executable;
     }
   }
 }
