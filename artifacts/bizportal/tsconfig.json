@@ -14,7 +14,6 @@
       "@/*": ["./src/*"],
       "@shared/api-client-react": ["./src/shared/api-client-react/index.ts"],
       "@shared/object-storage-web": ["./src/shared/object-storage-web/index.ts"],
-      "@shared/replit-auth-web": ["./src/shared/replit-auth-web/index.ts"],
       "@shared/product-templates": ["./src/shared/product-templates/index.ts"],
       "@shared/logistics-constants": ["./src/shared/logistics-constants/index.ts"]
     }

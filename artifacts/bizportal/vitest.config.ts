@@ -14,7 +14,6 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "src"),
       "@shared/api-client-react": path.resolve(import.meta.dirname, "src/shared/api-client-react/index.ts"),
       "@shared/object-storage-web": path.resolve(import.meta.dirname, "src/shared/object-storage-web/index.ts"),
-      "@shared/replit-auth-web": path.resolve(import.meta.dirname, "src/shared/replit-auth-web/index.ts"),
       "@shared/product-templates": path.resolve(import.meta.dirname, "src/shared/product-templates/index.ts"),
       "@shared/logistics-constants": path.resolve(import.meta.dirname, "src/shared/logistics-constants/index.ts"),
     },
