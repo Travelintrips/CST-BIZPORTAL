@@ -610,8 +610,15 @@ function AppContent() {
   const { isApiAvailable, isApiReady, isAuthenticated, isLoading } = useSupabaseAuth();
 
   React.useEffect(() => {
-    if (window.location.pathname === "/") {
-      window.location.replace("/bizportal/");
+    const legacyPrefix = "/bizportal";
+    if (
+      window.location.pathname === legacyPrefix ||
+      window.location.pathname.startsWith(`${legacyPrefix}/`)
+    ) {
+      const rootPath = window.location.pathname.slice(legacyPrefix.length) || "/";
+      window.location.replace(
+        `${rootPath}${window.location.search}${window.location.hash}`,
+      );
     }
   }, []);
 

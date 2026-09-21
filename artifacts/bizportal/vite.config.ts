@@ -8,7 +8,7 @@ import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 // The artifact workflow supplies these values through services.env. Keep the
 // same values as local defaults so direct package builds remain self-contained.
 const defaultPort = 18442;
-const defaultBasePath = '/bizportal/';
+const defaultBasePath = '/';
 const rawPort = process.env.PORT ?? String(defaultPort);
 
 const port = Number(rawPort);
