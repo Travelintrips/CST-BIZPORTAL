@@ -20,6 +20,7 @@ import React from "react";
 import DriverMap from "@/components/logistics/DriverMap";
 import GeofenceAlertPanel from "@/components/logistics/GeofenceAlertPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { preferPollingRealtime } from "@/lib/realtimeTransport";
 
 interface Driver {
   id: number;
@@ -122,6 +123,14 @@ export default function LogisticsDriversPage() {
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let active = true;
+
+    if (preferPollingRealtime()) {
+      setSseConnected(true);
+      return () => {
+        active = false;
+        setSseConnected(false);
+      };
+    }
 
     function connect() {
       if (!active) return;
