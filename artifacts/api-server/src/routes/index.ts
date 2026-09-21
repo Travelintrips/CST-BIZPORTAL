@@ -9,6 +9,7 @@ import businessDashboardRouter from "./business-dashboard";
 import localProductionAuthRouter from "./local-production-auth";
 import salesCoreRouter from "./sales-core";
 import adminRealtimeRouter from "./admin-realtime";
+import legacyReadParityRouter from "./legacy-read-parity";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -44,6 +45,7 @@ router.use(purchaseWorkflowRouter);
 router.use(businessDashboardRouter);
 router.use(salesCoreRouter);
 router.use(adminRealtimeRouter);
+router.use(legacyReadParityRouter);
 
 router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> => {
   const rawId = req.params.id;
