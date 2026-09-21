@@ -496,10 +496,12 @@ async function syncConfig(config: SheetConfig): Promise<{
                   ) as match_result
              from public.bank_reconciliation_matches m
             where m.mutation_id = bm.id
+              and lower(coalesce(m.status, '')) in (
+                'candidate', 'approved', 'posted', 'reconciled'
+              )
             order by case
               when lower(coalesce(m.status, '')) in ('posted', 'approved', 'reconciled') then 0
-              when lower(coalesce(m.status, '')) = 'candidate' then 1
-              else 2
+              else 1
             end, m.created_at desc nulls last, m.id desc
             limit 1
          ) matched on true
@@ -594,7 +596,14 @@ async function syncConfig(config: SheetConfig): Promise<{
                 (upper(coalesce(bm.direction, '')) = 'IN' and lower(coalesce(line.line_type::text, '')) = 'credit')
                 or (upper(coalesce(bm.direction, '')) = 'OUT' and lower(coalesce(line.line_type::text, '')) = 'debit')
               )
-            order by line.id
+            order by case
+              when lower(coalesce(match.status, '')) = 'reconciled' then 0
+              when lower(coalesce(match.status, '')) = 'posted' then 1
+              else 2
+            end,
+            match.created_at desc nulls last,
+            match.id desc,
+            line.id
             limit 1
          ) canonical_contra on bm.journal_entry_id is null
         where bm.source = 'google_sheet'
