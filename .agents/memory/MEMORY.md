@@ -39,3 +39,4 @@
 - [Supabase array filter casts](supabase-array-filter-cast.md) — use literal status lists for filtered queries; pooler-bound text-array casts can fail as PostgreSQL 42846.
 - [Merge-block cleanup](merge-block-cleanup.md) — duplicate merge blocks can contain newer endpoint/test contracts; preserve those contracts before removing stale code.
 - [Deployment duplicate-comment failures](deployment-duplicate-comments.md) — merged duplicate modules can leave unterminated comments that only fail during publish-time parsing.
+- [GitHub push fallback](github-push-fallback.md) — use the bound GitHub connector Git Data API when shell HTTPS credentials are unavailable or rejected.
