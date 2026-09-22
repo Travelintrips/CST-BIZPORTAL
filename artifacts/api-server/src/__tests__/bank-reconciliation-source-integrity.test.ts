@@ -92,9 +92,27 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("from public.payment_allocations pa");
     expect(source).toContain("join public.payment_matching_groups pmg on pmg.id = pa.group_id");
     expect(source).toContain("coalesce(pa.is_active, true) = true");
-    expect(source).toContain("lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')");
+    expect(source).toContain("lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')");
+    expect(source).toContain("lower(coalesce(paid_bm.status, '')) in ('final', 'posted', 'reconciled')");
     expect(source).toContain("greatest(vi.grand_total::numeric - coalesce(cip.canonical_paid, 0), 0)");
     expect(source).not.toContain("vendor_invoices.amount_paid");
+  });
+
+  it("allocates vendor invoice payments through the local backend and mapped bank COA", () => {
+    expect(source).toContain('router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch"');
+    expect(source).toContain("const bankCoaId = await resolveApprovalBankAccount(");
+    expect(source).toContain("bank_coa_code: bankAccount.code");
+    expect(source).toContain("insert into public.payment_matching_groups");
+    expect(source).toContain("insert into public.payment_allocations");
+    expect(source).toContain("linked_transaction_type = 'vendor_invoice_batch'");
+    expect(source).toContain("status = 'approved_pending_posting'");
+  });
+
+  it("releases vendor invoice allocations when an approved draft is unmatched", () => {
+    expect(source).toContain("update public.payment_allocations");
+    expect(source).toContain("set is_active = false");
+    expect(source).toContain("update public.payment_matching_groups");
+    expect(source).toContain("set status = 'reversed', updated_at = now()");
   });
 
   it("repairs one source-qualified candidate or accepts a governed direct-bank allocation", () => {
