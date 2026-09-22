@@ -81,7 +81,7 @@ interface MatchingMutation {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "tenant_invoice" | "vendor_invoice";
+  candidateType: "sport_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -95,6 +95,8 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
   switch (candidateType) {
     case "sport_payment":
       return "sport_center.sport_payments";
+    case "sport_company_invoice":
+      return "sport_center.company_invoices";
     case "tenant_invoice":
       return "public.tenant_payments";
     case "vendor_invoice":
@@ -353,6 +355,97 @@ async function loadLocalMatchCandidates(
       // Sport Center is an optional source on installations that only use
       // bank imports and vendor invoices. Keep matching usable when that
       // optional schema is not installed.
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+
+    try {
+      const sportCompanyInvoices = await client.query<{
+        id: number;
+        amount: string;
+        paid_date: string | null;
+        payment_reference: string | null;
+        description: string | null;
+      }>(
+        `select
+             ci.id,
+             coalesce(
+               nullif(ci.net_amount::numeric, 0),
+               nullif(ci.paid_amount::numeric, 0),
+               ci.grand_total::numeric
+             ) as amount,
+             (ci.paid_at at time zone 'Asia/Jakarta')::date::text as paid_date,
+             ci.invoice_number as payment_reference,
+             concat_ws(
+               ' ',
+               customer.name,
+               ci.invoice_number,
+               (
+                 select string_agg(distinct nullif(btrim(sb.group_ref::text), ''), ' ')
+                   from sport_center.company_invoice_items cii2
+                   join sport_center.sport_bookings sb on sb.id = cii2.booking_id
+                  where cii2.invoice_id = ci.id
+               )
+             ) as description
+          from sport_center.company_invoices ci
+          left join sport_center.users customer on customer.id = ci.company_customer_id
+         where lower(coalesce(nullif(ci.invoice_status, ''), nullif(ci.status, ''), '')) in
+               ('paid', 'confirmed', 'completed', 'success', 'settled')
+           and ci.paid_at is not null
+           and abs(
+             coalesce(
+               nullif(ci.net_amount::numeric, 0),
+               nullif(ci.paid_amount::numeric, 0),
+               ci.grand_total::numeric
+             ) - $2::numeric
+           ) < 0.01
+           and (ci.paid_at at time zone 'Asia/Jakarta')::date = $3::date
+           and exists (
+             select 1
+               from sport_center.company_invoice_items cii
+               join sport_center.sport_bookings sb on sb.id = cii.booking_id
+               join sport_center.facility_company_mappings fcm
+                 on fcm.facility_id = sb.facility_id
+                and fcm.company_id = $1
+                and fcm.is_active = true
+                and fcm.approval_status = 'OWNER_APPROVED'
+              where cii.invoice_id = ci.id
+           )
+           and not exists (
+             select 1
+               from public.bank_reconciliation_matches brm
+              where brm.candidate_type = 'sport_company_invoice'
+                and brm.candidate_id = ci.id
+                and brm.candidate_source = 'sport_center.company_invoices'
+                and brm.status in ('approved', 'posted')
+           )
+         order by ci.id`,
+        [mutation.company_id, amount, date],
+      );
+
+      for (const invoice of sportCompanyInvoices.rows) {
+        const referenceMatch =
+          Boolean(mutation.provider_order_id) &&
+          normalizeMatchText(mutation.provider_order_id) === normalizeMatchText(invoice.payment_reference);
+        const nameMatch = tokenOverlap(mutation.description, invoice.description);
+        const dateMatch = invoice.paid_date === date;
+        const score = 60 + (dateMatch ? 25 : 0) + (referenceMatch ? 15 : nameMatch ? 8 : 0);
+        candidates.push({
+          candidateType: "sport_company_invoice",
+          candidateId: invoice.id,
+          score,
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: referenceMatch
+            ? "Nominal, tanggal, dan referensi invoice perusahaan Sport Center cocok."
+            : dateMatch
+              ? "Nominal dan tanggal pembayaran invoice perusahaan Sport Center cocok."
+              : "Nominal invoice perusahaan Sport Center cocok; konfirmasi pembayaran sebelum approve.",
+        });
+      }
+    } catch (error) {
       const code = (error as { code?: string }).code;
       if (code !== "42P01" && code !== "42703") throw error;
     }
@@ -1372,6 +1465,31 @@ async function assertApprovalCandidateExists(
         for update`,
       [candidateId, companyId],
     );
+  } else if (candidateType === "sport_company_invoice") {
+    if (candidateSource && candidateSource !== "sport_center.company_invoices") {
+      throw new ApprovalError("Sumber kandidat invoice perusahaan Sport Center tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select ci.id
+         from sport_center.company_invoices ci
+        where ci.id = $1
+          and lower(coalesce(nullif(ci.invoice_status, ''), nullif(ci.status, ''), '')) in
+              ('paid', 'confirmed', 'completed', 'success', 'settled')
+          and exists (
+            select 1
+              from sport_center.company_invoice_items cii
+              join sport_center.sport_bookings sb on sb.id = cii.booking_id
+              join sport_center.facility_company_mappings fcm
+                on fcm.facility_id = sb.facility_id
+               and fcm.company_id = $2
+               and fcm.is_active = true
+               and fcm.approval_status = 'OWNER_APPROVED'
+             where cii.invoice_id = ci.id
+          )
+        limit 1
+        for update`,
+      [candidateId, companyId],
+    );
   } else if (candidateType === "vendor_invoice") {
     if (candidateSource && candidateSource !== "public.vendor_invoices") {
       throw new ApprovalError("Sumber kandidat vendor tidak valid.", 409, "STALE_CANDIDATE");
@@ -1788,7 +1906,9 @@ async function approveBankMutation(
   if (selectedCandidateType && selectedCandidateId != null && !selectedCandidateSource) {
     selectedCandidateSource = selectedCandidateType === "sport_payment"
       ? "sport_center.sport_payments"
-      : selectedCandidateType === "vendor_invoice"
+      : selectedCandidateType === "sport_company_invoice"
+        ? "sport_center.company_invoices"
+        : selectedCandidateType === "vendor_invoice"
         ? "public.vendor_invoices"
         : selectedCandidateType === "tenant_invoice"
           ? "public.tenant_payments"
@@ -1803,6 +1923,13 @@ async function approveBankMutation(
     selectedCandidateSource,
     companyId,
   );
+  if (selectedCandidateType === "sport_company_invoice") {
+    throw new ApprovalError(
+      "Invoice perusahaan Sport Center sudah cocok dengan mutasi bank, tetapi approval accounting otomatis belum diaktifkan untuk source corporate invoice. Matching tetap disimpan; posting diblokir agar tidak menggandakan pendapatan.",
+      422,
+      "SPORT_COMPANY_INVOICE_ACCOUNTING_REVIEW_REQUIRED",
+    );
+  }
   if (
     selectedCandidateType === "qris_settlement"
     && selectedCandidateId != null
@@ -3196,6 +3323,7 @@ const mutationListColumns = `
       and match.candidate_source is not null
       and (
         (match.candidate_type = 'sport_payment' and match.candidate_source = 'sport_center.sport_payments')
+        or (match.candidate_type = 'sport_company_invoice' and match.candidate_source = 'sport_center.company_invoices')
         or (match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments')
         or (match.candidate_type = 'vendor_invoice' and match.candidate_source = 'public.vendor_invoices')
         or (match.candidate_type = 'qris_settlement' and match.candidate_source = 'sport_center.payment_settlement_batches')
@@ -3292,6 +3420,53 @@ async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Pr
       }
     } catch {
       // The Sport Center schema is optional for bank-only installations.
+    }
+  }
+
+  const sportCompanyInvoiceIds = idsFor("sport_company_invoice");
+  if (sportCompanyInvoiceIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select
+             ci.id,
+             coalesce(
+               nullif(ci.net_amount::numeric, 0),
+               nullif(ci.paid_amount::numeric, 0),
+               ci.grand_total::numeric
+             ) as amount,
+             (ci.paid_at at time zone 'Asia/Jakarta')::date::text as date,
+             ci.invoice_number as reference,
+             customer.name,
+             ci.payment_method as method,
+             coalesce(nullif(ci.invoice_status, ''), ci.status) as status,
+             ci.payment_proof_url as proof_url,
+             count(cii.id)::int as booking_count,
+             array_remove(array_agg(distinct nullif(btrim(sb.group_ref::text), '')), null) as group_refs
+          from sport_center.company_invoices ci
+          left join sport_center.users customer on customer.id = ci.company_customer_id
+          left join sport_center.company_invoice_items cii on cii.invoice_id = ci.id
+          left join sport_center.sport_bookings sb on sb.id = cii.booking_id
+         where ci.id = any($1::bigint[])
+         group by ci.id, customer.name`,
+        [sportCompanyInvoiceIds],
+      );
+      for (const row of result.rows) {
+        details.set(candidateDetailKey("sport_company_invoice", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          method: row.method,
+          paymentMethod: row.method,
+          sourceType: "sport_company_invoice",
+          status: row.status,
+          proofUrl: row.proof_url,
+          bookingCount: row.booking_count,
+          groupRefs: row.group_refs,
+        });
+      }
+    } catch {
+      // Corporate invoice details are additive to the core reconciliation response.
     }
   }
 
