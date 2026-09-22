@@ -78,6 +78,15 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("brm.candidate_source = 'public.vendor_invoices'");
   });
 
+  it("matches paid Sport Center corporate invoices by net cash amount and paid date", () => {
+    expect(source).toContain('"sport_company_invoice"');
+    expect(source).toContain('"sport_center.company_invoices"');
+    expect(source).toContain("nullif(ci.net_amount::numeric, 0)");
+    expect(source).toContain("(ci.paid_at at time zone 'Asia/Jakarta')::date = $3::date");
+    expect(source).toContain("fcm.approval_status = 'OWNER_APPROVED'");
+    expect(source).toContain("SPORT_COMPANY_INVOICE_ACCOUNTING_REVIEW_REQUIRED");
+  });
+
   it("matches vendor invoices by canonical allocation balance", () => {
     expect(source).toContain("from public.payment_allocations pa");
     expect(source).toContain("join public.payment_matching_groups pmg on pmg.id = pa.group_id");
