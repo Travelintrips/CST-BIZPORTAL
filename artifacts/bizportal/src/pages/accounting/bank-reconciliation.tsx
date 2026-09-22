@@ -2859,10 +2859,10 @@ function SummaryCards({
       bg: "hover:bg-amber-50 dark:hover:bg-amber-950/20",
     },
     {
-      key: "matched",
+      key: "ready_approval",
       icon: CheckCircle2,
       label: "Siap Disetujui",
-      count: summaryMap.matched?.count ?? 0,
+      count: summaryMap.ready_approval?.count ?? 0,
       iconClass: "text-green-500",
       bg: "hover:bg-green-50 dark:hover:bg-green-950/20",
     },
@@ -2981,7 +2981,7 @@ function AIActionCenter({
   workflowStage: WorkflowStage;
 }) {
   const unmatched     = summaryMap.unmatched?.count ?? 0;
-  const matched       = summaryMap.matched?.count ?? 0;
+  const matched       = summaryMap.ready_approval?.count ?? 0;
   const manualReview  = summaryMap.manual_review?.count ?? 0;
   const needReview    = (summaryMap.duplicate_need_review?.count ?? 0) + manualReview;
   const pendingPost   = summaryMap.approved_pending_posting?.count ?? 0;
@@ -3164,7 +3164,7 @@ type QuickFilter = {
 // Endpoint filter values must match bank_mutations.status values (backend contract)
 const QUICK_FILTERS: QuickFilter[] = [
   { label: "Belum Dicocokkan",   status: "unmatched" },
-  { label: "Siap Disetujui",     status: "matched" },
+  { label: "Siap Disetujui",     status: "ready_approval" },
   { label: "Review Manual",      status: "manual_review" },
   { label: "Perlu Diperiksa",    status: "duplicate_need_review" },
   { label: "Menunggu Posting",   status: "approved_pending_posting" },
@@ -8166,7 +8166,7 @@ export default function BankReconciliationPage() {
       // Fetch the canonical list without a synthetic status and filter it client-side.
       // Sending status=completed used to make PROD depend on special backend handling.
       if (filterStatus !== "all" && filterStatus !== "completed") {
-        params.set("status", filterStatus);
+        params.set("status", filterStatus === "ready_approval" ? "matched" : filterStatus);
       }
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
@@ -8213,6 +8213,19 @@ export default function BankReconciliationPage() {
       const r = await fetch(`/api/bank-reconciliation/summary?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
+    },
+    enabled: companyScopeReady,
+    refetchInterval: 30_000,
+  });
+
+  const { data: matchedReadinessData } = useQuery({
+    queryKey: ["bank-reconciliation-ready-approval", activeCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ status: "matched", limit: "1000", offset: "0" });
+      if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
+      const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
     enabled: companyScopeReady,
     refetchInterval: 30_000,
@@ -8942,12 +8955,18 @@ export default function BankReconciliationPage() {
   for (const s of summary?.summary ?? []) {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
   }
+  const readyApprovalMutations = (matchedReadinessData?.mutations ?? []).filter(isUiApprovalEligible);
+  summaryMap.ready_approval = {
+    count: readyApprovalMutations.length,
+    amount: readyApprovalMutations.reduce((total, mutation) => total + (Number(mutation.amount) || 0), 0),
+  };
 
   // ── Invalidate helper ────────────────────────────────────────────────────
   const invalidate = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] }),
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-ready-approval"] }),
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
     ]);
   };
@@ -9779,7 +9798,7 @@ export default function BankReconciliationPage() {
     });
   };
 
-  const handleApproveAllMatched = () => { setFilterStatus("matched"); setPage(0); };
+  const handleApproveAllMatched = () => { setFilterStatus("ready_approval"); setPage(0); };
   const handlePostAllPending    = () => { setFilterStatus("approved_pending_posting"); setPage(0); };
 
   const resetFilters = () => {
@@ -9794,7 +9813,9 @@ export default function BankReconciliationPage() {
     : responseMutations.filter(mutation =>
         filterStatus === "completed"
           ? mutation.status === "posted" || mutation.status === "approved"
-          : mutation.status === filterStatus
+          : filterStatus === "ready_approval"
+            ? isUiApprovalEligible(mutation)
+            : mutation.status === filterStatus
       );
   const mutations = filterStatus === "all"
     ? statusFilteredMutations
