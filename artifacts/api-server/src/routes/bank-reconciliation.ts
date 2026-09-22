@@ -4924,11 +4924,11 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       journal_entry_id: number | null;
       status: string;
     }>(
-      \`select id, company_id, amount, direction, transaction_date, mutation_key,
+      `select id, company_id, amount, direction, transaction_date, mutation_key,
               bank_reference, description, bank_account_id, journal_entry_id, status
          from public.bank_mutations
         where id = $1
-        for update\`,
+        for update`,
       [mutationId],
     );
     const mutation = mutationResult.rows[0];
@@ -4964,7 +4964,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       status: string;
       canonical_paid: string;
     }>(
-      \`select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
+      `select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
               vi.grand_total, vi.status::text status,
               coalesce((
                 select sum(coalesce(pa.allocated_amount, 0))
@@ -4984,7 +4984,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
           and vi.id = any($2::bigint[])
           and vi.cancelled_at is null
         order by vi.id
-        for update\`,
+        for update`,
       [companyId, vendorInvoiceIds],
     );
     if (invoiceResult.rows.length !== vendorInvoiceIds.length) {
@@ -4997,13 +4997,13 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       tax_amount: string;
       liability_account_id: number | null;
     }>(
-      \`select vil.invoice_id, vit.tax_type, vit.tax_amount, vit.liability_account_id
+      `select vil.invoice_id, vit.tax_type, vit.tax_amount, vit.liability_account_id
          from public.vendor_invoice_line_taxes vit
          join public.vendor_invoice_lines vil on vil.id = vit.invoice_line_id
         where vil.invoice_id = any($1::bigint[])
           and vit.company_id = $2
           and coalesce(vit.tax_amount, 0) > 0
-        order by vil.invoice_id, vit.id\`,
+        order by vil.invoice_id, vit.id`,
       [vendorInvoiceIds, companyId],
     );
     const taxesByInvoice = new Map<number, Array<{ taxType: string; amount: number; liabilityAccountId: number | null }>>();
@@ -5020,7 +5020,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     const allocations = invoiceResult.rows.map((invoice) => {
       if (String(invoice.status).toLowerCase() !== "posted") {
         throw new ApprovalError(
-          \`Invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} harus berstatus posted sebelum dibayar\`,
+          `Invoice ${invoice.vendor_invoice_ref ?? invoice.invoice_number} harus berstatus posted sebelum dibayar`,
           422,
           "INVOICE_NOT_POSTED",
         );
@@ -5030,7 +5030,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       const outstanding = money(Math.max(0, grandTotal - canonicalPaid));
       if (!Number.isFinite(outstanding) || outstanding <= 0.01) {
         throw new ApprovalError(
-          \`Invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} sudah tersettle penuh\`,
+          `Invoice ${invoice.vendor_invoice_ref ?? invoice.invoice_number} sudah tersettle penuh`,
           409,
           "INVOICE_ALREADY_SETTLED",
         );
@@ -5043,7 +5043,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
           : outstanding;
       if (!Number.isFinite(cashAmount) || cashAmount <= 0 || cashAmount > outstanding + 0.01) {
         throw new ApprovalError(
-          \`Alokasi invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} tidak valid atau melebihi sisa invoice\`,
+          `Alokasi invoice ${invoice.vendor_invoice_ref ?? invoice.invoice_number} tidak valid atau melebihi sisa invoice`,
           422,
           "INVALID_INVOICE_ALLOCATION",
         );
@@ -5057,7 +5057,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
         const unmapped = taxes.find((tax) => !Number.isInteger(tax.liabilityAccountId) || Number(tax.liabilityAccountId) <= 0);
         if (unmapped) {
           throw new ApprovalError(
-            \`COA Hutang PPh untuk invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} belum terpetakan\`,
+            `COA Hutang PPh untuk invoice ${invoice.vendor_invoice_ref ?? invoice.invoice_number} belum terpetakan`,
             422,
             "WITHHOLDING_LIABILITY_ACCOUNT_REQUIRED",
           );
@@ -5081,7 +5081,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     const totalCashAllocation = money(allocations.reduce((sum, allocation) => sum + allocation.cashAmount, 0));
     if (totalCashAllocation > mutationAmount + 0.01) {
       throw new ApprovalError(
-        \`Nominal mutasi (\${mutationAmount.toFixed(2)}) tidak cukup untuk total alokasi invoice (\${totalCashAllocation.toFixed(2)})\`,
+        `Nominal mutasi (${mutationAmount.toFixed(2)}) tidak cukup untuk total alokasi invoice (${totalCashAllocation.toFixed(2)})`,
         422,
         "ALLOCATION_EXCEEDS_MUTATION",
       );
@@ -5097,13 +5097,13 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       throw new ApprovalError("COA rekening bank belum dikonfigurasi", 422, "BANK_COA_REQUIRED");
     }
     const bankAccountResult = await client.query<{ id: number; code: string; name: string }>(
-      \`select id, code, name
+      `select id, code, name
          from public.chart_of_accounts
         where id = $1
           and (company_id = $2 or company_id is null)
           and coalesce(is_active, true) = true
           and coalesce(is_postable, true) = true
-        limit 1\`,
+        limit 1`,
       [bankCoaId, companyId],
     );
     const bankAccount = bankAccountResult.rows[0];
@@ -5114,14 +5114,14 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     const apAccount = await resolveApprovalContraAccount(client, companyId, "OUT", "vendor_invoice", null);
     const wrongTransferAccount = wrongTransferAmount > 0.01
       ? (await client.query<{ id: number; code: string; name: string }>(
-          \`select id, code, name
+          `select id, code, name
              from public.chart_of_accounts
             where code = '2-1011-CST'
               and (company_id = $1 or company_id is null)
               and coalesce(is_active, true) = true
               and coalesce(is_postable, true) = true
             order by case when company_id = $1 then 0 else 1 end, id
-            limit 1\`,
+            limit 1`,
           [companyId],
         )).rows[0]
       : null;
@@ -5136,12 +5136,12 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     let journalId = settingsResult.rows[0]?.bank_journal_id ?? null;
     if (journalId == null) {
       const journalFallback = await client.query<{ id: number }>(
-        \`select id
+        `select id
            from public.accounting_journals
           where company_id = $1
             and (lower(name) like '%bank%' or lower(code) like '%bank%' or type = 'bank')
           order by id
-          limit 1\`,
+          limit 1`,
         [companyId],
       );
       journalId = journalFallback.rows[0]?.id ?? null;
@@ -5155,7 +5155,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     const year = Number(txDate.slice(0, 4)) || new Date().getUTCFullYear();
     const entryNumber = await nextApprovalEntryNumber(client, companyId, year);
     const reference = String(mutation.mutation_key ?? mutation.bank_reference ?? mutationId).slice(0, 100);
-    const description = \`Pembayaran \${allocations.length} invoice vendor — \${reference}\`.slice(0, 200);
+    const description = `Pembayaran ${allocations.length} invoice vendor — ${reference}`.slice(0, 200);
     const totalWithholding = money(allocations.reduce((sum, allocation) => sum + allocation.withholdingAmount, 0));
     const totalDebit = money(allocations.reduce((sum, allocation) => sum + allocation.grossAmount, 0) + wrongTransferAmount);
     const totalCredit = money(mutationAmount + totalWithholding);
@@ -5164,12 +5164,12 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     }
 
     const entryResult = await client.query<{ id: number }>(
-      \`insert into public.accounting_entries
+      `insert into public.accounting_entries
         (entry_number, journal_id, date, ref, description, status, source, source_id,
          total_debit, total_credit, created_by_id, company_id)
        values ($1, $2, $3, $4, $5, 'draft', 'bank_reconciliation', $6,
                $7, $8, $9, $10)
-       returning id\`,
+       returning id`,
       [entryNumber, journalId, txDate, reference, description, mutationId, totalDebit, totalCredit, actor.email, companyId],
     );
     const entryId = entryResult.rows[0]?.id;
@@ -5177,16 +5177,16 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
 
     for (const allocation of allocations) {
       await client.query(
-        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
-         values ($1, $2, $3, 0, $4)\`,
-        [entryId, apAccount.id, allocation.grossAmount, \`Pembayaran invoice vendor \${allocation.vendor_invoice_ref ?? allocation.invoice_number}\`.slice(0, 200)],
+        `insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4)`,
+        [entryId, apAccount.id, allocation.grossAmount, `Pembayaran invoice vendor ${allocation.vendor_invoice_ref ?? allocation.invoice_number}`.slice(0, 200)],
       );
     }
     if (wrongTransferAccount && wrongTransferAmount > 0.01) {
       await client.query(
-        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
-         values ($1, $2, $3, 0, $4)\`,
-        [entryId, wrongTransferAccount.id, wrongTransferAmount, \`Kelebihan transfer — \${wrongTransferAccount.code} \${wrongTransferAccount.name}\`.slice(0, 200)],
+        `insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4)`,
+        [entryId, wrongTransferAccount.id, wrongTransferAmount, `Kelebihan transfer — ${wrongTransferAccount.code} ${wrongTransferAccount.name}`.slice(0, 200)],
       );
     }
     const liabilityCredits = new Map<number, number>();
@@ -5197,24 +5197,24 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     }
     for (const [accountId, amount] of liabilityCredits) {
       await client.query(
-        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
-         values ($1, $2, 0, $3, 'Hutang PPh — matching invoice vendor')\`,
+        `insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, 0, $3, 'Hutang PPh — matching invoice vendor')`,
         [entryId, accountId, amount],
       );
     }
     await client.query(
-      \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
-       values ($1, $2, 0, $3, $4)\`,
+      `insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+       values ($1, $2, 0, $3, $4)`,
       [entryId, bankAccount.id, mutationAmount, description],
     );
 
     const groupResult = await client.query<{ id: number }>(
-      \`insert into public.payment_matching_groups
+      `insert into public.payment_matching_groups
         (company_id, group_type, matching_type, total_mutation_amount, total_invoice_amount,
          total_allocated, remaining_amount, confidence, algorithm_used, status, created_by)
        values ($1, 'MULTI_INVOICE', 'MULTI_INVOICE', $2, $3, $3, $4, 100,
                'bank_reconciliation_vendor_invoice_batch', 'active', $5)
-       returning id\`,
+       returning id`,
       [
         companyId,
         mutationAmount,
@@ -5229,10 +5229,10 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     for (let index = 0; index < allocations.length; index += 1) {
       const allocation = allocations[index]!;
       await client.query(
-        \`insert into public.payment_allocations
+        `insert into public.payment_allocations
           (group_id, company_id, invoice_id, invoice_ref, mutation_id, allocated_amount,
            remaining_amount, allocation_sequence, strategy, is_active)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, 'MANUAL', true)\`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'MANUAL', true)`,
         [
           groupId,
           companyId,
@@ -5247,29 +5247,29 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     }
 
     await client.query(
-      \`update public.bank_reconciliation_matches
+      `update public.bank_reconciliation_matches
           set status = 'superseded'
         where mutation_id = $1
-          and status not in ('approved', 'posted')\`,
+          and status not in ('approved', 'posted')`,
       [mutationId],
     );
     await client.query(
-      \`insert into public.bank_reconciliation_matches
+      `insert into public.bank_reconciliation_matches
         (mutation_id, candidate_type, candidate_id, match_score, match_reason,
          amount_match, date_match, name_match, order_id_match, proof_match,
          status, candidate_source, is_manual)
        values ($1, 'vendor_invoice', $2, 100, $3, $4, false, true, false, false,
-               'approved', 'public.vendor_invoices', true)\`,
+               'approved', 'public.vendor_invoices', true)`,
       [
         mutationId,
         allocations[0]!.id,
-        \`vendor invoice batch payment; invoice_ids:\${allocations.map((allocation) => allocation.id).join(",")}\`,
+        `vendor invoice batch payment; invoice_ids:${allocations.map((allocation) => allocation.id).join(",")}`,
         wrongTransferAmount <= 0.01,
       ],
     );
 
     await client.query(
-      \`update public.bank_mutations
+      `update public.bank_mutations
           set status = 'approved_pending_posting',
               reconciliation_status = 'matched',
               journal_entry_id = $1,
@@ -5278,13 +5278,13 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
               linked_transaction_type = 'vendor_invoice_batch',
               linked_transaction_id = $3,
               updated_at = now()
-        where id = $4\`,
+        where id = $4`,
       [entryId, actor.email, allocations[0]!.id, mutationId],
     );
 
     await client.query(
-      \`insert into public.bank_reconciliation_audit (mutation_id, action, actor, meta)
-       values ($1, 'MATCH_APPROVED', $2, $3::jsonb)\`,
+      `insert into public.bank_reconciliation_audit (mutation_id, action, actor, meta)
+       values ($1, 'MATCH_APPROVED', $2, $3::jsonb)`,
       [
         mutationId,
         actor.email,
