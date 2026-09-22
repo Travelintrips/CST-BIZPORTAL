@@ -1125,10 +1125,14 @@ router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, 
               pa.mutation_id, pa.payment_id
        from public.payment_allocations pa
        join public.payment_matching_groups pmg on pmg.id = pa.group_id
+       left join public.bank_mutations bm on bm.id = pa.mutation_id
        where pa.invoice_id = $1
          and pa.company_id = $2
          and coalesce(pa.is_active, true) = true
-         and lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+         and (
+           lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+           or lower(coalesce(bm.status, '')) in ('final', 'posted', 'reconciled')
+         )
        order by pa.id
        limit 1`,
       [invoiceId, companyId],
