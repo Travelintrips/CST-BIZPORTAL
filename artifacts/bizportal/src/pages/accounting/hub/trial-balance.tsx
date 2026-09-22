@@ -37,21 +37,79 @@ const typeColor: Record<string, string> = {
   expense:   "text-orange-300",
 };
 
+const TB_RETURN_STATE_KEY = "bizportal:accounting-hub:trial-balance:return-state";
+const TB_RETURN_STATE_MAX_AGE_MS = 30 * 60 * 1000;
+
+interface TrialBalanceReturnState {
+  filters: {
+    company_id: string;
+    date_from: string;
+    date_to: string;
+  };
+  expandedRows: string[];
+  scrollY: number;
+  focusRowKey: string;
+  savedAt: number;
+}
+
+function consumeTrialBalanceReturnState(): TrialBalanceReturnState | null {
+  try {
+    const raw = sessionStorage.getItem(TB_RETURN_STATE_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(TB_RETURN_STATE_KEY);
+
+    const parsed = JSON.parse(raw) as Partial<TrialBalanceReturnState>;
+    if (
+      !parsed.filters ||
+      !Array.isArray(parsed.expandedRows) ||
+      typeof parsed.savedAt !== "number" ||
+      Date.now() - parsed.savedAt > TB_RETURN_STATE_MAX_AGE_MS
+    ) {
+      return null;
+    }
+
+    return {
+      filters: {
+        company_id: parsed.filters.company_id ?? "",
+        date_from: parsed.filters.date_from ?? "",
+        date_to: parsed.filters.date_to ?? "",
+      },
+      expandedRows: parsed.expandedRows.filter((value): value is string => typeof value === "string"),
+      scrollY: typeof parsed.scrollY === "number" ? parsed.scrollY : 0,
+      focusRowKey: typeof parsed.focusRowKey === "string" ? parsed.focusRowKey : "",
+      savedAt: parsed.savedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function AccountingHubTrialBalancePage() {
   const search = useSearch();
   const urlParams = new URLSearchParams(search);
+  const [returnState] = useState<TrialBalanceReturnState | null>(() => consumeTrialBalanceReturnState());
   const [rows, setRows] = useState<TBRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
-  const [filters, setFilters] = useState(() => ({
-    company_id: urlParams.get("company_id") ?? "",
-    date_from: urlParams.get("date_from") ?? "",
-    date_to: urlParams.get("date_to") ?? "",
-  }));
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState(() => {
+    const hasUrlFilterState = ["company_id", "date_from", "date_to"].some(key => urlParams.has(key));
+    if (hasUrlFilterState || !returnState) {
+      return {
+        company_id: urlParams.get("company_id") ?? "",
+        date_from: urlParams.get("date_from") ?? "",
+        date_to: urlParams.get("date_to") ?? "",
+      };
+    }
+    return returnState.filters;
+  });
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(
+    () => new Set(returnState?.expandedRows ?? []),
+  );
   const [, navigate] = useLocation();
   const requestVersion = useRef(0);
+  const pendingScrollY = useRef<number | null>(returnState?.scrollY ?? null);
+  const pendingFocusRowKey = useRef<string | null>(returnState?.focusRowKey || null);
   const [childParent, setChildParent] = useState<TBRow | null>(null);
   const [childName, setChildName] = useState("");
   const [childSaving, setChildSaving] = useState(false);
@@ -70,7 +128,6 @@ export default function AccountingHubTrialBalancePage() {
     setLoading(true);
     setError(null);
     setRows([]);   // bersihkan data lama agar tidak tampil stale saat ganti filter
-    setExpandedRows(new Set());
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
@@ -97,6 +154,32 @@ export default function AccountingHubTrialBalancePage() {
   }, [filters]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Saat kembali dari General Ledger, pulihkan posisi tabel dan akun parent
+  // yang sebelumnya sedang terbuka. Double requestAnimationFrame memberi
+  // kesempatan React merender child rows sebelum posisi scroll dikembalikan.
+  useEffect(() => {
+    if (loading || rows.length === 0 || pendingScrollY.current === null) return;
+
+    const savedScrollY = pendingScrollY.current;
+    const focusKey = pendingFocusRowKey.current;
+    pendingScrollY.current = null;
+    pendingFocusRowKey.current = null;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (savedScrollY > 0) {
+          window.scrollTo({ top: savedScrollY, left: 0, behavior: "auto" });
+          return;
+        }
+        if (focusKey) {
+          document
+            .querySelector(`[data-tb-row-key="${focusKey}"]`)
+            ?.scrollIntoView({ block: "center" });
+        }
+      });
+    });
+  }, [loading, rows.length]);
 
   const totDebit  = rows.reduce((s, r) => s + Number(r.total_debit), 0);
   const totCredit = rows.reduce((s, r) => s + Number(r.total_credit), 0);
@@ -146,6 +229,19 @@ export default function AccountingHubTrialBalancePage() {
   };
 
   function drillDown(r: TBRow) {
+    try {
+      const returnState: TrialBalanceReturnState = {
+        filters,
+        expandedRows: Array.from(expandedRows),
+        scrollY: window.scrollY,
+        focusRowKey: rowKey(r),
+        savedAt: Date.now(),
+      };
+      sessionStorage.setItem(TB_RETURN_STATE_KEY, JSON.stringify(returnState));
+    } catch {
+      // Navigasi tetap boleh berjalan jika browser memblokir sessionStorage.
+    }
+
     const params = new URLSearchParams({ account_id: String(r.account_id) });
     if (filters.company_id) params.set("company_id", filters.company_id);
     if (filters.date_from)  params.set("date_from",  filters.date_from);
@@ -194,6 +290,7 @@ export default function AccountingHubTrialBalancePage() {
     return [
       <tr
         key={key}
+        data-tb-row-key={key}
         className={`border-t bg-black group ${canExpand || !r.is_header ? "cursor-pointer" : ""}`}
         onClick={() => {
           if (canExpand) toggleExpanded(r);
@@ -399,7 +496,10 @@ export default function AccountingHubTrialBalancePage() {
             {/* Company / Perusahaan dropdown */}
             <Select
               value={filters.company_id || "all"}
-              onValueChange={v => setFilters(f => ({ ...f, company_id: v === "all" ? "" : v }))}
+              onValueChange={v => {
+                setExpandedRows(new Set());
+                setFilters(f => ({ ...f, company_id: v === "all" ? "" : v }));
+              }}
             >
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Semua Perusahaan" />
@@ -414,9 +514,31 @@ export default function AccountingHubTrialBalancePage() {
               </SelectContent>
             </Select>
 
-            <DatePicker value={filters.date_from} onChange={v => setFilters(f => ({...f, date_from: v}))} className="w-40" />
-            <DatePicker value={filters.date_to}   onChange={v => setFilters(f => ({...f, date_to:   v}))} className="w-40" />
-            <Button size="sm" onClick={load}>Terapkan</Button>
+            <DatePicker
+              value={filters.date_from}
+              onChange={v => {
+                setExpandedRows(new Set());
+                setFilters(f => ({ ...f, date_from: v }));
+              }}
+              className="w-40"
+            />
+            <DatePicker
+              value={filters.date_to}
+              onChange={v => {
+                setExpandedRows(new Set());
+                setFilters(f => ({ ...f, date_to: v }));
+              }}
+              className="w-40"
+            />
+            <Button
+              size="sm"
+              onClick={() => {
+                setExpandedRows(new Set());
+                void load();
+              }}
+            >
+              Terapkan
+            </Button>
           </div>
         </CardContent>
       </Card>
