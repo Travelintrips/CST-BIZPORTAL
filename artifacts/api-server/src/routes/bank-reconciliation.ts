@@ -560,7 +560,7 @@ async function loadLocalMatchCandidates(
             where pa.company_id = $1
               and pa.mutation_id is not null
               and coalesce(pa.is_active, true) = true
-              and lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')
+              and (\n                lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')\n                or lower(coalesce(paid_bm.status, '')) in ('final', 'posted', 'reconciled')\n              )
             group by pa.invoice_id
          )
          select vi.id,
@@ -2895,6 +2895,33 @@ router.post("/bank-reconciliation/:mutationId/unmatch", async (req, res): Promis
     );
     const releasedMatchIds = released.rows.map((row) => row.id);
 
+    const allocationGroups = await client.query<{ group_id: number | null }>(
+      `select distinct group_id
+         from public.payment_allocations
+        where mutation_id = $1
+          and coalesce(is_active, true) = true`,
+      [mutationId],
+    );
+    await client.query(
+      `update public.payment_allocations
+          set is_active = false
+        where mutation_id = $1
+          and coalesce(is_active, true) = true`,
+      [mutationId],
+    );
+    const groupIds = allocationGroups.rows
+      .map((row) => row.group_id)
+      .filter((id): id is number => Number.isInteger(id) && Number(id) > 0);
+    if (groupIds.length > 0) {
+      await client.query(
+        `update public.payment_matching_groups
+            set status = 'reversed', updated_at = now()
+          where id = any($1::bigint[])
+            and status = 'active'`,
+        [groupIds],
+      );
+    }
+
     await client.query(
       `update public.bank_mutations
           set status = 'unmatched',
@@ -4826,6 +4853,493 @@ router.post("/bank-reconciliation/sheet-sync", async (req, res): Promise<void> =
     const message = error instanceof Error ? error.message : "Sheet sync gagal";
     req.log.error({ error, companyId }, "Google Sheet sync failed");
     res.status(502).json({ error: message, code: "GOOGLE_SHEET_SYNC_FAILED" });
+  }
+});
+
+
+router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const requestedCompanyId = parsePositiveInt(req.header("x-company-id") ?? req.query.company);
+  if (mutationId === null || requestedCompanyId === null) {
+    res.status(400).json({ error: "ID mutasi atau company tidak valid" });
+    return;
+  }
+
+  let actor: ApprovalActor | null;
+  try {
+    actor = await getApprovalActor(req);
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Failed to resolve vendor invoice payment actor");
+    res.status(503).json({ error: "Authorization service unavailable" });
+    return;
+  }
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const rawIds = Array.isArray(req.body?.vendor_invoice_ids) ? req.body.vendor_invoice_ids : [];
+  const vendorInvoiceIds = Array.from(new Set(
+    rawIds.map((value: unknown) => Number(value)).filter((value: number) => Number.isSafeInteger(value) && value > 0),
+  ));
+  if (vendorInvoiceIds.length === 0 || vendorInvoiceIds.length !== rawIds.length) {
+    res.status(400).json({ error: "Minimal satu invoice vendor yang valid wajib dipilih" });
+    return;
+  }
+
+  const requestedAllocationByInvoice = new Map<number, number>();
+  const rawAllocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
+  for (const rawAllocation of rawAllocations as Array<Record<string, unknown>>) {
+    const invoiceId = Number(rawAllocation.vendor_invoice_id ?? rawAllocation.invoice_id);
+    const amount = Math.round(Number(rawAllocation.amount) * 100) / 100;
+    if (
+      !Number.isSafeInteger(invoiceId)
+      || invoiceId <= 0
+      || !Number.isFinite(amount)
+      || amount <= 0
+      || !vendorInvoiceIds.includes(invoiceId)
+      || requestedAllocationByInvoice.has(invoiceId)
+    ) {
+      res.status(400).json({ error: "Alokasi invoice tidak valid atau duplikat" });
+      return;
+    }
+    requestedAllocationByInvoice.set(invoiceId, amount);
+  }
+
+  const money = (value: number): number => Math.round(value * 100) / 100;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const mutationResult = await client.query<{
+      id: number;
+      company_id: number;
+      amount: string;
+      direction: string;
+      transaction_date: string;
+      mutation_key: string | null;
+      bank_reference: string | null;
+      description: string | null;
+      bank_account_id: string | null;
+      journal_entry_id: number | null;
+      status: string;
+    }>(
+      \`select id, company_id, amount, direction, transaction_date, mutation_key,
+              bank_reference, description, bank_account_id, journal_entry_id, status
+         from public.bank_mutations
+        where id = $1
+        for update\`,
+      [mutationId],
+    );
+    const mutation = mutationResult.rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi bank tidak ditemukan", 404, "MUTATION_NOT_FOUND");
+
+    const companyId = Number(mutation.company_id);
+    const mutationAmount = money(Number(mutation.amount));
+    if (companyId !== requestedCompanyId) {
+      throw new ApprovalError("Company mutasi tidak sesuai dengan perusahaan aktif", 409, "COMPANY_MISMATCH");
+    }
+    if (actor.companyId != null && actor.companyId !== companyId) {
+      throw new ApprovalError("Akses perusahaan tidak sesuai", 403, "COMPANY_ACCESS_DENIED");
+    }
+    if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+      throw new ApprovalError("Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor", 422, "INVALID_DIRECTION");
+    }
+    if (!Number.isFinite(mutationAmount) || mutationAmount <= 0) {
+      throw new ApprovalError("Nominal mutasi tidak valid", 422, "INVALID_AMOUNT");
+    }
+    if (
+      mutation.journal_entry_id != null
+      || ["approved", "approved_pending_posting", "posted", "reconciled"].includes(String(mutation.status ?? "").toLowerCase())
+    ) {
+      throw new ApprovalError("Mutasi ini sudah memiliki jurnal atau sudah diproses", 409, "MUTATION_ALREADY_PROCESSED");
+    }
+
+    const invoiceResult = await client.query<{
+      id: number;
+      invoice_number: string;
+      vendor_invoice_ref: string | null;
+      supplier_name: string;
+      grand_total: string;
+      status: string;
+      canonical_paid: string;
+    }>(
+      \`select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
+              vi.grand_total, vi.status::text status,
+              coalesce((
+                select sum(coalesce(pa.allocated_amount, 0))
+                  from public.payment_allocations pa
+                  left join public.payment_matching_groups pmg on pmg.id = pa.group_id
+                  left join public.bank_mutations bm on bm.id = pa.mutation_id
+                 where pa.invoice_id = vi.id
+                   and pa.company_id = vi.company_id
+                   and coalesce(pa.is_active, true) = true
+                   and (
+                     lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+                     or lower(coalesce(bm.status, '')) in ('final', 'posted', 'reconciled')
+                   )
+              ), 0)::text canonical_paid
+         from public.vendor_invoices vi
+        where vi.company_id = $1
+          and vi.id = any($2::bigint[])
+          and vi.cancelled_at is null
+        order by vi.id
+        for update\`,
+      [companyId, vendorInvoiceIds],
+    );
+    if (invoiceResult.rows.length !== vendorInvoiceIds.length) {
+      throw new ApprovalError("Satu atau lebih invoice vendor tidak ditemukan dalam perusahaan aktif", 404, "INVOICE_NOT_FOUND");
+    }
+
+    const taxResult = await client.query<{
+      invoice_id: number;
+      tax_type: string;
+      tax_amount: string;
+      liability_account_id: number | null;
+    }>(
+      \`select vil.invoice_id, vit.tax_type, vit.tax_amount, vit.liability_account_id
+         from public.vendor_invoice_line_taxes vit
+         join public.vendor_invoice_lines vil on vil.id = vit.invoice_line_id
+        where vil.invoice_id = any($1::bigint[])
+          and vit.company_id = $2
+          and coalesce(vit.tax_amount, 0) > 0
+        order by vil.invoice_id, vit.id\`,
+      [vendorInvoiceIds, companyId],
+    );
+    const taxesByInvoice = new Map<number, Array<{ taxType: string; amount: number; liabilityAccountId: number | null }>>();
+    for (const row of taxResult.rows) {
+      const rows = taxesByInvoice.get(Number(row.invoice_id)) ?? [];
+      rows.push({
+        taxType: String(row.tax_type ?? "PPh"),
+        amount: money(Number(row.tax_amount ?? 0)),
+        liabilityAccountId: row.liability_account_id == null ? null : Number(row.liability_account_id),
+      });
+      taxesByInvoice.set(Number(row.invoice_id), rows);
+    }
+
+    const allocations = invoiceResult.rows.map((invoice) => {
+      if (String(invoice.status).toLowerCase() !== "posted") {
+        throw new ApprovalError(
+          \`Invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} harus berstatus posted sebelum dibayar\`,
+          422,
+          "INVOICE_NOT_POSTED",
+        );
+      }
+      const grandTotal = money(Number(invoice.grand_total));
+      const canonicalPaid = money(Number(invoice.canonical_paid ?? 0));
+      const outstanding = money(Math.max(0, grandTotal - canonicalPaid));
+      if (!Number.isFinite(outstanding) || outstanding <= 0.01) {
+        throw new ApprovalError(
+          \`Invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} sudah tersettle penuh\`,
+          409,
+          "INVOICE_ALREADY_SETTLED",
+        );
+      }
+      const requested = requestedAllocationByInvoice.get(invoice.id);
+      const cashAmount = requested != null
+        ? requested
+        : invoiceResult.rows.length === 1
+          ? money(Math.min(mutationAmount, outstanding))
+          : outstanding;
+      if (!Number.isFinite(cashAmount) || cashAmount <= 0 || cashAmount > outstanding + 0.01) {
+        throw new ApprovalError(
+          \`Alokasi invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} tidak valid atau melebihi sisa invoice\`,
+          422,
+          "INVALID_INVOICE_ALLOCATION",
+        );
+      }
+
+      const taxes = taxesByInvoice.get(invoice.id) ?? [];
+      const withholdingAmount = money(taxes.reduce((sum, tax) => sum + Math.max(0, tax.amount), 0));
+      const inferWithholding = withholdingAmount > 0
+        && Math.abs(cashAmount - money(outstanding - withholdingAmount)) <= 0.01;
+      if (inferWithholding) {
+        const unmapped = taxes.find((tax) => !Number.isInteger(tax.liabilityAccountId) || Number(tax.liabilityAccountId) <= 0);
+        if (unmapped) {
+          throw new ApprovalError(
+            \`COA Hutang PPh untuk invoice \${invoice.vendor_invoice_ref ?? invoice.invoice_number} belum terpetakan\`,
+            422,
+            "WITHHOLDING_LIABILITY_ACCOUNT_REQUIRED",
+          );
+        }
+      }
+      const grossAmount = money(cashAmount + (inferWithholding ? withholdingAmount : 0));
+      return {
+        ...invoice,
+        grandTotal,
+        canonicalPaid,
+        outstanding,
+        cashAmount,
+        grossAmount,
+        withholdingAmount: inferWithholding ? withholdingAmount : 0,
+        liabilityCredits: inferWithholding
+          ? taxes.map((tax) => ({ accountId: Number(tax.liabilityAccountId), amount: tax.amount }))
+          : [],
+      };
+    });
+
+    const totalCashAllocation = money(allocations.reduce((sum, allocation) => sum + allocation.cashAmount, 0));
+    if (totalCashAllocation > mutationAmount + 0.01) {
+      throw new ApprovalError(
+        \`Nominal mutasi (\${mutationAmount.toFixed(2)}) tidak cukup untuk total alokasi invoice (\${totalCashAllocation.toFixed(2)})\`,
+        422,
+        "ALLOCATION_EXCEEDS_MUTATION",
+      );
+    }
+    const wrongTransferAmount = money(Math.max(0, mutationAmount - totalCashAllocation));
+
+    const bankCoaId = await resolveApprovalBankAccount(
+      client,
+      companyId,
+      mutation.bank_account_id == null ? null : String(mutation.bank_account_id),
+    );
+    if (bankCoaId == null) {
+      throw new ApprovalError("COA rekening bank belum dikonfigurasi", 422, "BANK_COA_REQUIRED");
+    }
+    const bankAccountResult = await client.query<{ id: number; code: string; name: string }>(
+      \`select id, code, name
+         from public.chart_of_accounts
+        where id = $1
+          and (company_id = $2 or company_id is null)
+          and coalesce(is_active, true) = true
+          and coalesce(is_postable, true) = true
+        limit 1\`,
+      [bankCoaId, companyId],
+    );
+    const bankAccount = bankAccountResult.rows[0];
+    if (!bankAccount) {
+      throw new ApprovalError("COA rekening bank tidak aktif atau tidak postable", 422, "BANK_COA_REQUIRED");
+    }
+
+    const apAccount = await resolveApprovalContraAccount(client, companyId, "OUT", "vendor_invoice", null);
+    const wrongTransferAccount = wrongTransferAmount > 0.01
+      ? (await client.query<{ id: number; code: string; name: string }>(
+          \`select id, code, name
+             from public.chart_of_accounts
+            where code = '2-1011-CST'
+              and (company_id = $1 or company_id is null)
+              and coalesce(is_active, true) = true
+              and coalesce(is_postable, true) = true
+            order by case when company_id = $1 then 0 else 1 end, id
+            limit 1\`,
+          [companyId],
+        )).rows[0]
+      : null;
+    if (wrongTransferAmount > 0.01 && !wrongTransferAccount) {
+      throw new ApprovalError("COA 2-1011-CST — Salah Transfer belum tersedia atau tidak aktif", 422, "WRONG_TRANSFER_COA_REQUIRED");
+    }
+
+    const settingsResult = await client.query<{ bank_journal_id: number | null }>(
+      "select bank_journal_id from public.accounting_settings where company_id = $1 limit 1",
+      [companyId],
+    );
+    let journalId = settingsResult.rows[0]?.bank_journal_id ?? null;
+    if (journalId == null) {
+      const journalFallback = await client.query<{ id: number }>(
+        \`select id
+           from public.accounting_journals
+          where company_id = $1
+            and (lower(name) like '%bank%' or lower(code) like '%bank%' or type = 'bank')
+          order by id
+          limit 1\`,
+        [companyId],
+      );
+      journalId = journalFallback.rows[0]?.id ?? null;
+    }
+    if (journalId == null) {
+      throw new ApprovalError("Jurnal bank belum dikonfigurasi untuk perusahaan ini", 422, "JOURNAL_MAPPING_REQUIRED");
+    }
+
+    const txDate = calendarDateValue(mutation.transaction_date);
+    if (!txDate) throw new ApprovalError("Tanggal transaksi mutasi tidak valid", 422, "INVALID_TRANSACTION_DATE");
+    const year = Number(txDate.slice(0, 4)) || new Date().getUTCFullYear();
+    const entryNumber = await nextApprovalEntryNumber(client, companyId, year);
+    const reference = String(mutation.mutation_key ?? mutation.bank_reference ?? mutationId).slice(0, 100);
+    const description = \`Pembayaran \${allocations.length} invoice vendor — \${reference}\`.slice(0, 200);
+    const totalWithholding = money(allocations.reduce((sum, allocation) => sum + allocation.withholdingAmount, 0));
+    const totalDebit = money(allocations.reduce((sum, allocation) => sum + allocation.grossAmount, 0) + wrongTransferAmount);
+    const totalCredit = money(mutationAmount + totalWithholding);
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      throw new ApprovalError("Jurnal pembayaran vendor tidak balance", 422, "UNBALANCED_JOURNAL");
+    }
+
+    const entryResult = await client.query<{ id: number }>(
+      \`insert into public.accounting_entries
+        (entry_number, journal_id, date, ref, description, status, source, source_id,
+         total_debit, total_credit, created_by_id, company_id)
+       values ($1, $2, $3, $4, $5, 'draft', 'bank_reconciliation', $6,
+               $7, $8, $9, $10)
+       returning id\`,
+      [entryNumber, journalId, txDate, reference, description, mutationId, totalDebit, totalCredit, actor.email, companyId],
+    );
+    const entryId = entryResult.rows[0]?.id;
+    if (!entryId) throw new Error("Jurnal pembayaran vendor gagal dibuat");
+
+    for (const allocation of allocations) {
+      await client.query(
+        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4)\`,
+        [entryId, apAccount.id, allocation.grossAmount, \`Pembayaran invoice vendor \${allocation.vendor_invoice_ref ?? allocation.invoice_number}\`.slice(0, 200)],
+      );
+    }
+    if (wrongTransferAccount && wrongTransferAmount > 0.01) {
+      await client.query(
+        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, $3, 0, $4)\`,
+        [entryId, wrongTransferAccount.id, wrongTransferAmount, \`Kelebihan transfer — \${wrongTransferAccount.code} \${wrongTransferAccount.name}\`.slice(0, 200)],
+      );
+    }
+    const liabilityCredits = new Map<number, number>();
+    for (const allocation of allocations) {
+      for (const credit of allocation.liabilityCredits) {
+        liabilityCredits.set(credit.accountId, money((liabilityCredits.get(credit.accountId) ?? 0) + credit.amount));
+      }
+    }
+    for (const [accountId, amount] of liabilityCredits) {
+      await client.query(
+        \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+         values ($1, $2, 0, $3, 'Hutang PPh — matching invoice vendor')\`,
+        [entryId, accountId, amount],
+      );
+    }
+    await client.query(
+      \`insert into public.accounting_entry_lines (entry_id, account_id, debit, credit, description)
+       values ($1, $2, 0, $3, $4)\`,
+      [entryId, bankAccount.id, mutationAmount, description],
+    );
+
+    const groupResult = await client.query<{ id: number }>(
+      \`insert into public.payment_matching_groups
+        (company_id, group_type, matching_type, total_mutation_amount, total_invoice_amount,
+         total_allocated, remaining_amount, confidence, algorithm_used, status, created_by)
+       values ($1, 'MULTI_INVOICE', 'MULTI_INVOICE', $2, $3, $3, $4, 100,
+               'bank_reconciliation_vendor_invoice_batch', 'active', $5)
+       returning id\`,
+      [
+        companyId,
+        mutationAmount,
+        money(allocations.reduce((sum, allocation) => sum + allocation.grossAmount, 0)),
+        wrongTransferAmount,
+        actor.email,
+      ],
+    );
+    const groupId = groupResult.rows[0]?.id;
+    if (!groupId) throw new Error("Matching group pembayaran vendor gagal dibuat");
+
+    for (let index = 0; index < allocations.length; index += 1) {
+      const allocation = allocations[index]!;
+      await client.query(
+        \`insert into public.payment_allocations
+          (group_id, company_id, invoice_id, invoice_ref, mutation_id, allocated_amount,
+           remaining_amount, allocation_sequence, strategy, is_active)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'MANUAL', true)\`,
+        [
+          groupId,
+          companyId,
+          allocation.id,
+          allocation.vendor_invoice_ref ?? allocation.invoice_number,
+          mutationId,
+          allocation.grossAmount,
+          money(Math.max(0, allocation.outstanding - allocation.grossAmount)),
+          index + 1,
+        ],
+      );
+    }
+
+    await client.query(
+      \`update public.bank_reconciliation_matches
+          set status = 'superseded'
+        where mutation_id = $1
+          and status not in ('approved', 'posted')\`,
+      [mutationId],
+    );
+    await client.query(
+      \`insert into public.bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match,
+         status, candidate_source, is_manual)
+       values ($1, 'vendor_invoice', $2, 100, $3, $4, false, true, false, false,
+               'approved', 'public.vendor_invoices', true)\`,
+      [
+        mutationId,
+        allocations[0]!.id,
+        \`vendor invoice batch payment; invoice_ids:\${allocations.map((allocation) => allocation.id).join(",")}\`,
+        wrongTransferAmount <= 0.01,
+      ],
+    );
+
+    await client.query(
+      \`update public.bank_mutations
+          set status = 'approved_pending_posting',
+              reconciliation_status = 'matched',
+              journal_entry_id = $1,
+              approved_by = $2,
+              approved_at = now(),
+              linked_transaction_type = 'vendor_invoice_batch',
+              linked_transaction_id = $3,
+              updated_at = now()
+        where id = $4\`,
+      [entryId, actor.email, allocations[0]!.id, mutationId],
+    );
+
+    await client.query(
+      \`insert into public.bank_reconciliation_audit (mutation_id, action, actor, meta)
+       values ($1, 'MATCH_APPROVED', $2, $3::jsonb)\`,
+      [
+        mutationId,
+        actor.email,
+        JSON.stringify({
+          candidate_type: "vendor_invoice_batch",
+          candidate_ids: allocations.map((allocation) => allocation.id),
+          cash_amounts: allocations.map((allocation) => allocation.cashAmount),
+          gross_amounts: allocations.map((allocation) => allocation.grossAmount),
+          withholding_amounts: allocations.map((allocation) => allocation.withholdingAmount),
+          total_amount: mutationAmount,
+          wrong_transfer_amount: wrongTransferAmount,
+          wrong_transfer_coa_code: wrongTransferAccount?.code ?? null,
+          payment_matching_group_id: groupId,
+          journal_entry_id: entryId,
+          bank_coa_id: bankAccount.id,
+          bank_coa_code: bankAccount.code,
+          bank_coa_name: bankAccount.name,
+          ap_coa_id: apAccount.id,
+          ap_coa_code: apAccount.code,
+          ap_coa_name: apAccount.name,
+        }),
+      ],
+    );
+
+    await client.query("commit");
+    res.json({
+      ok: true,
+      mutation_id: mutationId,
+      journal_entry_id: entryId,
+      journal_entry_number: entryNumber,
+      status: "approved_pending_posting",
+      payment_matching_group_id: groupId,
+      bank_coa: { id: bankAccount.id, code: bankAccount.code, name: bankAccount.name },
+      ap_coa: { id: apAccount.id, code: apAccount.code, name: apAccount.name },
+      wrong_transfer_amount: wrongTransferAmount,
+      invoices: allocations.map((allocation) => ({
+        vendor_invoice_id: allocation.id,
+        invoice_number: allocation.vendor_invoice_ref ?? allocation.invoice_number,
+        cash_amount: allocation.cashAmount,
+        settled_amount: allocation.grossAmount,
+      })),
+    });
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch (rollbackError) {
+      req.log.warn({ rollbackError, mutationId }, "Vendor invoice payment rollback failed");
+    }
+    const status = error instanceof ApprovalError ? error.status : 400;
+    const code = error instanceof ApprovalError ? error.code : "VENDOR_INVOICE_PAYMENT_FAILED";
+    const message = error instanceof Error ? error.message : "Pembayaran invoice vendor gagal diproses";
+    req.log.warn({ error, mutationId, requestedCompanyId }, "Vendor invoice payment batch rejected");
+    res.status(status).json({ error: message, code });
+  } finally {
+    client.release();
   }
 });
 
