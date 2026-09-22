@@ -4,6 +4,14 @@ import { authenticateAdmin } from "./admin-auth";
 const router: IRouter = Router();
 const adminConnections = new Set<Response>();
 
+type FlushableResponse = Response & {
+  flush?: () => void;
+};
+
+function flushResponse(response: Response): void {
+  (response as FlushableResponse).flush?.();
+}
+
 function openStream(response: Response, event: string): void {
   response.setHeader("Content-Type", "text/event-stream");
   response.setHeader("Cache-Control", "no-cache, no-transform");
@@ -11,7 +19,7 @@ function openStream(response: Response, event: string): void {
   response.setHeader("Content-Encoding", "identity");
   response.flushHeaders();
   response.write(`retry: 15000\nevent: ${event}\ndata: ${JSON.stringify({ ok: true })}\n\n`);
-  response.flush?.();
+  flushResponse(response);
 }
 
 function addAdminStream(request: Request, response: Response, event: string): void {
@@ -21,7 +29,7 @@ function addAdminStream(request: Request, response: Response, event: string): vo
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
-      response.flush?.();
+      flushResponse(response);
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
@@ -43,13 +51,13 @@ function addMessageStream(request: Request, response: Response, payload: unknown
   response.setHeader("Content-Encoding", "identity");
   response.flushHeaders();
   response.write(`retry: 15000\ndata: ${JSON.stringify(payload)}\n\n`);
-  response.flush?.();
+  flushResponse(response);
   adminConnections.add(response);
 
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
-      response.flush?.();
+      flushResponse(response);
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
@@ -77,13 +85,13 @@ router.get("/sport-center/events", (request, response) => {
 router.get("/alerts/stream", (request, response) => {
   openStream(response, "message");
   response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
-  response.flush?.();
+  flushResponse(response);
   adminConnections.add(response);
 
   const heartbeat = setInterval(() => {
     try {
       response.write(":heartbeat\n\n");
-      response.flush?.();
+      flushResponse(response);
     } catch {
       clearInterval(heartbeat);
       adminConnections.delete(response);
