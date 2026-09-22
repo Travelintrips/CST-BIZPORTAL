@@ -560,7 +560,10 @@ async function loadLocalMatchCandidates(
             where pa.company_id = $1
               and pa.mutation_id is not null
               and coalesce(pa.is_active, true) = true
-              and (\n                lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')\n                or lower(coalesce(paid_bm.status, '')) in ('final', 'posted', 'reconciled')\n              )
+              and (
+                lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+                or lower(coalesce(paid_bm.status, '')) in ('final', 'posted', 'reconciled')
+              )
             group by pa.invoice_id
          )
          select vi.id,
@@ -5384,7 +5387,10 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
          where pa.company_id = $2
            and pa.mutation_id is not null
            and coalesce(pa.is_active, true) = true
-           and lower(coalesce(pmg.status, '')) in ('posted', 'reconciled')
+           and (
+             lower(coalesce(pmg.status, '')) in ('final', 'posted', 'reconciled')
+             or lower(coalesce(bm.status, '')) in ('final', 'posted', 'reconciled')
+           )
          group by pa.invoice_id
        ),
        eligible_invoices as (
