@@ -84,6 +84,7 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("nullif(ci.net_amount::numeric, 0)");
     expect(source).toContain("(ci.paid_at at time zone 'Asia/Jakarta')::date = $3::date");
     expect(source).toContain("fcm.approval_status = 'OWNER_APPROVED'");
+    expect(source).toContain("join sport_center.sport_payments sp3 on sp3.booking_id = cii3.booking_id");
     expect(source).toContain("SPORT_COMPANY_INVOICE_ACCOUNTING_REVIEW_REQUIRED");
   });
 
