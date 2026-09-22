@@ -413,6 +413,21 @@ async function loadLocalMatchCandidates(
            )
            and not exists (
              select 1
+               from sport_center.company_invoice_items cii3
+               join sport_center.sport_payments sp3 on sp3.booking_id = cii3.booking_id
+              where cii3.invoice_id = ci.id
+                and lower(coalesce(sp3.status::text, '')) in
+                    ('confirmed', 'paid', 'completed', 'success', 'settled')
+                and abs(sp3.amount::numeric - coalesce(
+                  nullif(ci.net_amount::numeric, 0),
+                  nullif(ci.paid_amount::numeric, 0),
+                  ci.grand_total::numeric
+                )) < 0.01
+                and (coalesce(sp3.paid_at, sp3.created_at) at time zone 'Asia/Jakarta')::date =
+                    (ci.paid_at at time zone 'Asia/Jakarta')::date
+           )
+           and not exists (
+             select 1
                from public.bank_reconciliation_matches brm
               where brm.candidate_type = 'sport_company_invoice'
                 and brm.candidate_id = ci.id
