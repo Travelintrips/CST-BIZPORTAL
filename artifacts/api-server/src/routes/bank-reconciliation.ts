@@ -2850,6 +2850,26 @@ router.post("/bank-reconciliation/:mutationId/unmatch", async (req, res): Promis
     if (mutation.journal_entry_id !== null) {
       const journalStatus = String(mutation.journal_status ?? "").toLowerCase();
       if (journalStatus === "draft") {
+        // Release the FK before deleting the draft journal. Both statements run
+        // in the same transaction, so any later failure restores the original
+        // mutation-to-journal link and prevents a partially cancelled state.
+        const unlinked = await client.query(
+          `update public.bank_mutations
+              set journal_entry_id = null,
+                  updated_at = now()
+            where id = $1
+              and journal_entry_id = $2
+          returning id`,
+          [mutationId, mutation.journal_entry_id],
+        );
+        if (unlinked.rowCount !== 1) {
+          const error = new Error(
+            `Draft journal #${mutation.journal_entry_id} tidak dapat dibatalkan karena tautan mutasi berubah bersamaan.`,
+          ) as Error & { code?: string };
+          error.code = "JOURNAL_CONCURRENT_CHANGE";
+          throw error;
+        }
+
         const deleted = await client.query(
           `delete from public.accounting_entries
             where id = $1 and status = 'draft'`,
