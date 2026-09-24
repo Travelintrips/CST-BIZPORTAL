@@ -89,6 +89,8 @@ interface LocalMatchCandidate {
   referenceMatch: boolean;
   nameMatch: boolean;
   reason: string;
+  customerName?: string | null;
+  orderRef?: string | null;
 }
 
 function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"]): string {
@@ -318,9 +320,13 @@ async function loadLocalMatchCandidates(
         paid_date: string | null;
         payment_reference: string | null;
         description: string | null;
+        customer_name: string | null;
+        order_ref: string | null;
       }>(
         `with eligible as (
            select sp.*,
+                  sb.customer_name as booking_customer_name,
+                  sb.order_number as booking_order_number,
                   nullif(btrim(sb.group_ref::text), '') as normalized_group_id,
                   lower(coalesce(
                     to_jsonb(sp)->>'payment_method',
@@ -358,12 +364,16 @@ async function loadLocalMatchCandidates(
              ) as payment_reference,
              concat_ws(
                ' ',
+               max(sp.booking_customer_name),
+               max(sp.booking_order_number),
                max(sp.payment_type::text),
                max(sp.payment_provider::text),
                max(sp.provider_order_id::text),
                'group',
                sp.normalized_group_id
              ) as description,
+             max(sp.booking_customer_name) as customer_name,
+             max(sp.booking_order_number) as order_ref,
              bool_or(sp.normalized_method like '%qris%') as is_qris,
              min(coalesce(
                nullif(to_jsonb(sp)->>'expected_settlement_date','')::date,
@@ -379,7 +389,16 @@ async function loadLocalMatchCandidates(
              sp.amount::numeric as amount,
              (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date::text as paid_date,
              coalesce(sp.provider_order_id, sp.provider_id::text) as payment_reference,
-             concat_ws(' ', sp.payment_type, sp.payment_provider, sp.provider_order_id) as description,
+             concat_ws(
+               ' ',
+               sp.booking_customer_name,
+               sp.booking_order_number,
+               sp.payment_type,
+               sp.payment_provider,
+               sp.provider_order_id
+             ) as description,
+             sp.booking_customer_name as customer_name,
+             sp.booking_order_number as order_ref,
              (sp.normalized_method like '%qris%') as is_qris,
              coalesce(
                nullif(to_jsonb(sp)->>'expected_settlement_date','')::date,
@@ -393,7 +412,8 @@ async function loadLocalMatchCandidates(
            union all
            select * from singles
          )
-         select c.id, c.amount, c.paid_date, c.payment_reference, c.description
+         select c.id, c.amount, c.paid_date, c.payment_reference, c.description,
+                c.customer_name, c.order_ref
            from candidates c
           where abs(c.amount::numeric - $2::numeric) < 0.01
             and (
@@ -430,9 +450,13 @@ async function loadLocalMatchCandidates(
           nameMatch,
           reason: referenceMatch
             ? "Nominal, tanggal, dan referensi payment cocok."
-            : dateMatch
-              ? "Nominal dan tanggal payment cocok."
-              : "Nominal dan tanggal settlement cocok.",
+            : nameMatch
+              ? "Nominal, tanggal, dan nama customer cocok."
+              : dateMatch
+                ? "Nominal dan tanggal payment cocok."
+                : "Nominal dan tanggal settlement cocok.",
+          customerName: payment.customer_name,
+          orderRef: payment.order_ref,
         });
       }
     } catch (error) {
@@ -732,14 +756,122 @@ async function matchLocalMutation(
   const rules = await loadActiveRuleAi(client, mutation.company_id);
   const ruleResult = evaluateReconRules(rules,{description:mutation.description??'',reference:mutation.bank_reference??mutation.provider_order_id??null,amount:Number(mutation.amount),direction:String(mutation.direction).toUpperCase() as 'IN'|'OUT',bankAccountId:mutation.bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)?Number(mutation.bank_account_id):null,bank:mutation.provider_name??null,normalizedDescription:mutation.normalized_description??null,hasDocumentUpload:Boolean(mutation.uploaded_proof_url),companyId:mutation.company_id});
   if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
-  if(ruleResult.matched&&ruleResult.ruleId!=null){const matchedRule=rules.find(r=>r.id===ruleResult.ruleId)!;const realCandidate=candidates[0];if(!realCandidate && matchedRule.candidateRequirement!=='not_required'){
-    await client.query("update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code='RULE_NO_CANONICAL_CANDIDATE',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);
-    await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'RULE_NO_CANONICAL_CANDIDATE_UNMATCHED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({rule_id:ruleResult.ruleId,rule_name:matchedRule.name,candidate_requirement:matchedRule.candidateRequirement})]);
-    return 'unmatched';
-  }if(matchedRule.candidateRequirement==='required'&&!realCandidate){await client.query("update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi kandidat transaksi nyata wajib tersedia; mutasi tetap Belum Dicocokkan sampai kandidat ditemukan.',review_code='RULE_CANDIDATE_REQUIRED',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",[mutation.id]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'RULE_CANDIDATE_REQUIRED_UNMATCHED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({rule_id:ruleResult.ruleId,rule_name:matchedRule.name,candidate_requirement:'required'})]);return 'unmatched';}await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",[mutation.id,ruleResult.ruleId,Math.round(ruleResult.confidence??matchedRule.confidenceScore),'RULE_AI:'+matchedRule.name,Boolean(mutation.uploaded_proof_url)]);if(realCandidate)await client.query("insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10)",[mutation.id,realCandidate.candidateType,realCandidate.candidateId,Math.round(realCandidate.score),realCandidate.reason,realCandidate.amountMatch,realCandidate.dateMatch,realCandidate.nameMatch,realCandidate.referenceMatch,localCandidateSource(realCandidate.candidateType)]);await client.query("update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule AI: '+matchedRule.name,mutation.id]);await client.query('update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1',[ruleResult.ruleId]);await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",[mutation.id,actor.email,JSON.stringify({engine:'bizportal-rule-ai',rule_id:ruleResult.ruleId,rule_name:matchedRule.name,confidence:ruleResult.confidence??matchedRule.confidenceScore,candidate_requirement:matchedRule.candidateRequirement,real_candidate_id:realCandidate?.candidateId??null})]);
+  if (ruleResult.matched && ruleResult.ruleId != null) {
+    const matchedRule = rules.find((r) => r.id === ruleResult.ruleId)!;
+    const realCandidate = candidates[0];
+    const competitiveRealCandidates = realCandidate
+      ? candidates.filter((candidate) => candidate.score >= realCandidate.score - 5)
+      : [];
+    const ambiguousRequiredCandidates =
+      matchedRule.candidateRequirement === "required" &&
+      competitiveRealCandidates.length > 1;
+
+    if (!realCandidate && matchedRule.candidateRequirement !== "not_required") {
+      await client.query(
+        "update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code='RULE_NO_CANONICAL_CANDIDATE',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        [mutation.id],
+      );
+      await client.query(
+        "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'RULE_NO_CANONICAL_CANDIDATE_UNMATCHED',$2,$3::jsonb)",
+        [
+          mutation.id,
+          actor.email,
+          JSON.stringify({
+            rule_id: ruleResult.ruleId,
+            rule_name: matchedRule.name,
+            candidate_requirement: matchedRule.candidateRequirement,
+          }),
+        ],
+      );
+      return "unmatched";
+    }
+
+    await client.query(
+      "insert into public.bank_reconciliation_matches (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source) values ($1,'recon_rule',$2,$3,$4,true,false,true,false,$5,'candidate','public.recon_rules')",
+      [
+        mutation.id,
+        ruleResult.ruleId,
+        Math.round(ruleResult.confidence ?? matchedRule.confidenceScore),
+        "RULE_AI:" + matchedRule.name,
+        Boolean(mutation.uploaded_proof_url),
+      ],
+    );
+
+    for (const candidate of competitiveRealCandidates) {
+      await client.query(
+        `insert into public.bank_reconciliation_matches
+          (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+           amount_match, date_match, name_match, order_id_match, proof_match,
+           status, candidate_source, customer_name, order_ref)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'candidate',$10,$11,$12)`,
+        [
+          mutation.id,
+          candidate.candidateType,
+          candidate.candidateId,
+          Math.round(candidate.score),
+          candidate.reason,
+          candidate.amountMatch,
+          candidate.dateMatch,
+          candidate.nameMatch,
+          candidate.referenceMatch,
+          localCandidateSource(candidate.candidateType),
+          candidate.customerName ?? null,
+          candidate.orderRef ?? null,
+        ],
+      );
+    }
+
+    if (ambiguousRequiredCandidates) {
+      await client.query(
+        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok dan menemukan lebih dari satu kandidat canonical dengan skor setara. Pilih transaksi yang benar sebelum approve.',review_code='RULE_MULTIPLE_CANONICAL_CANDIDATES',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        [mutation.id],
+      );
+      await client.query(
+        "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",
+        [
+          mutation.id,
+          actor.email,
+          JSON.stringify({
+            engine: "bizportal-rule-ai",
+            rule_id: ruleResult.ruleId,
+            rule_name: matchedRule.name,
+            confidence: ruleResult.confidence ?? matchedRule.confidenceScore,
+            candidate_requirement: matchedRule.candidateRequirement,
+            real_candidate_ids: competitiveRealCandidates.map((candidate) => candidate.candidateId),
+            ambiguity: true,
+          }),
+        ],
+      );
+      return "manual_review";
+    }
+
+    await client.query(
+      "update public.bank_mutations set status='matched',reconciliation_status='matched',review_reason=$1,review_code='RULE_AI_MATCH',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",
+      ["Rule AI: " + matchedRule.name, mutation.id],
+    );
+    await client.query(
+      "update public.recon_rules set match_count=coalesce(match_count,0)+1,last_matched_at=now() where id=$1",
+      [ruleResult.ruleId],
+    );
+    await client.query(
+      "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",
+      [
+        mutation.id,
+        actor.email,
+        JSON.stringify({
+          engine: "bizportal-rule-ai",
+          rule_id: ruleResult.ruleId,
+          rule_name: matchedRule.name,
+          confidence: ruleResult.confidence ?? matchedRule.confidenceScore,
+          candidate_requirement: matchedRule.candidateRequirement,
+          real_candidate_id: realCandidate?.candidateId ?? null,
+        }),
+      ],
+    );
+
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
     const autoPostEligible = confidence === 100
-      && matchedRule.candidateRequirement !== 'required'
+      && matchedRule.candidateRequirement !== "required"
       && !realCandidate
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
@@ -752,56 +884,75 @@ async function matchLocalMutation(
       );
       const matchId = ruleMatch.rows[0]?.id;
       if (matchId != null) {
-        const approval = await approveBankMutation(client, mutation.id, {
-          match_id: matchId,
-          candidate_type: 'recon_rule',
-          candidate_id: ruleResult.ruleId,
-          candidate_source: 'public.recon_rules',
-          manual_coa_code: matchedRule.targetCoaCode,
-          note: 'Auto-approved by Rule AI 100%',
-        }, actor, `rule-ai:${mutation.id}:${ruleResult.ruleId}`);
+        const approval = await approveBankMutation(
+          client,
+          mutation.id,
+          {
+            match_id: matchId,
+            candidate_type: "recon_rule",
+            candidate_id: ruleResult.ruleId,
+            candidate_source: "public.recon_rules",
+            manual_coa_code: matchedRule.targetCoaCode,
+            note: "Auto-approved by Rule AI 100%",
+          },
+          actor,
+          `rule-ai:${mutation.id}:${ruleResult.ruleId}`,
+        );
         const entryId = safeInteger(approval.journal_entry_id);
-        if (entryId == null) throw new ApprovalError('Rule AI approval tidak menghasilkan jurnal.', 409, 'AUTO_POST_JOURNAL_MISSING');
+        if (entryId == null) {
+          throw new ApprovalError(
+            "Rule AI approval tidak menghasilkan jurnal.",
+            409,
+            "AUTO_POST_JOURNAL_MISSING",
+          );
+        }
         await postBankMutationCanonical(client, mutation.id, entryId, matchId, actor, {
-          engine: 'bizportal-rule-ai',
+          engine: "bizportal-rule-ai",
           rule_id: ruleResult.ruleId,
           rule_name: matchedRule.name,
           confidence,
           coa_code: matchedRule.targetCoaCode,
-          reason: 'Rule AI 100% auto-approved dan auto-posted: '+matchedRule.name,
-          review_code: 'RULE_AI_AUTO_POSTED',
+          reason: "Rule AI 100% auto-approved dan auto-posted: " + matchedRule.name,
+          review_code: "RULE_AI_AUTO_POSTED",
         });
-         return "auto_posted";
+        return "auto_posted";
       }
     }
-    return 'matched';}
+    return "matched";
+  }
   const best = candidates[0];
-  const isDuplicate = candidates.length > 1 && candidates[1]!.score >= best!.score - 5;
+  const competitiveCandidates = best
+    ? candidates.filter((candidate) => candidate.score >= best.score - 5)
+    : [];
+  const isAmbiguous = competitiveCandidates.length > 1;
   const nextStatus = !best
     ? "unmatched"
-    : isDuplicate
-      ? "duplicate_need_review"
+    : isAmbiguous
+      ? "manual_review"
       : best.score >= 80
         ? "matched"
         : "manual_review";
 
-  if (best) {
+  for (const candidate of competitiveCandidates) {
     await client.query(
       `insert into public.bank_reconciliation_matches
         (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status, candidate_source)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, 'candidate', $10)`,
+         amount_match, date_match, name_match, order_id_match, proof_match,
+         status, candidate_source, customer_name, order_ref)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, 'candidate', $10, $11, $12)`,
       [
         mutation.id,
-        best.candidateType,
-        best.candidateId,
-        Math.round(best.score),
-        isDuplicate ? "Lebih dari satu kandidat memiliki kecocokan serupa." : best.reason,
-        best.amountMatch,
-        best.dateMatch,
-        best.nameMatch,
-        best.referenceMatch,
-        localCandidateSource(best.candidateType),
+        candidate.candidateType,
+        candidate.candidateId,
+        Math.round(candidate.score),
+        candidate.reason,
+        candidate.amountMatch,
+        candidate.dateMatch,
+        candidate.nameMatch,
+        candidate.referenceMatch,
+        localCandidateSource(candidate.candidateType),
+        candidate.customerName ?? null,
+        candidate.orderRef ?? null,
       ],
     );
   }
@@ -817,9 +968,13 @@ async function matchLocalMutation(
         and status not in ('approved_pending_posting', 'approved', 'posted', 'void')`,
     [
       nextStatus,
-      nextStatus === "matched" ? "matched" : nextStatus,
-      best ? (isDuplicate ? "Kandidat ganda perlu diperiksa." : best.reason) : null,
-      best ? (isDuplicate ? "DUPLICATE_CANDIDATE" : "LOCAL_MATCHING") : null,
+      nextStatus,
+      best
+        ? (isAmbiguous
+            ? "Lebih dari satu kandidat memiliki kecocokan serupa. Pilih transaksi yang benar sebelum approve."
+            : best.reason)
+        : null,
+      best ? (isAmbiguous ? "MULTIPLE_CANDIDATES" : "LOCAL_MATCHING") : null,
       mutation.id,
     ],
   );
@@ -834,15 +989,18 @@ async function matchLocalMutation(
       JSON.stringify({
         engine: "bizportal-local-matching",
         candidate_count: candidates.length,
+        persisted_candidate_count: competitiveCandidates.length,
         candidate_type: best?.candidateType ?? null,
         candidate_id: best?.candidateId ?? null,
+        candidate_ids: competitiveCandidates.map((candidate) => candidate.candidateId),
         score: best?.score ?? null,
         status: nextStatus,
       }),
     ],
   );
 
-  return nextStatus === "duplicate_need_review" ? "manual_review" : nextStatus;
+  return nextStatus;
+
 }
 
 router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise<void> => {
