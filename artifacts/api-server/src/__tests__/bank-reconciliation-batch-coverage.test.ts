@@ -13,6 +13,5 @@ describe("bank reconciliation matching batch coverage", () => {
     const end = source.indexOf("type SourceReceiptJournal", start);
     const body = source.slice(start, end);
     expect(body).toContain("limit 200");
-    expect(body).not.toContain("limit 20");
   });
 });
