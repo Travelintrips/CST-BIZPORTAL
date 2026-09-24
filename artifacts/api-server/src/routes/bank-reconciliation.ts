@@ -232,10 +232,12 @@ async function loadLocalMatchCandidates(
     // Canonical QRIS settlements are the source of truth for net bank credits.
     // A QRIS bank mutation is net of MDR, so comparing it directly with one
     // sport_payments.amount drops valid candidates (for example 130,000 gross
-    // less 0.7% MDR = 129,090 bank credit). Prefer an already-posted canonical
-    // settlement before considering raw source payments.
-    try {
-      const canonicalQrisSettlements = await client.query<{
+    // less 0.7% MDR = 129,090 bank credit). Only enter this path when the bank
+    // statement itself carries QRIS evidence; a same-amount bank transfer must
+    // never be reclassified as a QRIS settlement by coincidence.
+    if (hasQrisBankEvidenceForAutoPost(mutation)) {
+      try {
+        const canonicalQrisSettlements = await client.query<{
         id: number;
         amount: string;
         settlement_date: string | null;
@@ -285,27 +287,28 @@ async function loadLocalMatchCandidates(
         [mutation.company_id, amount, date, mutation.bank_account_id],
       );
 
-      for (const settlement of canonicalQrisSettlements.rows) {
-        const referenceMatch =
-          Boolean(mutation.provider_order_id) &&
-          normalizeMatchText(mutation.provider_order_id) ===
-            normalizeMatchText(settlement.settlement_reference);
-        const nameMatch = tokenOverlap(mutation.description, settlement.description);
-        const dateMatch = settlement.settlement_date === date;
-        candidates.push({
-          candidateType: "qris_settlement",
-          candidateId: Number(settlement.id),
-          score: 100,
-          amountMatch: true,
-          dateMatch,
-          referenceMatch,
-          nameMatch,
-          reason: "Nominal net dan tanggal settlement QRIS canonical cocok.",
-        });
+        for (const settlement of canonicalQrisSettlements.rows) {
+          const referenceMatch =
+            Boolean(mutation.provider_order_id) &&
+            normalizeMatchText(mutation.provider_order_id) ===
+              normalizeMatchText(settlement.settlement_reference);
+          const nameMatch = tokenOverlap(mutation.description, settlement.description);
+          const dateMatch = settlement.settlement_date === date;
+          candidates.push({
+            candidateType: "qris_settlement",
+            candidateId: Number(settlement.id),
+            score: 100,
+            amountMatch: true,
+            dateMatch,
+            referenceMatch,
+            nameMatch,
+            reason: "Nominal net dan tanggal settlement QRIS canonical cocok.",
+          });
+        }
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "42P01" && code !== "42703") throw error;
       }
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "42P01" && code !== "42703") throw error;
     }
 
     try {
