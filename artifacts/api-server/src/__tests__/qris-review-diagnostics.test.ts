@@ -24,7 +24,10 @@ describe("QRIS historical review diagnostics", () => {
     expect(diagnosticSource).toContain("candidate_auto_matched");
     expect(diagnosticSource).toContain("candidate_review");
     expect(diagnosticSource).not.toMatch(/\b(insert|update|delete)\s+(into|public\.qris_mutation_batch_candidates|from)/i);
-    expect(diagnosticSource).toContain("current_evidence_valid");
+    expect(diagnosticSource).toContain("current_evidence_valid: false");
+    expect(diagnosticSource).toContain('candidate_source: "historical_qris_review_snapshot"');
     expect(diagnosticSource).toContain("diagnostic_amount_difference");
+    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, limit })");
+    expect(routeSource).toContain("candidates: reviewDiagnostics");
   });
 });
