@@ -70,17 +70,21 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source.slice(branch, bankResolution)).toContain("return approveCanonicalSettlementLink(");
   });
 
-  it("matches posted canonical QRIS settlements by net bank amount and settlement date", () => {
+  it("matches posted canonical QRIS settlements by net bank amount with one-day settlement tolerance", () => {
     expect(source).toContain('candidateType: "qris_settlement"');
     expect(source).toContain("if (hasQrisBankEvidenceForAutoPost(mutation))");
     expect(source).toContain("psb.net_amount::numeric as amount");
-    expect(source).toContain("psb.settlement_date = $3::date");
+    expect(source).toContain("abs(psb.settlement_date - $3::date)::integer as date_distance_days");
+    expect(source).toContain("psb.settlement_date between ($3::date - 1) and ($3::date + 1)");
+    expect(source).toContain("order by abs(psb.settlement_date - $3::date), psb.id");
+    expect(source).toContain("score: exactDateMatch ? 100 : 95");
     expect(source).toContain("psb.status::text = 'posted'");
     expect(source).toContain("psb.bank_mutation_id is null");
     expect(source).toContain("psb.canonical_bank_mutation_id is null");
     expect(source).toContain("sport_center.payment_settlement_batches");
     expect(source).toContain("sport_center.accounting_journals sj");
     expect(source).toContain("Nominal net dan tanggal settlement QRIS canonical cocok.");
+    expect(source).toContain("Nominal net QRIS canonical cocok; tanggal settlement dalam toleransi 1 hari.");
   });
 
   it("uses total grouped Sport Center payment amount and source-qualified exclusions", () => {

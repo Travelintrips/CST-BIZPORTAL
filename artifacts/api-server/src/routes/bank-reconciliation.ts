@@ -245,6 +245,7 @@ async function loadLocalMatchCandidates(
         settlement_date: string | null;
         settlement_reference: string | null;
         description: string | null;
+        date_distance_days: number;
       }>(
         `select psb.id::bigint as id,
                 psb.net_amount::numeric as amount,
@@ -255,7 +256,8 @@ async function loadLocalMatchCandidates(
                   psb.provider_code,
                   psb.provider_name,
                   psb.settlement_reference
-                ) as description
+                ) as description,
+                abs(psb.settlement_date - $3::date)::integer as date_distance_days
            from sport_center.payment_settlement_batches psb
            join public.company_bank_accounts cba
              on cba.company_id = psb.company_id
@@ -271,7 +273,7 @@ async function loadLocalMatchCandidates(
             and psb.bank_mutation_id is null
             and psb.canonical_bank_mutation_id is null
             and abs(psb.net_amount::numeric - $2::numeric) < 0.01
-            and psb.settlement_date = $3::date
+            and psb.settlement_date between ($3::date - 1) and ($3::date + 1)
             and (
               $4::text is null
               or cba.id::text = $4::text
@@ -285,7 +287,7 @@ async function loadLocalMatchCandidates(
                  and brm.candidate_source = 'sport_center.payment_settlement_batches'
                  and brm.status in ('approved', 'posted')
             )
-          order by psb.id`,
+          order by abs(psb.settlement_date - $3::date), psb.id`,
         [mutation.company_id, amount, date, mutation.bank_account_id],
       );
 
@@ -295,16 +297,20 @@ async function loadLocalMatchCandidates(
             normalizeMatchText(mutation.provider_order_id) ===
               normalizeMatchText(settlement.settlement_reference);
           const nameMatch = tokenOverlap(mutation.description, settlement.description);
-          const dateMatch = settlement.settlement_date === date;
+          const dateDistanceDays = Number(settlement.date_distance_days);
+          const dateMatch = Number.isFinite(dateDistanceDays) && dateDistanceDays <= 1;
+          const exactDateMatch = dateDistanceDays === 0;
           candidates.push({
             candidateType: "qris_settlement",
             candidateId: Number(settlement.id),
-            score: 100,
+            score: exactDateMatch ? 100 : 95,
             amountMatch: true,
             dateMatch,
             referenceMatch,
             nameMatch,
-            reason: "Nominal net dan tanggal settlement QRIS canonical cocok.",
+            reason: exactDateMatch
+              ? "Nominal net dan tanggal settlement QRIS canonical cocok."
+              : "Nominal net QRIS canonical cocok; tanggal settlement dalam toleransi 1 hari.",
           });
         }
       } catch (error) {
