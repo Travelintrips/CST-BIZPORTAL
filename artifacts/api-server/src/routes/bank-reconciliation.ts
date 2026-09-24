@@ -913,7 +913,7 @@ async function matchLocalMutation(
           confidence,
           coa_code: matchedRule.targetCoaCode,
           reason: "Rule AI 100% auto-approved dan auto-posted: " + matchedRule.name,
-          review_code: "RULE_AI_AUTO_POSTED",
+          review_code: 'RULE_AI_AUTO_POSTED',
         });
         return "auto_posted";
       }
