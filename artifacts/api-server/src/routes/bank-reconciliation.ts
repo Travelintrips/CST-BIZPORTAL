@@ -871,7 +871,7 @@ async function matchLocalMutation(
 
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
     const autoPostEligible = confidence === 100
-      && matchedRule.candidateRequirement !== "required"
+      && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
@@ -889,9 +889,9 @@ async function matchLocalMutation(
           mutation.id,
           {
             match_id: matchId,
-            candidate_type: "recon_rule",
+            candidate_type: 'recon_rule',
             candidate_id: ruleResult.ruleId,
-            candidate_source: "public.recon_rules",
+            candidate_source: 'public.recon_rules',
             manual_coa_code: matchedRule.targetCoaCode,
             note: "Auto-approved by Rule AI 100%",
           },
