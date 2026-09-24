@@ -4599,7 +4599,11 @@ function QrisMutationCard({
     canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const allItems = audit.payment_items ?? [];
   const auditStatus = String(audit.status ?? "").toLowerCase();
-  const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
+  const isHistoricalReviewSnapshot =
+    audit.candidate_source === "historical_qris_review_snapshot";
+  const isReadOnlyEvidence =
+    isHistoricalReviewSnapshot
+    || ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
   const activeSettlementPaymentIds = new Set(
     (audit.active_settlement_payment_ids ?? []).map(Number),
@@ -8622,6 +8626,7 @@ export default function BankReconciliationPage() {
     getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
+    && candidate.candidate_source !== "historical_qris_review_snapshot"
     && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
      && ["candidate_auto_matched", "candidate_review"].includes(
        String(candidate.status ?? "").toLowerCase(),
