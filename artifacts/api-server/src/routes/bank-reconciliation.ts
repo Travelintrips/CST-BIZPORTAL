@@ -1,7 +1,10 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
-import { hydrateQrisReviewDiagnostics } from "../lib/reconciliation/qrisReviewDiagnostics";
+import {
+  hydrateQrisReviewDiagnostics,
+  listQrisReviewDiagnostics,
+} from "../lib/reconciliation/qrisReviewDiagnostics";
 import { inspectSpreadsheet } from "../lib/google-sheets";
 import {
   syncAllBankSheetConfigs,
@@ -4727,13 +4730,20 @@ router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<voi
     const requestedLimit = Number(queryString(req.query.limit) ?? 100);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 100;
     const includeCompleted = String(queryString(req.query.includeCompleted) ?? "").toLowerCase() === "true";
-    const canonicalSettlements = await listQrisCanonicalSettlements(companyId, includeCompleted, limit);
+    const [canonicalSettlements, reviewDiagnostics] = await Promise.all([
+      listQrisCanonicalSettlements(companyId, includeCompleted, limit),
+      listQrisReviewDiagnostics({ companyId, limit }),
+    ]);
     res.json({
       mode: "canonical_qris_settlement",
       automaticFinalReconciliation: false,
       automaticMatch: false,
       canonicalSettlements,
-      candidates: canonicalSettlements,
+      // Historical snapshots are read-only diagnostics. They let operators
+      // inspect candidate payment evidence without reviving the retired
+      // legacy approval path. Canonical settlements remain the only approval
+      // authority.
+      candidates: reviewDiagnostics,
     });
   } catch (error) {
     const code = (error as { code?: string }).code;
