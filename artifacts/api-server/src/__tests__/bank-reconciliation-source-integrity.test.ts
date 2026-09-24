@@ -72,6 +72,7 @@ describe("bank reconciliation candidate source integrity", () => {
 
   it("matches posted canonical QRIS settlements by net bank amount and settlement date", () => {
     expect(source).toContain('candidateType: "qris_settlement"');
+    expect(source).toContain("if (hasQrisBankEvidenceForAutoPost(mutation))");
     expect(source).toContain("psb.net_amount::numeric as amount");
     expect(source).toContain("psb.settlement_date = $3::date");
     expect(source).toContain("psb.status::text = 'posted'");
