@@ -70,6 +70,18 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source.slice(branch, bankResolution)).toContain("return approveCanonicalSettlementLink(");
   });
 
+  it("matches posted canonical QRIS settlements by net bank amount and settlement date", () => {
+    expect(source).toContain('candidateType: "qris_settlement"');
+    expect(source).toContain("psb.net_amount::numeric as amount");
+    expect(source).toContain("psb.settlement_date = $3::date");
+    expect(source).toContain("psb.status::text = 'posted'");
+    expect(source).toContain("psb.bank_mutation_id is null");
+    expect(source).toContain("psb.canonical_bank_mutation_id is null");
+    expect(source).toContain("sport_center.payment_settlement_batches");
+    expect(source).toContain("sport_center.accounting_journals sj");
+    expect(source).toContain("Nominal net dan tanggal settlement QRIS canonical cocok.");
+  });
+
   it("uses total grouped Sport Center payment amount and source-qualified exclusions", () => {
     expect(source).toContain("sum(sp.amount::numeric) as amount");
     expect(source).not.toContain("max(sp.amount::numeric) as amount");
