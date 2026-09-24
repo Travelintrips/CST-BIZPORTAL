@@ -1,11 +1,5 @@
 import { pool } from "@workspace/db";
 
-type MutationWithQrisDiagnostics = {
-  id?: unknown;
-  qris_candidate_audits?: unknown;
-  qris_candidate_audit?: unknown;
-};
-
 type QrisDiagnosticRow = Record<string, unknown> & {
   mutation_id: number;
   gross_amount: string | number | null;
@@ -36,12 +30,12 @@ function paymentItems(value: unknown): Array<Record<string, unknown>> {
  * as diagnostics so operators do not see a false "no candidate" state while
  * source payment evidence still needs canonical repair.
  */
-export async function hydrateQrisReviewDiagnostics(
-  rows: MutationWithQrisDiagnostics[],
+export async function hydrateQrisReviewDiagnostics<T extends object>(
+  rows: T[],
 ): Promise<void> {
   const mutationIds = [...new Set(
     rows
-      .map((row) => Number(row.id))
+      .map((row) => Number((row as Record<string, unknown>).id))
       .filter((id) => Number.isSafeInteger(id) && id > 0),
   )];
   if (mutationIds.length === 0) return;
@@ -124,11 +118,12 @@ export async function hydrateQrisReviewDiagnostics(
   }
 
   for (const row of rows) {
-    const id = Number(row.id);
+    const record = row as Record<string, unknown>;
+    const id = Number(record.id);
     if (!Number.isSafeInteger(id)) continue;
     const diagnostics = byMutation.get(id) ?? [];
     if (diagnostics.length === 0) continue;
-    row.qris_candidate_audits = diagnostics;
-    row.qris_candidate_audit = diagnostics[0] ?? null;
+    record.qris_candidate_audits = diagnostics;
+    record.qris_candidate_audit = diagnostics[0] ?? null;
   }
 }
