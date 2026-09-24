@@ -81,7 +81,7 @@ interface MatchingMutation {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice";
+  candidateType: "sport_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -101,6 +101,8 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
       return "public.tenant_payments";
     case "vendor_invoice":
       return "public.vendor_invoices";
+    case "qris_settlement":
+      return "sport_center.payment_settlement_batches";
   }
 }
 
@@ -227,6 +229,85 @@ async function loadLocalMatchCandidates(
   const candidates: LocalMatchCandidate[] = [];
 
   if (direction === "IN") {
+    // Canonical QRIS settlements are the source of truth for net bank credits.
+    // A QRIS bank mutation is net of MDR, so comparing it directly with one
+    // sport_payments.amount drops valid candidates (for example 130,000 gross
+    // less 0.7% MDR = 129,090 bank credit). Prefer an already-posted canonical
+    // settlement before considering raw source payments.
+    try {
+      const canonicalQrisSettlements = await client.query<{
+        id: number;
+        amount: string;
+        settlement_date: string | null;
+        settlement_reference: string | null;
+        description: string | null;
+      }>(
+        `select psb.id::bigint as id,
+                psb.net_amount::numeric as amount,
+                psb.settlement_date::text as settlement_date,
+                psb.settlement_reference,
+                concat_ws(
+                  ' ',
+                  psb.provider_code,
+                  psb.provider_name,
+                  psb.settlement_reference
+                ) as description
+           from sport_center.payment_settlement_batches psb
+           join public.company_bank_accounts cba
+             on cba.company_id = psb.company_id
+            and cba.is_active = true
+            and cba.account_number::text = psb.bank_account_id::text
+           join sport_center.accounting_journals sj
+             on sj.id = psb.settlement_journal_id
+            and sj.status::text = 'posted'
+            and sj.journal_type = 'settlement'
+            and sj.is_reversal = false
+          where psb.company_id = $1
+            and psb.status::text = 'posted'
+            and psb.bank_mutation_id is null
+            and psb.canonical_bank_mutation_id is null
+            and abs(psb.net_amount::numeric - $2::numeric) < 0.01
+            and psb.settlement_date = $3::date
+            and (
+              $4::text is null
+              or cba.id::text = $4::text
+              or cba.account_number::text = $4::text
+            )
+            and not exists (
+              select 1
+                from public.bank_reconciliation_matches brm
+               where brm.candidate_type = 'qris_settlement'
+                 and brm.candidate_id = psb.id
+                 and brm.candidate_source = 'sport_center.payment_settlement_batches'
+                 and brm.status in ('approved', 'posted')
+            )
+          order by psb.id`,
+        [mutation.company_id, amount, date, mutation.bank_account_id],
+      );
+
+      for (const settlement of canonicalQrisSettlements.rows) {
+        const referenceMatch =
+          Boolean(mutation.provider_order_id) &&
+          normalizeMatchText(mutation.provider_order_id) ===
+            normalizeMatchText(settlement.settlement_reference);
+        const nameMatch = tokenOverlap(mutation.description, settlement.description);
+        const dateMatch = settlement.settlement_date === date;
+        candidates.push({
+          candidateType: "qris_settlement",
+          candidateId: Number(settlement.id),
+          score: 100,
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: "Nominal net dan tanggal settlement QRIS canonical cocok.",
+        });
+      }
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+
     try {
       const sportPayments = await client.query<{
         id: number;
