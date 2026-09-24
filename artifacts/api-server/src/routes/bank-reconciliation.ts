@@ -1113,7 +1113,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
          from public.bank_mutations bm
         where ${filters.join(" and ")}
         order by bm.transaction_date desc, bm.id
-        limit 20`,
+        limit 200`,
       values as any[],
     );
 
