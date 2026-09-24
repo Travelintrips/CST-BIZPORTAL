@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
+import { hydrateQrisReviewDiagnostics } from "../lib/reconciliation/qrisReviewDiagnostics";
 import { inspectSpreadsheet } from "../lib/google-sheets";
 import {
   syncAllBankSheetConfigs,
@@ -4788,6 +4789,7 @@ router.get("/bank-reconciliation/mutations/:mutationId", async (req, res): Promi
     );
     const rows = result.rows as MutationCandidateRow[];
     await hydrateMutationCandidateDetails(rows);
+    await hydrateQrisReviewDiagnostics(rows);
     const mutation = rows[0];
     if (!mutation) {
       res.status(404).json({ error: "Mutasi tidak ditemukan" });
@@ -4827,6 +4829,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
       listValues,
     );
     await hydrateMutationCandidateDetails(result.rows as MutationCandidateRow[]);
+    await hydrateQrisReviewDiagnostics(result.rows as MutationCandidateRow[]);
 
     res.json({
       mutations: result.rows,
