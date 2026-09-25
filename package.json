@@ -8,11 +8,12 @@
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*|npm/*) ;; *) echo \"Use pnpm, or npm only as the Hostinger bootstrap package manager\" >&2; exit 1 ;; esac'",
     "build": "node ./scripts/hostinger-build.mjs",
-    "build:workspace": "pnpm run typecheck && pnpm -r --if-present run build && node ./scripts/prepare-hostinger.mjs",
+    "build:workspace": "pnpm run typecheck && pnpm run test:auth:production && pnpm -r --if-present run build && node ./scripts/prepare-hostinger.mjs",
     "hostinger:build": "npm run build",
     "start": "node --max-http-header-size=65536 --enable-source-maps ./index.js",
     "typecheck:libs": "tsc --build --force",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "test:auth:production": "pnpm --filter @workspace/api-server exec vitest run src/routes/local-production-auth.test.ts src/routes/dev-auth.test.ts src/__tests__/production-auth-startup-contract.test.ts"
   },
   "private": true,
   "dependencies": {
