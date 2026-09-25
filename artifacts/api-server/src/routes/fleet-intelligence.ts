@@ -541,7 +541,10 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
     let errors = 0;
 
     await client.query("BEGIN");
-    for (const row of inputRows) {
+    for (let rowIndex = 0; rowIndex < inputRows.length; rowIndex += 1) {
+      const row = inputRows[rowIndex];
+      const savepoint = `fleet_row_${rowIndex}`;
+      await client.query(`SAVEPOINT ${savepoint}`);
       try {
         const driverName = String(row.driver_name ?? "").trim();
         if (!driverName) continue;
@@ -661,7 +664,10 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
           );
           outstandingResolved += 1;
         }
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`);
       } catch (rowError) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`).catch(() => undefined);
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`).catch(() => undefined);
         errors += 1;
         req.log.warn({ rowError, driverName: row.driver_name }, "Fleet driver master row sync failed");
       }
@@ -882,6 +888,7 @@ router.get("/transactions", async (req: AdminRequest, res) => {
 
 router.get("/drivers", async (req: AdminRequest, res) => {
   try {
+    await ensureFleetTables();
     const cid = companyId(req);
     if (!(await tableExists("fleet_drivers"))) {
       res.json({ drivers: [], total: 0 });
@@ -892,23 +899,36 @@ router.get("/drivers", async (req: AdminRequest, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const offset = (page - 1) * limit;
+    const statusSql = status === "inactive"
+      ? "d.status <> 'active'"
+      : "($3='' OR d.status=$3)";
+
     const [rows, count] = await Promise.all([
       pool.query(
-        `SELECT *
-           FROM public.fleet_drivers
-          WHERE company_id=$1
-            AND ($2='' OR name ILIKE '%' || $2 || '%' OR COALESCE(driver_external_id,'') ILIKE '%' || $2 || '%' OR COALESCE(vehicle_plate,'') ILIKE '%' || $2 || '%')
-            AND ($3='' OR status=$3)
-          ORDER BY name ASC
+        `SELECT d.*,
+                d.full_name AS name,
+                COALESCE(o.outstanding,0)::numeric AS outstanding
+           FROM public.fleet_drivers d
+           LEFT JOIN LATERAL (
+             SELECT SUM(outstanding_amount)::numeric AS outstanding
+               FROM public.fleet_outstanding fo
+              WHERE fo.company_id=$1
+                AND fo.status='open'
+                AND (fo.driver_id=d.id OR lower(fo.driver_name)=lower(d.full_name))
+           ) o ON TRUE
+          WHERE d.company_id=$1::text
+            AND ($2='' OR d.full_name ILIKE '%' || $2 || '%' OR COALESCE(d.driver_external_id,'') ILIKE '%' || $2 || '%' OR COALESCE(d.vehicle_plate,'') ILIKE '%' || $2 || '%' OR COALESCE(d.phone,'') ILIKE '%' || $2 || '%')
+            AND ${statusSql}
+          ORDER BY d.full_name ASC
           LIMIT $4 OFFSET $5`,
         [cid, search, status, limit, offset],
       ),
       pool.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count
-           FROM public.fleet_drivers
-          WHERE company_id=$1
-            AND ($2='' OR name ILIKE '%' || $2 || '%' OR COALESCE(driver_external_id,'') ILIKE '%' || $2 || '%' OR COALESCE(vehicle_plate,'') ILIKE '%' || $2 || '%')
-            AND ($3='' OR status=$3)`,
+           FROM public.fleet_drivers d
+          WHERE d.company_id=$1::text
+            AND ($2='' OR d.full_name ILIKE '%' || $2 || '%' OR COALESCE(d.driver_external_id,'') ILIKE '%' || $2 || '%' OR COALESCE(d.vehicle_plate,'') ILIKE '%' || $2 || '%' OR COALESCE(d.phone,'') ILIKE '%' || $2 || '%')
+            AND ${statusSql}`,
         [cid, search, status],
       ),
     ]);
@@ -921,6 +941,7 @@ router.get("/drivers", async (req: AdminRequest, res) => {
 
 router.put("/drivers/:id", async (req: AdminRequest, res) => {
   try {
+    await ensureFleetTables();
     const cid = companyId(req);
     const id = Number(req.params.id);
     const body = req.body ?? {};
@@ -930,24 +951,24 @@ router.put("/drivers/:id", async (req: AdminRequest, res) => {
     }
     const result = await pool.query(
       `UPDATE public.fleet_drivers
-          SET name=COALESCE(NULLIF($3,''),name),
+          SET full_name=COALESCE(NULLIF($3,''),full_name),
               phone=COALESCE(NULLIF($4,''),phone),
               email=COALESCE(NULLIF($5,''),email),
               license_number=COALESCE(NULLIF($6,''),license_number),
-              vehicle_plate=COALESCE(NULLIF($7,''),vehicle_plate),
+              vehicle_plate=NULLIF($7,''),
               vehicle_type=COALESCE(NULLIF($8,''),vehicle_type),
               status=COALESCE(NULLIF($9,''),status),
               notes=COALESCE($10,notes),
               updated_at=NOW()
-        WHERE id=$1 AND company_id=$2
-        RETURNING *`,
+        WHERE id=$1 AND company_id=$2::text
+        RETURNING *, full_name AS name`,
       [
         id, cid,
         typeof body.name === "string" ? body.name.trim() : "",
         typeof body.phone === "string" ? body.phone.trim() : "",
         typeof body.email === "string" ? body.email.trim() : "",
         typeof body.licenseNumber === "string" ? body.licenseNumber.trim() : "",
-        typeof body.vehiclePlate === "string" ? body.vehiclePlate.trim() : "",
+        typeof body.vehiclePlate === "string" ? body.vehiclePlate.trim().toUpperCase() : "",
         typeof body.vehicleType === "string" ? body.vehicleType.trim() : "",
         typeof body.status === "string" ? body.status.trim() : "",
         typeof body.notes === "string" ? body.notes : null,
@@ -966,6 +987,7 @@ router.put("/drivers/:id", async (req: AdminRequest, res) => {
 
 router.get("/drivers/:extId/detail", async (req: AdminRequest, res) => {
   try {
+    await ensureFleetTables();
     const cid = companyId(req);
     const extId = String(req.params.extId ?? "");
     if (!(await tableExists("fleet_drivers"))) {
@@ -973,12 +995,13 @@ router.get("/drivers/:extId/detail", async (req: AdminRequest, res) => {
       return;
     }
     const driver = await pool.query(
-      `SELECT * FROM public.fleet_drivers
-        WHERE company_id=$1 AND (driver_external_id=$2 OR id::text=$2)
+      `SELECT d.*, d.full_name AS name
+         FROM public.fleet_drivers d
+        WHERE d.company_id=$1::text AND (d.driver_external_id=$2 OR d.id::text=$2)
         LIMIT 1`,
       [cid, extId],
     );
-    const row = driver.rows[0];
+    const row = driver.rows[0] as Record<string, unknown> | undefined;
     if (!row) {
       res.status(404).json({ error: "Driver tidak ditemukan." });
       return;
@@ -989,21 +1012,17 @@ router.get("/drivers/:extId/detail", async (req: AdminRequest, res) => {
             `SELECT * FROM public.fleet_transactions
               WHERE company_id=$1 AND (driver_external_id=$2 OR driver_id=$3)
               ORDER BY transaction_date DESC, id DESC LIMIT 100`,
-            [cid, (row as Record<string, unknown>).driver_external_id ?? "", (row as Record<string, unknown>).id],
+            [cid, row.driver_external_id ?? "", row.id],
           )
         : Promise.resolve({ rows: [] } as { rows: unknown[] })),
-      ensureFleetTables().then(() => pool.query(
+      pool.query(
         `SELECT * FROM public.fleet_outstanding
-          WHERE company_id=$1 AND (driver_external_id=$2 OR driver_id=$3)
+          WHERE company_id=$1 AND (driver_external_id=$2 OR driver_id=$3 OR lower(driver_name)=lower($4))
           ORDER BY id DESC LIMIT 20`,
-        [cid, (row as Record<string, unknown>).driver_external_id ?? "", (row as Record<string, unknown>).id],
-      )),
+        [cid, row.driver_external_id ?? "", row.id, row.full_name ?? ""],
+      ),
     ]);
-    res.json({
-      driver: row,
-      transactions: transactions.rows,
-      outstanding: outstanding.rows,
-    });
+    res.json({ driver: row, transactions: transactions.rows, outstanding: outstanding.rows });
   } catch (error) {
     req.log.error({ error }, "Fleet driver detail failed");
     res.status(503).json({ error: "Gagal memuat detail driver." });
@@ -1019,9 +1038,9 @@ router.get("/vehicles", async (req: AdminRequest, res) => {
     }
     const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
     const result = await pool.query(
-      `SELECT v.*, d.name AS driver_name, d.driver_external_id
+      `SELECT v.*, d.full_name AS driver_name, d.driver_external_id
          FROM public.fleet_vehicles v
-         LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id AND d.company_id=v.company_id
+         LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id AND d.company_id=v.company_id::text
         WHERE v.company_id=$1
         ORDER BY v.plate ASC
         LIMIT $2`,
