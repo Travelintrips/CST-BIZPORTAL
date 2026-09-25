@@ -819,10 +819,12 @@ function SnapshotUploadTab() {
   const previewMutation = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("Pilih file terlebih dahulu");
-      const fd = new FormData();
-      fd.append("file", file);
+      const content = await file.text();
       const res = await fetch("/api/logistics/fleet/outstanding/snapshot/preview", {
-        method: "POST", credentials: "include", body: fd,
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, fileName: file.name }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;

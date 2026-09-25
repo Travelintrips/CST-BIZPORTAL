@@ -409,10 +409,12 @@ export default function FleetOutstandingPage() {
     setImportResult(null);
     setPreviewLoading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
+      const content = await file.text();
       const res = await fetch("/api/logistics/fleet/outstanding/snapshot/preview", {
-        method: "POST", credentials: "include", body: fd,
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, fileName: file.name }),
       });
       const json = await res.json() as {
         ok?: boolean; error?: string;
