@@ -22,6 +22,21 @@ function tierBadge(tier: string) {
   return "bg-slate-500/20 text-slate-300 border-slate-600";
 }
 
+function statusMeta(status: string, applicatorStatus: string) {
+  if (status === "active") return { label: "Aktif", cls: "bg-emerald-500/20 text-emerald-300 border-emerald-600" };
+  if (status === "suspended") return { label: "Suspend", cls: "bg-red-500/20 text-red-300 border-red-600" };
+  if (status === "fired") return { label: "Dikeluarkan", cls: "bg-red-600/20 text-red-300 border-red-600" };
+  if (applicatorStatus === "resign") return { label: "Keluar / Resign", cls: "bg-blue-500/20 text-blue-300 border-blue-600" };
+  if (applicatorStatus === "need_to_assign") return { label: "Tidak Aktif · Belum Ada Unit", cls: "bg-amber-500/20 text-amber-300 border-amber-600" };
+  return { label: "Tidak Aktif", cls: "bg-slate-500/20 text-slate-300 border-slate-600" };
+}
+
+function ownershipLabel(value: unknown) {
+  if (value === "company") return "Unit Perusahaan";
+  if (value === "partner_private") return "Unit Pribadi / Mitra";
+  return "Belum Ada Unit";
+}
+
 export default function FleetDriversPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -124,7 +139,7 @@ export default function FleetDriversPage() {
               <table className="w-full text-sm">
                 <thead className="border-b border-slate-700">
                   <tr>
-                    {["ID External", "Nama Driver", "Plat", "Status", "Terakhir Aktif", "Transaksi", "Total Rental", "Outstanding", "Tier", ""].map((h) => (
+                    {["ID External", "Nama Driver", "Plat", "Rental/Hari", "Kepemilikan Unit", "Status", "Terakhir Aktif", "Transaksi", "Total Rental", "Outstanding", "Tier", ""].map((h) => (
                       <th key={h} className="text-left px-4 py-3 text-slate-400 font-medium whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -133,12 +148,12 @@ export default function FleetDriversPage() {
                   {isLoading
                     ? Array.from({ length: 8 }).map((_, i) => (
                         <tr key={i} className="border-b border-slate-700/50">
-                          <td colSpan={10} className="px-4 py-3"><div className="h-4 bg-slate-700 rounded animate-pulse" /></td>
+                          <td colSpan={12} className="px-4 py-3"><div className="h-4 bg-slate-700 rounded animate-pulse" /></td>
                         </tr>
                       ))
                     : drivers.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
+                          <td colSpan={12} className="px-4 py-12 text-center text-slate-500">
                             <Users className="w-10 h-10 mx-auto mb-2 opacity-40" />
                             <p>Belum ada data driver</p>
                           </td>
@@ -148,14 +163,17 @@ export default function FleetDriversPage() {
                         const extId = String(d.driver_external_id ?? "");
                         const hasId = d.id != null;
                         const outstanding = parseFloat(String(d.outstanding ?? 0));
+                        const meta = statusMeta(String(d.status ?? "inactive"), String(d.applicator_status ?? ""));
                         return (
                           <tr key={extId || String(d.id)} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
                             <td className="px-4 py-3 text-slate-400 font-mono text-xs whitespace-nowrap">{extId || "—"}</td>
                             <td className="px-4 py-3 font-medium text-white whitespace-nowrap">{String(d.name ?? "—")}</td>
                             <td className="px-4 py-3 text-slate-300 font-mono text-xs whitespace-nowrap">{String(d.vehicle_plate ?? "—")}</td>
+                            <td className="px-4 py-3 text-right text-slate-300 tabular-nums whitespace-nowrap">{fmtIdr(d.rental_fee_daily)}</td>
+                            <td className="px-4 py-3 text-slate-300 text-xs whitespace-nowrap">{ownershipLabel(d.vehicle_ownership)}</td>
                             <td className="px-4 py-3">
-                              <Badge className={d.status === "active" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-600 text-xs" : "bg-slate-500/20 text-slate-400 border border-slate-600 text-xs"}>
-                                {d.status === "active" ? "Aktif" : "Tidak Aktif"}
+                              <Badge className={`border text-xs ${meta.cls}`}>
+                                {meta.label}
                               </Badge>
                             </td>
                             <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
