@@ -9,7 +9,10 @@ import https from "node:https";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Response } from "express";
 import app from "../app";
-import { setProductionSessionCookie } from "./dev-auth";
+import {
+  initializeProductionSessionSigning,
+  setProductionSessionCookie,
+} from "./dev-auth";
 
 const allowedEmail = "admin@example.com";
 const sessionSecret = "development-session-secret-with-32-bytes!!";
@@ -149,12 +152,14 @@ afterEach(() => {
 });
 
 describe("production session signing fallback", () => {
-  it("derives a stable signing key from the required database credential when SESSION_SECRET is absent", () => {
+  it("derives a stable signing key from the required database credential when SESSION_SECRET is absent", async () => {
     process.env.APP_ENV = "production";
     process.env.NODE_ENV = "production";
     delete process.env.SESSION_SECRET;
     delete process.env.BIZPORTAL_SESSION_SECRET;
     process.env.SUPABASE_DATABASE_URL = "postgresql://user:strong-password@example.test:5432/postgres";
+
+    await initializeProductionSessionSigning();
 
     const cookies: string[] = [];
     const response = {
