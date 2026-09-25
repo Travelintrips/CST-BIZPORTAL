@@ -13,6 +13,7 @@ import legacyReadParityRouter from "./legacy-read-parity";
 import aiReviewReadParityRouter from "./ai-review-read-parity";
 import cashBankReadParityRouter from "./cash-bank-read-parity";
 import accountingSettingsReadParityRouter from "./accounting-settings-read-parity";
+import fleetIntelligenceRouter from "./fleet-intelligence";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -52,6 +53,7 @@ router.use(legacyReadParityRouter);
 router.use(aiReviewReadParityRouter);
 router.use(cashBankReadParityRouter);
 router.use(accountingSettingsReadParityRouter);
+router.use("/logistics/fleet", fleetIntelligenceRouter);
 
 router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> => {
   const rawId = req.params.id;
