@@ -22,4 +22,26 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/preview"');
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/confirm"');
   });
+
+  it("restores the operational Fleet surfaces used by BizPortal pages", () => {
+    for (const route of [
+      'router.get("/transactions"',
+      'router.get("/drivers"',
+      'router.put("/drivers/:id"',
+      'router.get("/drivers/:extId/detail"',
+      'router.get("/vehicles"',
+      'router.post("/vehicles"',
+      'router.get("/analytics"',
+      'router.get("/alerts"',
+      'router.get("/ledger"',
+      'router.get("/outstanding/macet"',
+      'router.get("/system-overview"',
+      'router.get("/executive-summary"',
+      'router.get("/settings"',
+      'router.get("/cash-payments"',
+      'router.post("/cash-payments"',
+    ]) {
+      expect(fleetRoute).toContain(route);
+    }
+  });
 });
