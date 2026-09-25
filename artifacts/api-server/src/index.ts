@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startTenantPaymentAutoRematchWorker } from "./lib/tenantPaymentAutoRematchWorker";
 import {
   initializeProductionSessionSigning,
   isDevelopmentEnvironment,
@@ -28,6 +29,7 @@ if (!isDevelopmentEnvironment()) {
 
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
+  startTenantPaymentAutoRematchWorker();
 });
 
 server.on("error", (err) => {
