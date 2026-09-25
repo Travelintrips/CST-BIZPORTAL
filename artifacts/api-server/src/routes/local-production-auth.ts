@@ -23,6 +23,9 @@ type RawUser = {
   role: string;
   status: string | null;
   isActive: boolean;
+  firstName: string | null;
+  lastName: string | null;
+  companyId: number | null;
   passwordHash?: string | null;
 };
 
@@ -55,6 +58,9 @@ async function findUserByEmail(email: string): Promise<RawUser | null> {
   const data = result.rows[0]?.user_data;
   if (!data || typeof data.id !== "string" || typeof data.email !== "string") return null;
 
+  const rawCompanyId = data.company_id ?? data.companyId;
+  const parsedCompanyId = rawCompanyId == null ? null : Number(rawCompanyId);
+
   return {
     id: data.id,
     email: data.email,
@@ -65,6 +71,14 @@ async function findUserByEmail(email: string): Promise<RawUser | null> {
         ? data.user_status
         : null,
     isActive: data.is_active === true || data.isActive === true,
+    firstName: typeof data.first_name === "string" ? data.first_name : null,
+    lastName: typeof data.last_name === "string" ? data.last_name : null,
+    companyId:
+      parsedCompanyId !== null
+      && Number.isInteger(parsedCompanyId)
+      && parsedCompanyId > 0
+        ? parsedCompanyId
+        : null,
     passwordHash: typeof data.password_hash === "string" ? data.password_hash : null,
   };
 }
@@ -254,15 +268,24 @@ router.post("/auth/email-login", async (
       return;
     }
 
-    const session = createSession(user);
-    const localUser = await getProductionUser(session);
-    if (!localUser) {
+    const normalizedRole = user.role.trim().toLowerCase();
+    if (!user.isActive || !normalizedRole) {
       response.status(403).json({ error: "Akun belum terdaftar di BizPortal." });
       return;
     }
 
+    const session = createSession(user);
     setProductionSessionCookie(response, session);
-    response.json({ user: localUser });
+    response.json({
+      user: {
+        id: user.id,
+        email: user.email.trim().toLowerCase(),
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: normalizedRole,
+        companyId: user.companyId,
+      },
+    });
   } catch (error) {
     request.log.error({ error }, "Local production email login failed");
     response.status(503).json({ error: "Layanan login belum tersedia." });
