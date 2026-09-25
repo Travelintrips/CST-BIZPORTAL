@@ -18,7 +18,41 @@ type SnapshotRow = {
   match_status?: "found" | "unmatched";
   matched_driver_id?: number | null;
   matched_name?: string | null;
+  internal_status?: "active" | "inactive" | "suspended" | "fired";
+  applicator_status?: string;
+  vehicle_ownership?: "company" | "partner_private" | "unassigned";
 };
+
+const COMPANY_UNIT_RENTAL_FEE_MIN = 300_000;
+
+function normalizeApplicatorStatus(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function classifyDriver(row: Pick<SnapshotRow, "status" | "license_plate" | "rental_fee_daily">) {
+  const applicatorStatus = normalizeApplicatorStatus(row.status);
+  const plate = String(row.license_plate ?? "").trim();
+  const rentalFee = numberValue(row.rental_fee_daily);
+
+  let internalStatus: "active" | "inactive" | "suspended" | "fired";
+  if (applicatorStatus === "suspended" || applicatorStatus === "suspend") {
+    internalStatus = "suspended";
+  } else if (applicatorStatus === "fired" || applicatorStatus === "terminated") {
+    internalStatus = "fired";
+  } else if (!plate || applicatorStatus === "resign" || applicatorStatus === "need_to_assign") {
+    internalStatus = "inactive";
+  } else {
+    internalStatus = "active";
+  }
+
+  const vehicleOwnership: "company" | "partner_private" | "unassigned" =
+    !plate ? "unassigned" :
+    rentalFee >= COMPANY_UNIT_RENTAL_FEE_MIN ? "company" :
+    rentalFee > 0 ? "partner_private" :
+    "unassigned";
+
+  return { applicatorStatus, internalStatus, vehicleOwnership };
+}
 
 function companyId(req: AdminRequest): number {
   const id = Number(req.adminUser?.companyId);
@@ -139,6 +173,13 @@ async function ensureFleetTables(): Promise<void> {
       notes TEXT
     )
   `);
+
+  if (await tableExists("fleet_drivers")) {
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS rental_fee_daily NUMERIC(18,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS applicator_status TEXT`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS vehicle_ownership TEXT`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS source_last_synced_at TIMESTAMPTZ`);
+  }
 }
 
 async function tableExists(name: string): Promise<boolean> {
@@ -402,15 +443,9 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
     const rows = parseSnapshotCsv(content);
     const previews: SnapshotRow[] = [];
     let found = 0;
-    let skipped = 0;
 
     const hasDrivers = await tableExists("fleet_drivers");
     for (const row of rows) {
-      if (row.outstanding <= 0) {
-        skipped += 1;
-        continue;
-      }
-
       let match: { id: number; name: string } | null = null;
       if (hasDrivers) {
         const suffix = row.phone_number.replace(/\D/g, "").replace(/^0/, "").slice(-9);
@@ -419,26 +454,38 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
               `SELECT id,name FROM public.fleet_drivers
                 WHERE company_id=$1
                   AND regexp_replace(COALESCE(phone,''),'[^0-9]','','g') LIKE '%' || $2
-                LIMIT 1`,
+                ORDER BY id DESC LIMIT 1`,
               [cid, suffix],
             )
           : await pool.query<{ id: number; name: string }>(
               `SELECT id,name FROM public.fleet_drivers
                 WHERE company_id=$1 AND lower(name)=lower($2)
-                LIMIT 1`,
+                ORDER BY id DESC LIMIT 1`,
               [cid, row.driver_name],
             );
         match = result.rows[0] ?? null;
       }
 
       if (match) found += 1;
+      const classification = classifyDriver(row);
       previews.push({
         ...row,
         match_status: match ? "found" : "unmatched",
         matched_driver_id: match?.id ?? null,
         matched_name: match?.name ?? null,
+        internal_status: classification.internalStatus,
+        applicator_status: classification.applicatorStatus,
+        vehicle_ownership: classification.vehicleOwnership,
       });
     }
+
+    const outstandingRows = previews.filter((row) => numberValue(row.outstanding) > 0).length;
+    const activeDrivers = previews.filter((row) => row.internal_status === "active").length;
+    const inactiveDrivers = previews.filter((row) => row.internal_status === "inactive").length;
+    const suspendedDrivers = previews.filter((row) => row.internal_status === "suspended").length;
+    const firedDrivers = previews.filter((row) => row.internal_status === "fired").length;
+    const companyUnits = previews.filter((row) => row.vehicle_ownership === "company").length;
+    const partnerPrivateUnits = previews.filter((row) => row.vehicle_ownership === "partner_private").length;
 
     res.json({
       ok: true,
@@ -446,10 +493,19 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
       total: previews.length,
       found,
       unmatched: previews.length - found,
-      skipped,
+      skipped: 0,
+      summary: {
+        outstandingRows,
+        activeDrivers,
+        inactiveDrivers,
+        suspendedDrivers,
+        firedDrivers,
+        companyUnits,
+        partnerPrivateUnits,
+      },
     });
   } catch (error) {
-    req.log.error({ error }, "Fleet snapshot preview failed");
+    req.log.error({ error }, "Fleet driver master preview failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "Gagal memproses CSV." });
   }
 });
@@ -464,76 +520,173 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
       res.status(400).json({ error: "Rows tidak boleh kosong." });
       return;
     }
-    const fileName = typeof req.body?.fileName === "string" ? req.body.fileName.slice(0, 255) : "snapshot.csv";
-    let updated = 0;
-    let inserted = 0;
-    let skipped = 0;
+    if (!(await tableExists("fleet_drivers"))) {
+      res.status(503).json({ error: "Master fleet_drivers belum tersedia." });
+      return;
+    }
+
+    const fileName = typeof req.body?.fileName === "string" ? req.body.fileName.slice(0, 255) : "drivers.csv";
+    let driverUpdated = 0;
+    let driverInserted = 0;
+    let outstandingUpserted = 0;
+    let outstandingResolved = 0;
     let errors = 0;
 
     await client.query("BEGIN");
     for (const row of inputRows) {
       try {
-        if (!row.driver_name?.trim() || numberValue(row.outstanding) <= 0) {
-          skipped += 1;
-          continue;
-        }
-        const amount = numberValue(row.outstanding);
+        const driverName = String(row.driver_name ?? "").trim();
+        if (!driverName) continue;
+
+        const phone = cleanPhone(row.phone_number);
+        const plate = String(row.license_plate ?? "").trim().toUpperCase();
         const fee = numberValue(row.rental_fee_daily);
-        const existing = await client.query(
-          `SELECT id FROM public.fleet_outstanding
-            WHERE company_id=$1 AND status='open' AND lower(driver_name)=lower($2)
-            ORDER BY id DESC LIMIT 1`,
-          [cid, row.driver_name.trim()],
-        );
-        if (existing.rows[0]?.id) {
+        const amount = numberValue(row.outstanding);
+        const classification = classifyDriver({ ...row, license_plate: plate, rental_fee_daily: fee });
+        const suffix = phone.replace(/\D/g, "").replace(/^0/, "").slice(-9);
+
+        let driver = suffix
+          ? await client.query<{ id: number }>(
+              `SELECT id FROM public.fleet_drivers
+                WHERE company_id=$1
+                  AND regexp_replace(COALESCE(phone,''),'[^0-9]','','g') LIKE '%' || $2
+                ORDER BY id DESC LIMIT 1`,
+              [cid, suffix],
+            )
+          : { rows: [] as Array<{ id: number }> };
+
+        if (!driver.rows[0]?.id) {
+          driver = await client.query<{ id: number }>(
+            `SELECT id FROM public.fleet_drivers
+              WHERE company_id=$1 AND lower(name)=lower($2)
+              ORDER BY id DESC LIMIT 1`,
+            [cid, driverName],
+          );
+        }
+
+        let driverId: number;
+        if (driver.rows[0]?.id) {
+          driverId = driver.rows[0].id;
           await client.query(
-            `UPDATE public.fleet_outstanding
-                SET driver_id=COALESCE($3,driver_id),
-                    driver_phone=NULLIF($4,''),
+            `UPDATE public.fleet_drivers
+                SET name=$3,
+                    phone=NULLIF($4,''),
                     vehicle_plate=NULLIF($5,''),
-                    outstanding_amount=$6,
-                    rental_fee_daily=$7,
-                    last_updated_date=CURRENT_DATE,
-                    snapshot_source='snapshot_csv',
+                    rental_fee_daily=$6,
+                    status=$7,
+                    applicator_status=$8,
+                    vehicle_ownership=$9,
+                    last_active_date=CASE WHEN $7='active' THEN CURRENT_DATE ELSE last_active_date END,
+                    source_last_synced_at=NOW(),
                     updated_at=NOW()
               WHERE id=$1 AND company_id=$2`,
-            [existing.rows[0].id, cid, row.matched_driver_id ?? null, row.phone_number ?? "", row.license_plate ?? "", amount, fee],
+            [
+              driverId, cid, driverName, phone, plate, fee,
+              classification.internalStatus,
+              classification.applicatorStatus,
+              classification.vehicleOwnership,
+            ],
           );
-          updated += 1;
+          driverUpdated += 1;
         } else {
-          await client.query(
-            `INSERT INTO public.fleet_outstanding
-              (company_id,driver_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,rental_fee_daily,last_updated_date,status,snapshot_source)
-             VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,CURRENT_DATE,'open','snapshot_csv')`,
-            [cid, row.matched_driver_id ?? null, row.driver_name.trim(), row.phone_number ?? "", row.license_plate ?? "", amount, fee],
+          const inserted = await client.query<{ id: number }>(
+            `INSERT INTO public.fleet_drivers
+              (company_id,name,phone,vehicle_plate,rental_fee_daily,status,applicator_status,vehicle_ownership,last_active_date,source_last_synced_at,created_at,updated_at)
+             VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,CASE WHEN $6='active' THEN CURRENT_DATE ELSE NULL END,NOW(),NOW(),NOW())
+             RETURNING id`,
+            [
+              cid, driverName, phone, plate, fee,
+              classification.internalStatus,
+              classification.applicatorStatus,
+              classification.vehicleOwnership,
+            ],
           );
-          inserted += 1;
+          driverId = inserted.rows[0].id;
+          driverInserted += 1;
         }
-      } catch {
+
+        const existingOutstanding = await client.query<{ id: number }>(
+          `SELECT id FROM public.fleet_outstanding
+            WHERE company_id=$1 AND status='open'
+              AND (driver_id=$2 OR lower(driver_name)=lower($3))
+            ORDER BY id DESC LIMIT 1`,
+          [cid, driverId, driverName],
+        );
+
+        if (amount > 0) {
+          if (existingOutstanding.rows[0]?.id) {
+            await client.query(
+              `UPDATE public.fleet_outstanding
+                  SET driver_id=$3,
+                      driver_name=$4,
+                      driver_phone=NULLIF($5,''),
+                      vehicle_plate=NULLIF($6,''),
+                      outstanding_amount=$7,
+                      rental_fee_daily=$8,
+                      last_updated_date=CURRENT_DATE,
+                      snapshot_source='gojek_driver_export',
+                      updated_at=NOW()
+                WHERE id=$1 AND company_id=$2`,
+              [existingOutstanding.rows[0].id, cid, driverId, driverName, phone, plate, amount, fee],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO public.fleet_outstanding
+                (company_id,driver_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,rental_fee_daily,last_updated_date,status,snapshot_source)
+               VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,CURRENT_DATE,'open','gojek_driver_export')`,
+              [cid, driverId, driverName, phone, plate, amount, fee],
+            );
+          }
+          outstandingUpserted += 1;
+        } else if (existingOutstanding.rows[0]?.id) {
+          await client.query(
+            `UPDATE public.fleet_outstanding
+                SET outstanding_amount=0,status='resolved',resolved_at=NOW(),
+                    last_updated_date=CURRENT_DATE,updated_at=NOW()
+              WHERE id=$1 AND company_id=$2`,
+            [existingOutstanding.rows[0].id, cid],
+          );
+          outstandingResolved += 1;
+        }
+      } catch (rowError) {
         errors += 1;
+        req.log.warn({ rowError, driverName: row.driver_name }, "Fleet driver master row sync failed");
       }
     }
+
     await client.query(
       `INSERT INTO public.fleet_outstanding_import_log
-        (company_id,report_file_name,uploaded_by,total_rows,rows_imported,rows_skipped,unmatched_drivers)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [cid, fileName, req.adminUser?.email ?? "unknown", inputRows.length, updated + inserted, skipped, inserted],
+        (company_id,report_file_name,uploaded_by,total_rows,rows_imported,rows_skipped,unmatched_drivers,notes)
+       VALUES ($1,$2,$3,$4,$5,0,$6,$7)`,
+      [
+        cid,
+        fileName,
+        req.adminUser?.email ?? "unknown",
+        inputRows.length,
+        driverUpdated + driverInserted,
+        driverInserted,
+        JSON.stringify({ driverUpdated, driverInserted, outstandingUpserted, outstandingResolved, errors }),
+      ],
     );
     await client.query("COMMIT");
 
     res.json({
       ok: true,
-      updated,
-      inserted,
-      skipped,
+      updated: driverUpdated,
+      inserted: driverInserted,
+      skipped: 0,
       errors,
       total: inputRows.length,
-      message: `${updated} driver diperbarui, ${inserted} driver baru${errors ? `, ${errors} gagal` : ""}`,
+      driverUpdated,
+      driverInserted,
+      outstandingUpserted,
+      outstandingResolved,
+      message: `${driverUpdated} driver diperbarui, ${driverInserted} driver baru, ${outstandingUpserted} outstanding aktif${outstandingResolved ? `, ${outstandingResolved} outstanding diselesaikan` : ""}${errors ? `, ${errors} gagal` : ""}`,
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
-    req.log.error({ error }, "Fleet snapshot confirm failed");
-    res.status(500).json({ error: "Gagal menyimpan snapshot outstanding." });
+    req.log.error({ error }, "Fleet driver master sync failed");
+    res.status(500).json({ error: "Gagal sinkronisasi master driver dan outstanding." });
   } finally {
     client.release();
   }
