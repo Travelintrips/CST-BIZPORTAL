@@ -619,6 +619,31 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
           driverInserted += 1;
         }
 
+        if (plate && await tableExists("fleet_vehicles")) {
+          const vehicle = await client.query<{ id: number }>(
+            `SELECT id FROM public.fleet_vehicles
+              WHERE company_id=$1 AND upper(plate)=upper($2)
+              ORDER BY id DESC LIMIT 1`,
+            [cid, plate],
+          );
+          const vehicleNotes = `Synced from GoCar Drivers export; ownership=${classification.vehicleOwnership}`;
+          if (vehicle.rows[0]?.id) {
+            await client.query(
+              `UPDATE public.fleet_vehicles
+                  SET driver_id=$3, vehicle_type='car', status=$4, notes=$5, updated_at=NOW()
+                WHERE id=$1 AND company_id=$2`,
+              [vehicle.rows[0].id, cid, driverId, classification.internalStatus === "active" ? "active" : "inactive", vehicleNotes],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO public.fleet_vehicles
+                (company_id,driver_id,plate,vehicle_type,status,notes,created_at,updated_at)
+               VALUES ($1,$2,$3,'car',$4,$5,NOW(),NOW())`,
+              [cid, driverId, plate, classification.internalStatus === "active" ? "active" : "inactive", vehicleNotes],
+            );
+          }
+        }
+
         const existingOutstanding = await client.query<{ id: number }>(
           `SELECT id FROM public.fleet_outstanding
             WHERE company_id=$1 AND status='open'
