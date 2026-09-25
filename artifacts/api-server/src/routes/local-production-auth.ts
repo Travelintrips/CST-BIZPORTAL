@@ -83,10 +83,11 @@ async function findUserByEmail(email: string): Promise<RawUser | null> {
   };
 }
 
-function isActiveAdmin(user: RawUser | null): user is RawUser {
+function isActivePrivilegedUser(user: RawUser | null): user is RawUser {
+  if (!user) return false;
+  const role = user.role.trim().toLowerCase();
   return Boolean(
-    user
-    && user.role.trim().toLowerCase() === "admin"
+    (role === "admin" || role === "owner")
     && user.isActive
     && (user.status === null || user.status.trim().toLowerCase() === "active"),
   );
@@ -318,7 +319,7 @@ router.post("/auth/email-otp/send", async (
     }
 
     const user = await findUserByEmail(email);
-    if (!isActiveAdmin(user)) {
+    if (!isActivePrivilegedUser(user)) {
       await pool.query(
         `insert into public.bizportal_email_otp_codes
           (email, request_ip, purpose, expires_at)
@@ -427,7 +428,7 @@ router.post("/auth/email-otp/verify", async (
     }
 
     const user = await findUserByEmail(email);
-    if (!isActiveAdmin(user)) {
+    if (!isActivePrivilegedUser(user)) {
       await pool.query(
         "update public.bizportal_email_otp_codes set verified_at = now() where id = $1 and verified_at is null",
         [otp.id],
@@ -452,7 +453,10 @@ router.post("/auth/email-otp/verify", async (
 
     const session = createSession(user);
     const localUser = await getProductionUser(session);
-    if (!localUser || localUser.role !== "admin") {
+    if (
+      !localUser
+      || !["admin", "owner"].includes(localUser.role.trim().toLowerCase())
+    ) {
       response.status(400).json({ error: "Email atau kode OTP tidak dapat digunakan." });
       return;
     }
