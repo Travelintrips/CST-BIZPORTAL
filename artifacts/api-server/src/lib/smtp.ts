@@ -11,15 +11,27 @@ class SmtpError extends Error {
 }
 
 function readConfig() {
-  const host = process.env.SMTP_HOST?.trim();
-  const portValue = process.env.SMTP_PORT?.trim() || "587";
-  const port = Number(portValue);
-  const user = process.env.SMTP_USER?.trim();
+  const configuredHost = process.env.SMTP_HOST?.trim();
+  const configuredPort = process.env.SMTP_PORT?.trim();
+  const configuredUser = process.env.SMTP_USER?.trim();
   const password = (process.env.SMTP_PASS ?? process.env.SMTP_PASSWORD)?.trim();
-  const from = process.env.SMTP_FROM?.trim() || user;
+  const configuredFrom = process.env.SMTP_FROM?.trim();
+
+  const fromAddressMatch = configuredFrom?.match(/<([^<>@\s]+@[^<>@\s]+)>/)
+    ?? configuredFrom?.match(/^([^<>@\s]+@[^<>@\s]+)$/);
+  const fallbackAddress = fromAddressMatch?.[1];
+
+  // The standalone Hostinger deployment historically only required
+  // SMTP_FROM + SMTP_PASS. Preserve that deployment contract while still
+  // allowing every SMTP setting to be overridden explicitly.
+  const host = configuredHost || "smtp.hostinger.com";
+  const portValue = configuredPort || (configuredHost ? "587" : "465");
+  const port = Number(portValue);
+  const user = configuredUser || fallbackAddress;
+  const from = configuredFrom || user;
   const secure = process.env.SMTP_SECURE?.trim().toLowerCase() === "true" || port === 465;
 
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !from) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !from) {
     throw new SmtpError("SMTP email configuration is incomplete");
   }
 
