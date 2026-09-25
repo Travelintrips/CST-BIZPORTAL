@@ -15,6 +15,8 @@ describe("production auth startup contract", () => {
   });
 
   it("uses the canonical runtime database resolver when standalone session secrets are absent", () => {
+    expect(authSource).toContain("readSecret(getDatabaseSecretName(true))");
+    expect(authSource).toContain('"BIZPORTAL_SESSION_SECRET", "SESSION_SECRET"');
     expect(authSource).toContain("getRuntimeDatabaseUrl");
     expect(authSource).toContain("cst-bizportal:production-session:v1");
     expect(authSource).toContain("initializedProductionSessionSecret");
