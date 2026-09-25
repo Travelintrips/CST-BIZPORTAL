@@ -20,49 +20,10 @@ describe("QRIS historical review diagnostics", () => {
   });
 
   it("binds QRIS diagnostic filters and limit as PostgreSQL parameters", () => {
-    expect(diagnosticSource).toContain('qris.company_id =   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
-    expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
-    expect(diagnosticSource).toContain("candidate_auto_matched");
-    expect(diagnosticSource).toContain("candidate_review");
-    expect(diagnosticSource).not.toMatch(/\b(insert|update|delete)\s+(into|public\.qris_mutation_batch_candidates|from)/i);
-    expect(diagnosticSource).toContain("current_evidence_valid: false");
-    expect(diagnosticSource).toContain('candidate_source: "historical_qris_review_snapshot"');
-    expect(diagnosticSource).toContain("diagnostic_amount_difference");
-    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, limit })");
-    expect(routeSource).toContain("candidates: reviewDiagnostics");
+    expect(diagnosticSource).toContain('qris.company_id = $' + '${values.length}');
+    expect(diagnosticSource).toContain('qris.mutation_id = any($' + '${values.length}' + '::int[])');
+    expect(diagnosticSource).toContain('limit $' + '${values.length}');
   });
-});
- + '${values.length}');
-    expect(diagnosticSource).toContain('qris.mutation_id = any(  it("keeps historical snapshots read-only and outside canonical approval authority", () => {
-    expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
-    expect(diagnosticSource).toContain("candidate_auto_matched");
-    expect(diagnosticSource).toContain("candidate_review");
-    expect(diagnosticSource).not.toMatch(/\b(insert|update|delete)\s+(into|public\.qris_mutation_batch_candidates|from)/i);
-    expect(diagnosticSource).toContain("current_evidence_valid: false");
-    expect(diagnosticSource).toContain('candidate_source: "historical_qris_review_snapshot"');
-    expect(diagnosticSource).toContain("diagnostic_amount_difference");
-    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, limit })");
-    expect(routeSource).toContain("candidates: reviewDiagnostics");
-  });
-});
- + '${values.length}' + '::int[])');
-    expect(diagnosticSource).toContain('limit   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
-    expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
-    expect(diagnosticSource).toContain("candidate_auto_matched");
-    expect(diagnosticSource).toContain("candidate_review");
-    expect(diagnosticSource).not.toMatch(/\b(insert|update|delete)\s+(into|public\.qris_mutation_batch_candidates|from)/i);
-    expect(diagnosticSource).toContain("current_evidence_valid: false");
-    expect(diagnosticSource).toContain('candidate_source: "historical_qris_review_snapshot"');
-    expect(diagnosticSource).toContain("diagnostic_amount_difference");
-    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, limit })");
-    expect(routeSource).toContain("candidates: reviewDiagnostics");
-  });
-});
- + '${values.length}');
-    expect(diagnosticSource).not.toContain('qris.company_id = ' + '${values.length}');
-    expect(diagnosticSource).not.toContain('qris.mutation_id = any(' + '${values.length}' + '::int[])');
-  });
-
   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
     expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
     expect(diagnosticSource).toContain("candidate_auto_matched");
