@@ -64,6 +64,7 @@ describe("local production email OTP authentication", () => {
   let localProductionAuthRouter: typeof import("./local-production-auth").default;
   let otpHash: string;
   let activeUser = true;
+  let activeRole = "admin";
   let recentRequestCount = 0;
   let otpAttempts = 0;
 
@@ -77,6 +78,7 @@ describe("local production email OTP authentication", () => {
 
   beforeEach(async () => {
     activeUser = true;
+    activeRole = "admin";
     recentRequestCount = 0;
     otpAttempts = 0;
     queryMock.mockReset();
@@ -107,7 +109,7 @@ describe("local production email OTP authentication", () => {
             user_data: {
               id: "admin-1",
               email: "admin@example.com",
-              role: "admin",
+              role: activeRole,
               status: "active",
               is_active: true,
               company_id: 1,
@@ -170,6 +172,26 @@ describe("local production email OTP authentication", () => {
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
     expect(cookie).toContain("SameSite=Lax");
+  });
+
+  it("allows an active owner to use email OTP as a recovery login path", async () => {
+    activeRole = "owner";
+
+    const sendResponse = await request(server, "/auth/email-otp/send", {
+      email: "admin@example.com",
+    });
+    expect(sendResponse.status).toBe(202);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+
+    const verifyResponse = await request(server, "/auth/email-otp/verify", {
+      email: "admin@example.com",
+      code: "123456",
+    });
+    expect(verifyResponse.status).toBe(200);
+    expect(verifyResponse.body).toMatchObject({
+      ok: true,
+      user: { email: "admin@example.com", role: "owner" },
+    });
   });
 
   it("does not send when the email/IP rate limit is reached", async () => {
