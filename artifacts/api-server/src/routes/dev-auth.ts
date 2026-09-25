@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { getRuntimeDatabaseUrl, pool } from "@workspace/db";
+import {
+  getDatabaseSecretName,
+  getRuntimeDatabaseUrl,
+  pool,
+  readSecret,
+} from "@workspace/db";
 
 export interface DevAuthUser {
   id: string;
@@ -48,6 +53,37 @@ function deriveProductionSessionSecret(databaseCredential: string): string {
     .digest("hex");
 }
 
+function findSecretString(value: unknown, keys: Set<string>): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (keys.has(key) && typeof nested === "string" && nested.trim().length >= 32) {
+      return nested.trim();
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    const found = findSecretString(nested, keys);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function getBundledProductionSessionSecret(): Promise<string | null> {
+  if (!process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON?.trim()) return null;
+
+  const secretValue = await readSecret(getDatabaseSecretName(true));
+  try {
+    return findSecretString(
+      JSON.parse(secretValue) as unknown,
+      new Set(["BIZPORTAL_SESSION_SECRET", "SESSION_SECRET"]),
+    );
+  } catch {
+    return null;
+  }
+}
+
 function getExplicitSessionSecret(): string | null {
   for (const candidate of [
     process.env.BIZPORTAL_SESSION_SECRET,
@@ -72,16 +108,23 @@ export async function initializeProductionSessionSigning(): Promise<void> {
     return;
   }
 
-  // Hostinger standalone production can resolve SUPABASE_DATABASE_URL through
-  // GCP Secret Manager lazily, so the credential may not exist in process.env
-  // even though database-backed routes work. Resolve it through the same
-  // canonical DB resolver before accepting traffic, then derive one stable,
-  // domain-separated signing key. Retry a few times so a brief Secret Manager
-  // or DNS hiccup during a rolling restart cannot produce a half-alive app
-  // whose login page loads but can never create a session.
+  // Standalone Hostinger starts the compiled API directly, so secrets stored
+  // in the canonical GCP bundle are not automatically copied into process.env.
+  // Load the session secret explicitly from the same production bundle first.
+  // This keeps signing stable across restarts and database credential rotation.
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
+      const bundledSecret = await getBundledProductionSessionSecret();
+      if (bundledSecret) {
+        initializedProductionSessionSecret = bundledSecret;
+        return;
+      }
+
+      // Backward-compatible safety net for installations whose production
+      // bundle predates SESSION_SECRET. The DB URL is already a required,
+      // high-entropy credential and is resolved through the canonical runtime
+      // path, not by assuming it exists in process.env.
       const databaseCredential = await getRuntimeDatabaseUrl();
       initializedProductionSessionSecret =
         deriveProductionSessionSecret(databaseCredential);
