@@ -1,5 +1,9 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import {
+  initializeProductionSessionSigning,
+  isDevelopmentEnvironment,
+} from "./routes/dev-auth";
 
 const rawPort = process.env["PORT"];
 
@@ -16,6 +20,11 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const host = process.env["HOST"]?.trim() || "0.0.0.0";
+
+if (!isDevelopmentEnvironment()) {
+  await initializeProductionSessionSigning();
+  logger.info("Production session signing initialized");
+}
 
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
