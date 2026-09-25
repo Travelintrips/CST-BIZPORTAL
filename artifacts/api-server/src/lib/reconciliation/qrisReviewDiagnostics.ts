@@ -233,7 +233,13 @@ async function loadOpenQrisMutations(companyIds: number[]): Promise<QrisMutation
      from public.bank_mutations bm
      where bm.company_id = any($1::int[])
        and upper(coalesce(bm.direction, '')) = 'IN'
-       and lower(coalesce(bm.status, '')) not in ('approved', 'posted', 'void', 'rejected')
+       and lower(coalesce(bm.status::text, '')) not in ('approved', 'posted', 'void', 'rejected')
+       and not exists (
+         select 1
+           from public.bank_reconciliation_matches brm
+          where brm.mutation_id = bm.id
+            and lower(coalesce(brm.status::text, '')) in ('candidate', 'approved', 'posted')
+       )
        and (
          upper(coalesce(bm.description, '')) like '%QRTRAVELI%'
          or upper(coalesce(bm.normalized_description, '')) like '%QRTRAVELI%'
@@ -287,10 +293,10 @@ async function loadLiveQrisPayments(
             or (
               sp.settlement_rule_version is null
               and settlement_config.is_active = true
-              and settlement_config.effective_from <= coalesce(sp.expected_settlement_date, current_date)
+              and settlement_config.effective_from <= coalesce(nullif(sp.expected_settlement_date, '')::date, current_date)
               and (
                 settlement_config.effective_until is null
-                or settlement_config.effective_until >= coalesce(sp.expected_settlement_date, current_date)
+                or settlement_config.effective_until >= coalesce(nullif(sp.expected_settlement_date, '')::date, current_date)
               )
             )
           )
@@ -304,7 +310,7 @@ async function loadLiveQrisPayments(
        and lower(coalesce(sp.status::text, '')) = 'confirmed'
        and lower(coalesce(sp.payment_method, '')) = 'qris'
        and lower(coalesce(sp.settlement_status::text, 'unsettled')) = 'unsettled'
-       and sp.expected_settlement_date between $2::date and $3::date
+       and nullif(sp.expected_settlement_date, '')::date between $2::date and $3::date
        and not exists (
          select 1
            from sport_center.payment_settlement_items psi
