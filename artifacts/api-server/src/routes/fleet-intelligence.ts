@@ -175,10 +175,18 @@ async function ensureFleetTables(): Promise<void> {
   `);
 
   if (await tableExists("fleet_drivers")) {
-    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS rental_fee_daily NUMERIC(18,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS rental_fee_daily NUMERIC(18,2) DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS vehicle_plate TEXT`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS vehicle_type TEXT`);
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS applicator_status TEXT`);
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS vehicle_ownership TEXT`);
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS source_last_synced_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS last_active_date DATE`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS total_trips INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS total_revenue NUMERIC(18,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS avg_daily_trips NUMERIC(8,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAULT 'standard'`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS raw_data JSONB`);
   }
 }
 
@@ -451,15 +459,15 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
         const suffix = row.phone_number.replace(/\D/g, "").replace(/^0/, "").slice(-9);
         const result = suffix
           ? await pool.query<{ id: number; name: string }>(
-              `SELECT id,name FROM public.fleet_drivers
-                WHERE company_id=$1
+              `SELECT id,full_name AS name FROM public.fleet_drivers
+                WHERE company_id=$1::text
                   AND regexp_replace(COALESCE(phone,''),'[^0-9]','','g') LIKE '%' || $2
                 ORDER BY id DESC LIMIT 1`,
               [cid, suffix],
             )
           : await pool.query<{ id: number; name: string }>(
-              `SELECT id,name FROM public.fleet_drivers
-                WHERE company_id=$1 AND lower(name)=lower($2)
+              `SELECT id,full_name AS name FROM public.fleet_drivers
+                WHERE company_id=$1::text AND lower(full_name)=lower($2)
                 ORDER BY id DESC LIMIT 1`,
               [cid, row.driver_name],
             );
@@ -548,7 +556,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
         let driver = suffix
           ? await client.query<{ id: number }>(
               `SELECT id FROM public.fleet_drivers
-                WHERE company_id=$1
+                WHERE company_id=$1::text
                   AND regexp_replace(COALESCE(phone,''),'[^0-9]','','g') LIKE '%' || $2
                 ORDER BY id DESC LIMIT 1`,
               [cid, suffix],
@@ -558,7 +566,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
         if (!driver.rows[0]?.id) {
           driver = await client.query<{ id: number }>(
             `SELECT id FROM public.fleet_drivers
-              WHERE company_id=$1 AND lower(name)=lower($2)
+              WHERE company_id=$1::text AND lower(full_name)=lower($2)
               ORDER BY id DESC LIMIT 1`,
             [cid, driverName],
           );
@@ -591,11 +599,16 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
         } else {
           const inserted = await client.query<{ id: number }>(
             `INSERT INTO public.fleet_drivers
-              (company_id,name,phone,vehicle_plate,rental_fee_daily,status,applicator_status,vehicle_ownership,last_active_date,source_last_synced_at,created_at,updated_at)
-             VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,CASE WHEN $6='active' THEN CURRENT_DATE ELSE NULL END,NOW(),NOW(),NOW())
+              (company_id,full_name,license_number,phone,vehicle_plate,rental_fee_daily,status,applicator_status,vehicle_ownership,last_active_date,source_last_synced_at,created_at,updated_at)
+             VALUES ($1::text,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,CASE WHEN $7='active' THEN CURRENT_DATE ELSE NULL END,NOW(),NOW(),NOW())
              RETURNING id`,
             [
-              cid, driverName, phone, plate, fee,
+              cid,
+              driverName,
+              `GOCAR-${phone.replace(/\\D/g, "").slice(-12) || Date.now()}`,
+              phone,
+              plate,
+              fee,
               classification.internalStatus,
               classification.applicatorStatus,
               classification.vehicleOwnership,
