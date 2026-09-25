@@ -19,6 +19,14 @@ describe("QRIS historical review diagnostics", () => {
     );
   });
 
+  it("binds QRIS diagnostic filters and limit as PostgreSQL parameters", () => {
+    expect(diagnosticSource).toContain("qris.company_id = $\${values.length}");
+    expect(diagnosticSource).toContain("qris.mutation_id = any($\${values.length}::int[])");
+    expect(diagnosticSource).toContain("limit $\${values.length}");
+    expect(diagnosticSource).not.toContain("qris.company_id = \${values.length}");
+    expect(diagnosticSource).not.toContain("qris.mutation_id = any(\${values.length}::int[])");
+  });
+
   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
     expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
     expect(diagnosticSource).toContain("candidate_auto_matched");
