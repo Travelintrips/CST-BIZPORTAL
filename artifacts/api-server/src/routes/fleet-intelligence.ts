@@ -606,7 +606,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
             [
               cid,
               driverName,
-              `GOCAR-${phone.replace(/\\D/g, "").slice(-12) || Date.now()}`,
+              `GOCAR-${phone.replace(/\D/g, "").slice(-12) || Date.now()}`,
               phone,
               plate,
               fee,
