@@ -753,7 +753,8 @@ async function matchLocalMutation(
   await client.query(
     `delete from public.bank_reconciliation_matches
       where mutation_id = $1
-        and status not in ('approved', 'posted')`,
+        and status not in ('approved', 'posted')
+        and coalesce(is_manual, false) = false`,
     [mutation.id],
   );
 
