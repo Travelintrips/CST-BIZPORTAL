@@ -30,6 +30,9 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain('vehicleOwnership');
     expect(fleetRoute).toContain("full_name");
     expect(fleetRoute).toContain("license_number");
+    expect(fleetRoute).toContain("full_name AS name");
+    expect(fleetRoute).toContain("Synced from GoCar Drivers export; ownership=");
+    expect(fleetRoute).toContain("public.fleet_vehicles");
   });
 
   it("restores the operational Fleet surfaces used by BizPortal pages", () => {
