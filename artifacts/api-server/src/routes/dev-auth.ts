@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { pool } from "@workspace/db";
+import { getRuntimeDatabaseUrl, pool } from "@workspace/db";
 
 export interface DevAuthUser {
   id: string;
@@ -38,7 +38,17 @@ export function isDevelopmentEnvironment(): boolean {
   return nodeEnvironment === "development";
 }
 
-function getSessionSecret(): string | null {
+let initializedProductionSessionSecret: string | null = null;
+
+function deriveProductionSessionSecret(databaseCredential: string): string {
+  return crypto
+    .createHash("sha256")
+    .update("cst-bizportal:production-session:v1\0", "utf8")
+    .update(databaseCredential, "utf8")
+    .digest("hex");
+}
+
+function getExplicitSessionSecret(): string | null {
   for (const candidate of [
     process.env.BIZPORTAL_SESSION_SECRET,
     process.env.SESSION_SECRET,
@@ -46,22 +56,31 @@ function getSessionSecret(): string | null {
     const explicitSecret = candidate?.trim();
     if (explicitSecret && explicitSecret.length >= 32) return explicitSecret;
   }
+  return null;
+}
 
-  // Standalone BizPortal deployments may have a working production database
-  // connection before SESSION_SECRET has been provisioned in the hosting
-  // environment. Derive a domain-separated signing key from the already
-  // required database credential so local production login remains available
-  // without storing or exposing the database credential in the cookie.
-  const databaseCredential =
-    process.env.SUPABASE_DATABASE_URL?.trim()
-    || process.env.DATABASE_URL?.trim();
-  if (!databaseCredential) return null;
+function getSessionSecret(): string | null {
+  return getExplicitSessionSecret() ?? initializedProductionSessionSecret;
+}
 
-  return crypto
-    .createHash("sha256")
-    .update("cst-bizportal:production-session:v1\0", "utf8")
-    .update(databaseCredential, "utf8")
-    .digest("hex");
+export async function initializeProductionSessionSigning(): Promise<void> {
+  if (isDevelopmentEnvironment()) return;
+
+  const explicitSecret = getExplicitSessionSecret();
+  if (explicitSecret) {
+    initializedProductionSessionSecret = explicitSecret;
+    return;
+  }
+
+  // Hostinger standalone production can resolve SUPABASE_DATABASE_URL through
+  // GCP Secret Manager lazily, so the credential may not exist in process.env
+  // even though database-backed routes work. Resolve it through the same
+  // canonical DB resolver before accepting traffic, then derive one stable,
+  // domain-separated signing key. This prevents login from becoming
+  // unavailable after process restarts or rolling deployments.
+  const databaseCredential = await getRuntimeDatabaseUrl();
+  initializedProductionSessionSecret =
+    deriveProductionSessionSecret(databaseCredential);
 }
 
 function getDevIdentitySecret(): string | null {
