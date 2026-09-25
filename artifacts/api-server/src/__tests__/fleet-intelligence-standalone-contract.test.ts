@@ -23,6 +23,15 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/confirm"');
   });
 
+  it("keeps GoCar driver master classification rules explicit", () => {
+    expect(fleetRoute).toContain("const COMPANY_UNIT_RENTAL_FEE_MIN = 300_000");
+    expect(fleetRoute).toContain('applicatorStatus === "fired"');
+    expect(fleetRoute).toContain('applicatorStatus === "resign"');
+    expect(fleetRoute).toContain('vehicleOwnership');
+    expect(fleetRoute).toContain("full_name");
+    expect(fleetRoute).toContain("license_number");
+  });
+
   it("restores the operational Fleet surfaces used by BizPortal pages", () => {
     for (const route of [
       'router.get("/transactions"',
