@@ -39,10 +39,13 @@ export function isDevelopmentEnvironment(): boolean {
 }
 
 function getSessionSecret(): string | null {
-  const explicitSecret =
-    process.env.BIZPORTAL_SESSION_SECRET?.trim()
-    || process.env.SESSION_SECRET?.trim();
-  if (explicitSecret && explicitSecret.length >= 32) return explicitSecret;
+  for (const candidate of [
+    process.env.BIZPORTAL_SESSION_SECRET,
+    process.env.SESSION_SECRET,
+  ]) {
+    const explicitSecret = candidate?.trim();
+    if (explicitSecret && explicitSecret.length >= 32) return explicitSecret;
+  }
 
   // Standalone BizPortal deployments may have a working production database
   // connection before SESSION_SECRET has been provisioned in the hosting
