@@ -76,11 +76,27 @@ export async function initializeProductionSessionSigning(): Promise<void> {
   // GCP Secret Manager lazily, so the credential may not exist in process.env
   // even though database-backed routes work. Resolve it through the same
   // canonical DB resolver before accepting traffic, then derive one stable,
-  // domain-separated signing key. This prevents login from becoming
-  // unavailable after process restarts or rolling deployments.
-  const databaseCredential = await getRuntimeDatabaseUrl();
-  initializedProductionSessionSecret =
-    deriveProductionSessionSecret(databaseCredential);
+  // domain-separated signing key. Retry a few times so a brief Secret Manager
+  // or DNS hiccup during a rolling restart cannot produce a half-alive app
+  // whose login page loads but can never create a session.
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const databaseCredential = await getRuntimeDatabaseUrl();
+      initializedProductionSessionSecret =
+        deriveProductionSessionSecret(databaseCredential);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Production session signing could not be initialized");
 }
 
 function getDevIdentitySecret(): string | null {
