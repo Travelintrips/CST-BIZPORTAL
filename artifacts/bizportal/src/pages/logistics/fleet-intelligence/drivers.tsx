@@ -24,7 +24,7 @@ function tierBadge(tier: string) {
 
 function statusMeta(status: string, applicatorStatus: string) {
   if (status === "active") return { label: "Aktif", cls: "bg-emerald-500/20 text-emerald-300 border-emerald-600" };
-  if (status === "suspended") return { label: "Suspend", cls: "bg-red-500/20 text-red-300 border-red-600" };
+  if (status === "suspended" || applicatorStatus === "fired") return { label: "Suspend", cls: "bg-red-500/20 text-red-300 border-red-600" };
   if (status === "fired") return { label: "Dikeluarkan", cls: "bg-red-600/20 text-red-300 border-red-600" };
   if (applicatorStatus === "resign") return { label: "Keluar / Resign", cls: "bg-blue-500/20 text-blue-300 border-blue-600" };
   if (applicatorStatus === "need_to_assign") return { label: "Tidak Aktif · Belum Ada Unit", cls: "bg-amber-500/20 text-amber-300 border-amber-600" };
