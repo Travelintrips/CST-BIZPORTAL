@@ -469,11 +469,20 @@ async function synthesizeLiveReviewDiagnostics(
 
   for (const mutation of mutations) {
     const existing = historicalByMutation.get(mutation.id) ?? [];
-    if (existing.length > 0) {
-      for (const diagnostic of existing) {
-        for (const paymentId of currentPaymentIds(diagnostic)) {
-          reservedPaymentIds.add(paymentId);
-        }
+    const exactHistorical = existing.find((diagnostic) => {
+      const storedDifference = safeNumber(diagnostic.diagnostic_amount_difference);
+      if (storedDifference != null) return Math.abs(storedDifference) < 1;
+      const storedNet = safeNumber(
+        diagnostic.current_expected_amount ?? diagnostic.net_amount,
+      );
+      const bankAmount = safeNumber(mutation.amount);
+      return storedNet != null
+        && bankAmount != null
+        && Math.abs(bankAmount - storedNet) < 1;
+    });
+    if (exactHistorical) {
+      for (const paymentId of currentPaymentIds(exactHistorical)) {
+        reservedPaymentIds.add(paymentId);
       }
       continue;
     }
@@ -553,7 +562,12 @@ export async function listQrisReviewDiagnostics(options: {
   });
 
   const merged = new Map<string, Record<string, unknown>>();
-  for (const diagnostic of [...requestedHistorical, ...historicalForOpen, ...synthetic]) {
+  const syntheticMutationIds = new Set(
+    synthetic
+      .map((diagnostic) => Number(diagnostic.mutation_id))
+      .filter((id) => Number.isSafeInteger(id)),
+  );
+  for (const diagnostic of [...synthetic, ...requestedHistorical, ...historicalForOpen]) {
     const mutationId = Number(diagnostic.mutation_id);
     if (!Number.isSafeInteger(mutationId)) continue;
     if (requestedIds.length > 0 && !requestedIds.includes(mutationId)) continue;
@@ -561,8 +575,11 @@ export async function listQrisReviewDiagnostics(options: {
       options.companyId != null
       && Number(diagnostic.company_id) !== Number(options.companyId)
     ) continue;
-    const id = diagnostic.id == null ? "synthetic" : String(diagnostic.id);
     const source = String(diagnostic.candidate_source ?? "unknown");
+    if (source === HISTORICAL_SOURCE && syntheticMutationIds.has(mutationId)) {
+      continue;
+    }
+    const id = diagnostic.id == null ? "synthetic" : String(diagnostic.id);
     merged.set(`${mutationId}:${source}:${id}`, diagnostic);
   }
 
