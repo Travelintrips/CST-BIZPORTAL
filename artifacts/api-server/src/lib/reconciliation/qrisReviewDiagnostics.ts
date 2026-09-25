@@ -89,11 +89,11 @@ export async function listQrisReviewDiagnostics(options: {
 
   if (options.companyId != null) {
     values.push(options.companyId);
-    filters.push(`qris.company_id = ${values.length}`);
+    filters.push(`qris.company_id = $${values.length}`);
   }
   if (options.mutationIds?.length) {
     values.push(options.mutationIds);
-    filters.push(`qris.mutation_id = any(${values.length}::int[])`);
+    filters.push(`qris.mutation_id = any($${values.length}::int[])`);
   }
 
   const limit = Math.min(Math.max(options.limit ?? 500, 1), 500);
@@ -109,7 +109,7 @@ export async function listQrisReviewDiagnostics(options: {
        join public.bank_mutations bm on bm.id = qris.mutation_id
       where ${filters.join(" and ")}
       order by qris.updated_at desc nulls last, qris.id desc
-      limit ${values.length}`,
+      limit $${values.length}`,
       values,
     );
     return result.rows.map(enrichDiagnosticCandidate);
