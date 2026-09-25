@@ -108,6 +108,15 @@ type SnapshotPreviewResult = {
   found: number;
   unmatched: number;
   skipped: number;
+  summary?: {
+    outstandingRows: number;
+    activeDrivers: number;
+    inactiveDrivers: number;
+    suspendedDrivers: number;
+    firedDrivers: number;
+    companyUnits: number;
+    partnerPrivateUnits: number;
+  };
 };
 
 // ─── Tab: CSV Gojek (Transaksi) ──────────────────────────────────────────────
@@ -970,7 +979,7 @@ function SnapshotUploadTab() {
               { label: "Total Driver", val: previewData.total, cls: "text-white" },
               { label: "Driver Cocok", val: previewData.found, cls: "text-emerald-400" },
               { label: "Tidak Cocok (Baru)", val: previewData.unmatched, cls: "text-amber-400" },
-              { label: "Lunas / Dilewati", val: previewData.skipped, cls: "text-slate-400" },
+              { label: "Punya Outstanding", val: previewData.summary?.outstandingRows ?? 0, cls: "text-red-400" },
             ].map((s) => (
               <div key={s.label} className="bg-slate-900/60 rounded-lg p-3">
                 <p className={`text-2xl font-bold ${s.cls}`}>{s.val}</p>
@@ -979,16 +988,21 @@ function SnapshotUploadTab() {
             ))}
           </div>
 
-          <div className="bg-slate-900/40 rounded-lg p-3 flex items-center justify-between">
-            <span className="text-slate-400 text-sm">Total Outstanding yang akan diimport</span>
-            <span className="text-red-400 font-bold text-lg">{fmtIdr(totalOutstanding)}</span>
+          <div className="bg-slate-900/40 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400 text-sm">Total Outstanding yang akan disinkronkan</span>
+              <span className="text-red-400 font-bold text-lg">{fmtIdr(totalOutstanding)}</span>
+            </div>
+            <div className="text-xs text-slate-400">
+              Aktif: {previewData.summary?.activeDrivers ?? 0} · Tidak aktif: {previewData.summary?.inactiveDrivers ?? 0} · Suspend: {previewData.summary?.suspendedDrivers ?? 0} · Unit perusahaan: {previewData.summary?.companyUnits ?? 0} · Unit pribadi/mitra: {previewData.summary?.partnerPrivateUnits ?? 0}
+            </div>
           </div>
 
           {/* Preview table */}
           <Card className="bg-slate-800/60 border-slate-700">
             <CardHeader className="pb-2">
               <CardTitle className="text-white text-base">
-                Preview {previewData.total} driver (outstanding &gt; 0 atau "Need to assign")
+                Preview {previewData.total} driver — seluruh baris akan sinkron ke Master Driver
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
