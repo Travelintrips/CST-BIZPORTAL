@@ -42,7 +42,7 @@ describe("QRIS historical review diagnostics", () => {
     expect(diagnosticSource).toContain("loadLiveQrisPayments");
     expect(diagnosticSource).toContain("findExactPaymentSubset");
     expect(diagnosticSource).toContain("synthesizeLiveReviewDiagnostics");
-    expect(diagnosticSource).toContain("sp.expected_settlement_date between $2::date and $3::date");
+    expect(diagnosticSource).toContain("nullif(sp.expected_settlement_date, '')::date between $2::date and $3::date");
     expect(diagnosticSource).toContain("lower(coalesce(sp.payment_method, '')) = 'qris'");
     expect(diagnosticSource).toContain("candidate_source: LIVE_SOURCE");
     expect(diagnosticSource).toContain('status: "candidate_review"');
