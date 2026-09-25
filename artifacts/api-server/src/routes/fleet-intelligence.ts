@@ -318,9 +318,10 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
       return;
     }
 
-    await pool.query("BEGIN");
+    const client = await pool.connect();
     try {
-      const latest = await pool.query<{
+      await client.query("BEGIN");
+      const latest = await client.query<{
         driver_external_id: string;
         driver_name: string | null;
         phone_number: string | null;
@@ -340,7 +341,7 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
       for (const row of latest.rows) {
         const amount = numberValue(row.total_outstanding_balance);
         if (amount <= 0) {
-          await pool.query(
+          await client.query(
             `UPDATE public.fleet_outstanding
                 SET status='resolved', resolved_at=NOW(), outstanding_amount=0, updated_at=NOW()
               WHERE company_id=$1 AND driver_external_id=$2 AND status='open'`,
@@ -348,7 +349,7 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
           );
           continue;
         }
-        const updated = await pool.query(
+        const updated = await client.query(
           `UPDATE public.fleet_outstanding
               SET driver_name=COALESCE(NULLIF($3,''),driver_name),
                   driver_phone=COALESCE(NULLIF($4,''),driver_phone),
@@ -361,7 +362,7 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
           [cid, row.driver_external_id, row.driver_name ?? "", row.phone_number ?? "", row.vehicle ?? "", amount],
         );
         if (updated.rowCount === 0) {
-          await pool.query(
+          await client.query(
             `INSERT INTO public.fleet_outstanding
               (company_id,driver_external_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,last_updated_date,status,snapshot_source)
              VALUES ($1,$2,$3,$4,$5,$6,CURRENT_DATE,'open','raw_repair')`,
@@ -369,10 +370,12 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
           );
         }
       }
-      await pool.query("COMMIT");
+      await client.query("COMMIT");
     } catch (error) {
-      await pool.query("ROLLBACK");
+      await client.query("ROLLBACK");
       throw error;
+    } finally {
+      client.release();
     }
 
     const summary = await pool.query(
