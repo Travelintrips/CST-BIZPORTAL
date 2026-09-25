@@ -564,6 +564,7 @@ export async function listQrisReviewDiagnostics(options: {
   const merged = new Map<string, Record<string, unknown>>();
   const syntheticMutationIds = new Set(
     synthetic
+      .filter((diagnostic) => Number(diagnostic.diagnostic_payment_count ?? 0) > 0)
       .map((diagnostic) => Number(diagnostic.mutation_id))
       .filter((id) => Number.isSafeInteger(id)),
   );
