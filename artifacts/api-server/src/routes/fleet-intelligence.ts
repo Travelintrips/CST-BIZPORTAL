@@ -622,7 +622,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
         const existingOutstanding = await client.query<{ id: number }>(
           `SELECT id FROM public.fleet_outstanding
             WHERE company_id=$1 AND status='open'
-              AND (driver_id=$2 OR lower(driver_name)=lower($3))
+              AND (driver_id=$2 OR (driver_id IS NULL AND lower(driver_name)=lower($3)))
             ORDER BY id DESC LIMIT 1`,
           [cid, driverId, driverName],
         );
