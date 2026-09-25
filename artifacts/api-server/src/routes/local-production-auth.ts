@@ -351,7 +351,8 @@ router.post("/auth/email-otp/send", async (
 
     try {
       await sendAdminLoginOtpEmail(email, code);
-    } catch {
+    } catch (error) {
+      request.log.error({ error, email }, "Admin email OTP delivery failed");
       await pool.query(
         "delete from public.bizportal_email_otp_codes where id = $1 and verified_at is null",
         [id],
