@@ -35,10 +35,8 @@ function classifyDriver(row: Pick<SnapshotRow, "status" | "license_plate" | "ren
   const rentalFee = numberValue(row.rental_fee_daily);
 
   let internalStatus: "active" | "inactive" | "suspended" | "fired";
-  if (applicatorStatus === "suspended" || applicatorStatus === "suspend") {
+  if (applicatorStatus === "suspended" || applicatorStatus === "suspend" || applicatorStatus === "fired" || applicatorStatus === "terminated") {
     internalStatus = "suspended";
-  } else if (applicatorStatus === "fired" || applicatorStatus === "terminated") {
-    internalStatus = "fired";
   } else if (!plate || applicatorStatus === "resign" || applicatorStatus === "need_to_assign") {
     internalStatus = "inactive";
   } else {
