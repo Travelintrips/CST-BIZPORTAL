@@ -1391,20 +1391,29 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
   // Once the candidate has been generated from QRIS payments, provider
   // labels in the bank description are enrichment only. In particular,
   // Mandiri's SA/KR markers must not hide an approvable H-1 candidate.
-  return audits.filter((audit) =>
-    ["candidate_auto_matched", "candidate_review"].includes(
+  return audits.filter((audit) => {
+    const readOnlyReviewSnapshot = [
+      "historical_qris_review_snapshot",
+      "live_qris_review_snapshot",
+    ].includes(String(audit.candidate_source ?? ""));
+    return ["candidate_auto_matched", "candidate_review"].includes(
       String(audit.status ?? "").toLowerCase(),
     )
-    // H-1 is an exact settlement cohort: candidate expected settlement date
-    // must be the same calendar date as the bank mutation.
-    && isSameCalendarDate(m.transaction_date, audit.estimated_settlement_date)
-    && (audit.payment_items ?? []).every((item) =>
-      isSameCalendarDate(
-        m.transaction_date,
-        item.expectedSettlementDate ?? item.expected_settlement_date,
-      ),
-    ),
-  );
+      // The diagnostic itself is always attached to the bank settlement date.
+      && isSameCalendarDate(m.transaction_date, audit.estimated_settlement_date)
+      // Canonical/approvable candidates keep the strict same-date contract.
+      // Read-only diagnostics may include one-day-earlier late-imported
+      // payments so the operator can see why the bank net is otherwise short.
+      && (
+        readOnlyReviewSnapshot
+        || (audit.payment_items ?? []).every((item) =>
+          isSameCalendarDate(
+            m.transaction_date,
+            item.expectedSettlementDate ?? item.expected_settlement_date,
+          ),
+        )
+      );
+  });
 }
 
 function QrisCandidateDiagnosticBlock({
@@ -4599,10 +4608,12 @@ function QrisMutationCard({
     canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const allItems = audit.payment_items ?? [];
   const auditStatus = String(audit.status ?? "").toLowerCase();
-  const isHistoricalReviewSnapshot =
-    audit.candidate_source === "historical_qris_review_snapshot";
+  const isReadOnlyReviewSnapshot = [
+    "historical_qris_review_snapshot",
+    "live_qris_review_snapshot",
+  ].includes(String(audit.candidate_source ?? ""));
   const isReadOnlyEvidence =
-    isHistoricalReviewSnapshot
+    isReadOnlyReviewSnapshot
     || ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
   const activeSettlementPaymentIds = new Set(
@@ -8626,7 +8637,10 @@ export default function BankReconciliationPage() {
     getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
-    && candidate.candidate_source !== "historical_qris_review_snapshot"
+    && ![
+      "historical_qris_review_snapshot",
+      "live_qris_review_snapshot",
+    ].includes(String(candidate.candidate_source ?? ""))
     && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
      && ["candidate_auto_matched", "candidate_review"].includes(
        String(candidate.status ?? "").toLowerCase(),
