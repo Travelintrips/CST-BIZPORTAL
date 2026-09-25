@@ -39,8 +39,26 @@ export function isDevelopmentEnvironment(): boolean {
 }
 
 function getSessionSecret(): string | null {
-  const secret = process.env.SESSION_SECRET;
-  return secret && secret.length >= 32 ? secret : null;
+  const explicitSecret =
+    process.env.BIZPORTAL_SESSION_SECRET?.trim()
+    || process.env.SESSION_SECRET?.trim();
+  if (explicitSecret && explicitSecret.length >= 32) return explicitSecret;
+
+  // Standalone BizPortal deployments may have a working production database
+  // connection before SESSION_SECRET has been provisioned in the hosting
+  // environment. Derive a domain-separated signing key from the already
+  // required database credential so local production login remains available
+  // without storing or exposing the database credential in the cookie.
+  const databaseCredential =
+    process.env.SUPABASE_DATABASE_URL?.trim()
+    || process.env.DATABASE_URL?.trim();
+  if (!databaseCredential) return null;
+
+  return crypto
+    .createHash("sha256")
+    .update("cst-bizportal:production-session:v1\0", "utf8")
+    .update(databaseCredential, "utf8")
+    .digest("hex");
 }
 
 function getDevIdentitySecret(): string | null {
