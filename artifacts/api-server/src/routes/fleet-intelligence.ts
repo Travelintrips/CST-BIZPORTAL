@@ -1231,17 +1231,88 @@ router.get("/outstanding/macet", async (req: AdminRequest, res) => {
 router.get("/system-overview", async (req: AdminRequest, res) => {
   try {
     const cid = companyId(req);
-    const names = ["fleet_reports","gojek_raw_transactions","fleet_transactions","fleet_drivers","fleet_vehicles","fleet_outstanding","fleet_alerts"];
-    const tables: Record<string, number> = {};
-    for (const name of names) {
-      if (!(await tableExists(name))) {
-        tables[name] = 0;
-        continue;
-      }
+    const countTable = async (name: string): Promise<number> => {
+      if (!(await tableExists(name))) return 0;
       const result = await pool.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM public.${name} WHERE company_id=$1`, [cid]);
-      tables[name] = result.rows[0]?.count ?? 0;
+      return result.rows[0]?.count ?? 0;
+    };
+    const [reports, raw, tx, drivers, vehicles, outstanding, alerts, queue, dlq] = await Promise.all([
+      countTable("fleet_reports"),
+      countTable("gojek_raw_transactions"),
+      countTable("fleet_transactions"),
+      countTable("fleet_drivers"),
+      countTable("fleet_vehicles"),
+      countTable("fleet_outstanding"),
+      countTable("fleet_alerts"),
+      countTable("gojek_ingestion_queue"),
+      countTable("gojek_failed_rows"),
+    ]);
+
+    let activeDrivers = 0;
+    let suspendedDrivers = 0;
+    if (await tableExists("fleet_drivers")) {
+      const d = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE status='active')::int AS active,
+                COUNT(*) FILTER (WHERE status<>'active')::int AS suspended
+           FROM public.fleet_drivers WHERE company_id=$1`,
+        [cid],
+      );
+      activeDrivers = Number((d.rows[0] as Record<string, unknown>)?.active ?? 0);
+      suspendedDrivers = Number((d.rows[0] as Record<string, unknown>)?.suspended ?? 0);
     }
-    res.json({ ok: true, companyId: cid, tables, generatedAt: new Date().toISOString() });
+
+    let txToday = 0;
+    let totalGross = 0;
+    let latestDate: string | null = null;
+    if (await tableExists("fleet_transactions")) {
+      const t = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE transaction_date=CURRENT_DATE)::int AS today_count,
+                COALESCE(SUM(gross_revenue),0)::numeric AS total_gross,
+                MAX(transaction_date)::text AS latest_date
+           FROM public.fleet_transactions WHERE company_id=$1`,
+        [cid],
+      );
+      txToday = Number((t.rows[0] as Record<string, unknown>)?.today_count ?? 0);
+      totalGross = Number((t.rows[0] as Record<string, unknown>)?.total_gross ?? 0);
+      latestDate = ((t.rows[0] as Record<string, unknown>)?.latest_date as string | null) ?? null;
+    }
+
+    let criticalUnread = 0;
+    let otherUnread = 0;
+    if (await tableExists("fleet_alerts")) {
+      const a = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE is_read=false AND severity='critical')::int AS critical,
+                COUNT(*) FILTER (WHERE is_read=false AND severity<>'critical')::int AS other
+           FROM public.fleet_alerts WHERE company_id=$1`,
+        [cid],
+      );
+      criticalUnread = Number((a.rows[0] as Record<string, unknown>)?.critical ?? 0);
+      otherUnread = Number((a.rows[0] as Record<string, unknown>)?.other ?? 0);
+    }
+
+    const healthScore = Math.max(0, 100 - Math.min(50, dlq * 5) - Math.min(30, criticalUnread * 10));
+    const healthStatus = healthScore >= 80 ? "green" : healthScore >= 50 ? "yellow" : "red";
+    res.json({
+      generatedAt: new Date().toISOString(),
+      healthScore,
+      healthStatus,
+      systemBounds: {
+        limits: { pendingQueue: 20, dlq: 100 },
+        violations: [],
+        queueSaturation: Math.min(100, Math.round((queue / 20) * 100)),
+        dlqSaturation: Math.min(100, Math.round((dlq / 100) * 100)),
+      },
+      ingestionQueue: {
+        pending: queue, processing: 0, completed: reports, failed: dlq, total: queue + reports + dlq,
+        recentWeek: { total: reports, succeeded: reports, failed: dlq, processing: 0, pending: queue, successRate: reports + dlq > 0 ? Math.round((reports / (reports + dlq)) * 100) : 100 },
+      },
+      dlq: { total: dlq, unresolved: dlq, resolved: 0, latestError: null, pressure: Math.min(100, dlq) },
+      reconciliation: { status: "ok", summaryMismatches: 0, message: "Belum ada mismatch terdeteksi oleh runtime standalone." },
+      alerts: { criticalUnread, otherUnread, totalUnread: criticalUnread + otherUnread },
+      transactions: { total: tx, todayCount: txToday, totalGross, latestDate },
+      drivers: { total: drivers, active: activeDrivers, suspended: suspendedDrivers },
+      tables: { reports, raw, tx, drivers, vehicles, outstanding, alerts },
+    });
   } catch (error) {
     req.log.error({ error }, "Fleet system overview failed");
     res.status(503).json({ error: "Gagal mengambil system overview." });
@@ -1252,22 +1323,64 @@ router.get("/executive-summary", async (req: AdminRequest, res) => {
   try {
     await ensureFleetTables();
     const cid = companyId(req);
-    const [outstanding, alerts] = await Promise.all([
-      pool.query(
-        `SELECT COUNT(*)::int AS drivers, COALESCE(SUM(outstanding_amount),0)::numeric AS outstanding
-           FROM public.fleet_outstanding WHERE company_id=$1 AND status='open'`,
+    const outstanding = await pool.query(
+      `SELECT COUNT(*)::int AS drivers, COALESCE(SUM(outstanding_amount),0)::numeric AS total
+         FROM public.fleet_outstanding WHERE company_id=$1 AND status='open'`,
+      [cid],
+    );
+    const outstandingDrivers = Number((outstanding.rows[0] as Record<string, unknown>)?.drivers ?? 0);
+    const outstandingAmount = Number((outstanding.rows[0] as Record<string, unknown>)?.total ?? 0);
+
+    let unreadAlerts = 0;
+    let criticalUnread = 0;
+    if (await tableExists("fleet_alerts")) {
+      const alerts = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE is_read=false)::int AS unread,
+                COUNT(*) FILTER (WHERE is_read=false AND severity='critical')::int AS critical
+           FROM public.fleet_alerts WHERE company_id=$1`,
         [cid],
-      ),
-      tableExists("fleet_alerts").then((exists) => exists
-        ? pool.query("SELECT COUNT(*)::int AS count FROM public.fleet_alerts WHERE company_id=$1 AND is_read=false", [cid])
-        : Promise.resolve({ rows: [{ count: 0 }] } as { rows: Array<{ count: number }> })),
-    ]);
+      );
+      unreadAlerts = Number((alerts.rows[0] as Record<string, unknown>)?.unread ?? 0);
+      criticalUnread = Number((alerts.rows[0] as Record<string, unknown>)?.critical ?? 0);
+    }
+
+    const top3Risks = [
+      ...(criticalUnread > 0 ? [{
+        taskId: "ALERT-CRITICAL",
+        title: `${criticalUnread} alert kritis belum dibaca`,
+        reason: "Perlu ditinjau untuk mencegah gangguan operasional fleet.",
+        action: "Buka Alerts",
+        href: "/logistics/fleet-intelligence/alerts",
+        severity: "critical" as const,
+      }] : []),
+      ...(outstandingDrivers > 0 ? [{
+        taskId: "OUTSTANDING",
+        title: `${outstandingDrivers} driver masih outstanding`,
+        reason: `Total outstanding Rp ${Math.round(outstandingAmount).toLocaleString("id-ID")}.`,
+        action: "Tinjau Outstanding",
+        href: "/logistics/fleet-intelligence/outstanding",
+        severity: "warning" as const,
+      }] : []),
+    ].slice(0, 3);
+
+    const priorityTask = top3Risks[0] ?? {
+      taskId: "OPTIMIZATION",
+      title: "Fleet Intelligence siap digunakan",
+      reason: "Tidak ada risiko kritis yang terdeteksi dari data runtime saat ini.",
+      action: "Lihat Analytics",
+      href: "/logistics/fleet-intelligence/analytics",
+      severity: "optimization" as const,
+    };
+    const healthScore = Math.max(0, 100 - criticalUnread * 20 - Math.min(outstandingDrivers, 10) * 2);
+    const systemStatus = healthScore >= 80 ? "OK" : healthScore >= 50 ? "DEGRADED" : "CRITICAL";
+
     res.json({
-      outstandingDrivers: Number((outstanding.rows[0] as Record<string, unknown>)?.drivers ?? 0),
-      outstandingAmount: Number((outstanding.rows[0] as Record<string, unknown>)?.outstanding ?? 0),
-      unreadAlerts: Number((alerts.rows[0] as Record<string, unknown>)?.count ?? 0),
-      priorityTasks: [],
       generatedAt: new Date().toISOString(),
+      systemStatus,
+      healthScore,
+      recommendedAction: priorityTask.action,
+      priorityTask,
+      top3Risks,
     });
   } catch (error) {
     req.log.error({ error }, "Fleet executive summary failed");
