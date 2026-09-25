@@ -619,6 +619,31 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
           driverInserted += 1;
         }
 
+        if (plate && await tableExists("fleet_vehicles")) {
+          const vehicle = await client.query<{ id: number }>(
+            `SELECT id FROM public.fleet_vehicles
+              WHERE company_id=$1 AND upper(plate)=upper($2)
+              ORDER BY id DESC LIMIT 1`,
+            [cid, plate],
+          );
+          const vehicleNotes = `Synced from GoCar Drivers export; ownership=${classification.vehicleOwnership}`;
+          if (vehicle.rows[0]?.id) {
+            await client.query(
+              `UPDATE public.fleet_vehicles
+                  SET driver_id=$3, vehicle_type='car', status=$4, notes=$5, updated_at=NOW()
+                WHERE id=$1 AND company_id=$2`,
+              [vehicle.rows[0].id, cid, driverId, classification.internalStatus === "active" ? "active" : "inactive", vehicleNotes],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO public.fleet_vehicles
+                (company_id,driver_id,plate,vehicle_type,status,notes,created_at,updated_at)
+               VALUES ($1,$2,$3,'car',$4,$5,NOW(),NOW())`,
+              [cid, driverId, plate, classification.internalStatus === "active" ? "active" : "inactive", vehicleNotes],
+            );
+          }
+        }
+
         const existingOutstanding = await client.query<{ id: number }>(
           `SELECT id FROM public.fleet_outstanding
             WHERE company_id=$1 AND status='open'
@@ -1169,17 +1194,17 @@ router.get("/analytics/idle-vehicles", async (req: AdminRequest, res) => {
     }
     const hasTx = await tableExists("fleet_transactions");
     const query = hasTx
-      ? `SELECT v.*, d.name AS driver_name, MAX(t.transaction_date) AS last_transaction_date
+      ? `SELECT v.*, d.full_name AS driver_name, MAX(t.transaction_date) AS last_transaction_date
            FROM public.fleet_vehicles v
-           LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id
+           LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id AND d.company_id=v.company_id::text
            LEFT JOIN public.fleet_transactions t ON t.company_id=v.company_id AND t.vehicle_plate=v.plate
           WHERE v.company_id=$1
-          GROUP BY v.id,d.name
+          GROUP BY v.id,d.full_name
          HAVING MAX(t.transaction_date) IS NULL OR MAX(t.transaction_date) < CURRENT_DATE - ($2::int * interval '1 day')
           ORDER BY MAX(t.transaction_date) NULLS FIRST`
-      : `SELECT v.*, d.name AS driver_name, NULL::date AS last_transaction_date
+      : `SELECT v.*, d.full_name AS driver_name, NULL::date AS last_transaction_date
            FROM public.fleet_vehicles v
-           LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id
+           LEFT JOIN public.fleet_drivers d ON d.id=v.driver_id AND d.company_id=v.company_id::text
           WHERE v.company_id=$1 ORDER BY v.plate`;
     const result = await pool.query(query, hasTx ? [cid, days] : [cid]);
     res.json({ idleVehicles: result.rows });
@@ -1205,7 +1230,7 @@ router.get("/analytics/churn-risk", async (req: AdminRequest, res) => {
              FROM public.fleet_drivers d
              LEFT JOIN public.fleet_transactions t
                ON t.company_id=d.company_id AND (t.driver_id=d.id OR t.driver_external_id=d.driver_external_id)
-            WHERE d.company_id=$1 AND d.status='active'
+            WHERE d.company_id=$1::text AND d.status='active'
             GROUP BY d.id
            HAVING MAX(t.transaction_date) IS NULL OR MAX(t.transaction_date) < CURRENT_DATE - INTERVAL '7 days'
             ORDER BY inactive_days DESC NULLS FIRST`,
@@ -1437,7 +1462,7 @@ router.get("/system-overview", async (req: AdminRequest, res) => {
       const d = await pool.query(
         `SELECT COUNT(*) FILTER (WHERE status='active')::int AS active,
                 COUNT(*) FILTER (WHERE status<>'active')::int AS suspended
-           FROM public.fleet_drivers WHERE company_id=$1`,
+           FROM public.fleet_drivers WHERE company_id=$1::text`,
         [cid],
       );
       activeDrivers = Number((d.rows[0] as Record<string, unknown>)?.active ?? 0);
