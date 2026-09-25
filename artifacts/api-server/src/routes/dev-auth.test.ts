@@ -7,7 +7,9 @@ import http, {
 import { type AddressInfo } from "node:net";
 import https from "node:https";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Response } from "express";
 import app from "../app";
+import { setProductionSessionCookie } from "./dev-auth";
 
 const allowedEmail = "admin@example.com";
 const sessionSecret = "development-session-secret-with-32-bytes!!";
@@ -28,6 +30,9 @@ const originalEnvironment = {
   BIZPORTAL_API_ORIGIN_DEV: process.env.BIZPORTAL_API_ORIGIN_DEV,
   DEV_LOGIN_EMAILS: process.env.DEV_LOGIN_EMAILS,
   SESSION_SECRET: process.env.SESSION_SECRET,
+  BIZPORTAL_SESSION_SECRET: process.env.BIZPORTAL_SESSION_SECRET,
+  SUPABASE_DATABASE_URL: process.env.SUPABASE_DATABASE_URL,
+  DATABASE_URL: process.env.DATABASE_URL,
 };
 
 let server: Server;
@@ -141,6 +146,35 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("production session signing fallback", () => {
+  it("derives a stable signing key from the required database credential when SESSION_SECRET is absent", () => {
+    process.env.APP_ENV = "production";
+    process.env.NODE_ENV = "production";
+    delete process.env.SESSION_SECRET;
+    delete process.env.BIZPORTAL_SESSION_SECRET;
+    process.env.SUPABASE_DATABASE_URL = "postgresql://user:strong-password@example.test:5432/postgres";
+
+    const cookies: string[] = [];
+    const response = {
+      append: (_name: string, value: string) => {
+        cookies.push(value);
+        return response;
+      },
+    } as unknown as Response;
+
+    expect(() => setProductionSessionCookie(response, {
+      id: "user-1",
+      email: "admin@example.com",
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    })).not.toThrow();
+
+    expect(cookies[0]).toMatch(/^bizportal_supabase_session=[^;]+;/);
+    expect(cookies[0]).toContain("HttpOnly");
+    expect(cookies[0]).toContain("Secure");
+  });
 });
 
 describe("development login bridge", () => {
