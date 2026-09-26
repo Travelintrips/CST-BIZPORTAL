@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
 import { authenticateAdmin, type AdminRequest } from "./admin-auth";
 
@@ -129,6 +130,86 @@ function parseSnapshotCsv(content: string): Array<Omit<SnapshotRow, "match_statu
       status: statusIdx >= 0 ? String(cells[statusIdx] ?? "").trim() : "Active",
     };
   }).filter((row) => row.driver_name);
+}
+
+
+type GojekTransactionRow = {
+  driverName: string;
+  driverExtId: string;
+  driverPhone: string;
+  txDate: string;
+  vehiclePlate: string;
+  amount: number;
+  outstanding: number;
+  transactionType: string;
+  gopayRef: string;
+  serviceType: string;
+  raw: Record<string,string>;
+};
+
+function parseGojekTransactionCsv(content: string) {
+  const lines=content.replace(/^\uFEFF/,"").split(/\r?\n/).filter(line=>line.trim());
+  if(lines.length<2) return {headers:[] as string[],rows:[] as GojekTransactionRow[],mapping:{} as Record<string,string|null>,warnings:["File tidak memiliki data."]};
+  const headers=csvCells(lines[0]).map(h=>h.trim());
+  const normalized=headers.map(h=>h.toLowerCase().replace(/[()]/g,"").replace(/[_-]+/g," ").replace(/\s+/g," ").trim());
+  const find=(...names:string[])=>normalized.findIndex(h=>names.includes(h));
+  const idx={
+    driverName:find("driver name","nama driver","driver"),
+    driverExtId:find("driver id","driver external id","driver externalid","id driver"),
+    driverPhone:find("phone number","driver phone","phone","no hp","nomor telepon"),
+    txDate:find("date time jkt","date time","datetime","transaction date","tanggal waktu","tanggal"),
+    simpleDate:find("date","tanggal"),
+    vehiclePlate:find("vehicle","vehicle plate","license plate","plat kendaraan","plate"),
+    amount:find("amount","nominal","transaction amount"),
+    outstanding:find("total outstanding balance","outstanding","outstanding balance"),
+    transactionType:find("transaction type","jenis transaksi","type"),
+    gopayRef:find("gopay transaction reference id","gopay reference id","gopay ref id","reference id"),
+    serviceType:find("service type","service","layanan"),
+  };
+  if(idx.driverName<0||idx.amount<0) throw new Error("CSV transaksi wajib memiliki kolom Driver Name dan Amount.");
+  const mapping:Record<string,string|null>={};
+  for(const [key,index] of Object.entries(idx)) mapping[key]=index>=0?headers[index]:null;
+  const warnings:string[]=[];
+  if(idx.gopayRef<0) warnings.push("GoPay Reference ID tidak ditemukan; dedup akan memakai fallback.");
+  if(idx.driverExtId<0) warnings.push("Driver ID tidak ditemukan.");
+  const rows=lines.slice(1).map(line=>{
+    const cells=csvCells(line),raw:Record<string,string>={};
+    headers.forEach((h,i)=>{raw[h]=cells[i]??"";});
+    const dateRaw=String(cells[idx.txDate>=0?idx.txDate:idx.simpleDate]??"").trim();
+    let txDate="";
+    const iso=dateRaw.match(/(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)/);
+    const dmy=dateRaw.match(/([0-3]?\d)[-\/]([01]?\d)[-\/](20\d{2})/);
+    if(iso) txDate=`${iso[1]}-${String(iso[2]).padStart(2,"0")}-${String(iso[3]).padStart(2,"0")}`;
+    else if(dmy) txDate=`${dmy[3]}-${String(dmy[2]).padStart(2,"0")}-${String(dmy[1]).padStart(2,"0")}`;
+    return {
+      driverName:String(cells[idx.driverName]??"").trim(),
+      driverExtId:idx.driverExtId>=0?String(cells[idx.driverExtId]??"").trim():"",
+      driverPhone:idx.driverPhone>=0?cleanPhone(cells[idx.driverPhone]):"",
+      txDate,
+      vehiclePlate:idx.vehiclePlate>=0?String(cells[idx.vehiclePlate]??"").trim():"",
+      amount:numberValue(cells[idx.amount]),
+      outstanding:idx.outstanding>=0?numberValue(cells[idx.outstanding]):0,
+      transactionType:idx.transactionType>=0?String(cells[idx.transactionType]??"").trim():"",
+      gopayRef:idx.gopayRef>=0?String(cells[idx.gopayRef]??"").trim():"",
+      serviceType:idx.serviceType>=0?String(cells[idx.serviceType]??"").trim():"",
+      raw,
+    };
+  }).filter(r=>r.driverName||r.driverExtId||r.amount!==0);
+  return {headers,rows,mapping,warnings};
+}
+
+function summarizeGojekRows(rows:GojekTransactionRow[]) {
+  const typeBreakdown:Record<string,{count:number;total:number}>={};
+  let totalCredit=0,totalDebit=0;
+  const drivers=new Set<string>(),vehicles=new Set<string>();
+  for(const row of rows){
+    if(row.amount>=0) totalCredit+=row.amount; else totalDebit+=row.amount;
+    if(row.driverExtId||row.driverName) drivers.add(row.driverExtId||row.driverName);
+    if(row.vehiclePlate) vehicles.add(row.vehiclePlate);
+    const key=row.transactionType||"Unknown";
+    const current=typeBreakdown[key]??{count:0,total:0}; current.count+=1; current.total+=row.amount; typeBreakdown[key]=current;
+  }
+  return {transactionCount:rows.length,totalCredit,totalDebit,netFlow:totalCredit+totalDebit,vehicleCoverage:vehicles.size,driverCoverage:drivers.size,typeBreakdown};
 }
 
 async function ensureFleetTables(): Promise<void> {
@@ -841,6 +922,135 @@ router.get("/partners", async (req: AdminRequest, res) => {
     req.log.error({ error }, "Fleet partners failed");
     res.status(503).json({ error: "Gagal mengambil partner fleet." });
   }
+});
+
+
+router.post("/reports/preview", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req);
+    const content=typeof req.body?.content==="string"?req.body.content:"";
+    const fileName=typeof req.body?.fileName==="string"?req.body.fileName:"report.csv";
+    if(!content.trim()){res.status(400).json({error:"Isi file CSV tidak tersedia."});return;}
+    const parsed=parseGojekTransactionCsv(content);
+    const fileHash=createHash("sha256").update(content).digest("hex");
+    const dup=await pool.query("SELECT id,original_filename,status FROM public.fleet_reports WHERE company_id=$1 AND file_hash=$2 ORDER BY id DESC LIMIT 1",[cid,fileHash]);
+    res.json({
+      data:summarizeGojekRows(parsed.rows),
+      meta:{version:"standalone-v1",generatedAt:new Date().toISOString()},
+      fileHash,rowCount:parsed.rows.length,headers:parsed.headers,columnMapping:parsed.mapping,
+      previewRows:parsed.rows.slice(0,20).map(r=>r.raw),warnings:parsed.warnings,
+      duplicateReport:dup.rows[0]??null,fileName,
+    });
+  }catch(error){req.log.error({error},"Fleet report preview failed");res.status(400).json({error:error instanceof Error?error.message:"Gagal preview report."});}
+});
+
+router.post("/reports/upload", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req);
+    const content=typeof req.body?.content==="string"?req.body.content:"";
+    const fileName=typeof req.body?.fileName==="string"?req.body.fileName.slice(0,255):"report.csv";
+    const skipDuplicateCheck=req.body?.skipDuplicateCheck===true||req.body?.skipDuplicateCheck==="true";
+    if(!content.trim()){res.status(400).json({error:"Isi file CSV tidak tersedia."});return;}
+    const parsed=parseGojekTransactionCsv(content),fileHash=createHash("sha256").update(content).digest("hex");
+    if(!skipDuplicateCheck){
+      const dup=await client.query("SELECT id,original_filename,status FROM public.fleet_reports WHERE company_id=$1 AND file_hash=$2 ORDER BY id DESC LIMIT 1",[cid,fileHash]);
+      if(dup.rows[0]){res.status(409).json({error:"File yang sama sudah pernah diupload.",duplicateReportId:dup.rows[0].id});return;}
+    }
+    await client.query("BEGIN");
+    const report=await client.query<{id:number}>(
+      `INSERT INTO public.fleet_reports(company_id,partner_id,filename,original_filename,file_hash,report_type,period_start,period_end,status,row_count,processed_count,error_count,uploaded_by,uploaded_by_email,column_mapping,summary_stats,created_at,updated_at)
+       VALUES($1,$2,$3,$3,$4,'gojek_driver',$5,$6,'processing',$7,0,0,$8,$8,$9::jsonb,$10::jsonb,NOW(),NOW()) RETURNING id`,
+      [cid,Number(req.body?.partnerId)||null,fileName,fileHash,typeof req.body?.periodStart==="string"&&req.body.periodStart?req.body.periodStart:null,typeof req.body?.periodEnd==="string"&&req.body.periodEnd?req.body.periodEnd:null,parsed.rows.length,req.adminUser?.email??"unknown",JSON.stringify(parsed.mapping),JSON.stringify(summarizeGojekRows(parsed.rows))]);
+    const reportId=report.rows[0].id;
+    let rawInserted=0,successRows=0,failedRows=0;
+    for(let i=0;i<parsed.rows.length;i+=1){
+      const row=parsed.rows[i];
+      const raw=await client.query<{id:number}>(
+        `INSERT INTO public.gojek_raw_transactions(company_id,report_id,date_time_jkt,driver_external_id,driver_name,phone_number,vehicle,amount,total_outstanding_balance,transaction_type,gopay_transaction_reference_id,date,raw_json,service_type,driver_phone,vehicle_plate,date_iso)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12,$13::jsonb,$14,$6,$7,$15::date)
+         ON CONFLICT DO NOTHING RETURNING id`,
+        [cid,reportId,row.raw[parsed.mapping.txDate??""]??row.txDate,row.driverExtId||null,row.driverName,row.driverPhone||null,row.vehiclePlate||null,row.amount,row.outstanding,row.transactionType||null,row.gopayRef,row.txDate||null,JSON.stringify(row.raw),row.serviceType||null,row.txDate||null]);
+      if(!raw.rows[0]?.id) continue;
+      rawInserted+=1;
+      if(!row.txDate){
+        await client.query(`INSERT INTO public.gojek_failed_rows(report_id,company_id,raw_row_id,row_index,error_reason,error_stage,raw_data) VALUES($1,$2,$3,$4,'Tanggal transaksi tidak dapat diparse','transform',$5::jsonb)`,[reportId,cid,raw.rows[0].id,i+2,JSON.stringify(row.raw)]);
+        failedRows+=1; continue;
+      }
+      try{
+        await client.query(
+          `INSERT INTO public.fleet_transactions(company_id,report_id,driver_external_id,driver_name,vehicle_plate,transaction_date,trip_count,gross_revenue,incentive,commission,deduction,net_revenue,outstanding_balance,service_type,raw_data,amount,transaction_type,driver_phone,gopay_reference_id)
+           VALUES($1,$2,$3,$4,$5,$6,0,GREATEST($7,0),0,0,0,$7,$8,$9,$10::jsonb,$7,$11,$12,NULLIF($13,''))
+           ON CONFLICT DO NOTHING`,
+          [cid,reportId,row.driverExtId||null,row.driverName,row.vehiclePlate||null,row.txDate,row.amount,row.outstanding,row.serviceType||null,JSON.stringify(row.raw),row.transactionType||null,row.driverPhone||null,row.gopayRef]);
+        successRows+=1;
+      }catch(rowError){
+        await client.query(`INSERT INTO public.gojek_failed_rows(report_id,company_id,raw_row_id,row_index,error_reason,error_stage,raw_data) VALUES($1,$2,$3,$4,$5,'transform',$6::jsonb)`,[reportId,cid,raw.rows[0].id,i+2,rowError instanceof Error?rowError.message:"Transform gagal",JSON.stringify(row.raw)]);
+        failedRows+=1;
+      }
+    }
+    const status=failedRows===0?"done":successRows>0?"partial":"error";
+    await client.query("UPDATE public.fleet_reports SET status=$2,processed_count=$3,error_count=$4,updated_at=NOW() WHERE id=$1",[reportId,status,successRows,failedRows]);
+    await client.query("COMMIT");
+    res.status(201).json({reportId,message:`Upload selesai: ${successRows} berhasil, ${failedRows} gagal`,status});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report upload failed");res.status(500).json({error:error instanceof Error?error.message:"Upload report gagal."});}finally{client.release();}
+});
+
+router.get("/reports/:id/progress", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    const report=await pool.query("SELECT * FROM public.fleet_reports WHERE id=$1 AND company_id=$2 LIMIT 1",[id,cid]);
+    if(!report.rows[0]){res.status(404).json({error:"Report tidak ditemukan."});return;}
+    const [raw,dlq]=await Promise.all([
+      pool.query<{count:number}>("SELECT COUNT(*)::int count FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]),
+      pool.query<{count:number}>("SELECT COUNT(*)::int count FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2 AND resolved=false",[cid,id]),
+    ]);
+    const r=report.rows[0],failed=Number(r.error_count??0),success=Number(r.processed_count??0),total=Number(r.row_count??0),health=total?Math.max(0,Math.round((success/total)*100)):100;
+    res.json({reportId:id,status:r.status,rowCount:total,rawInserted:raw.rows[0]?.count??0,successRows:success,failedRows:failed,dlqCount:dlq.rows[0]?.count??0,healthScore:health,grade:health>=95?"A":health>=80?"B":health>=60?"C":health>=40?"D":"F",durationMs:null,updatedAt:r.updated_at});
+  }catch(error){req.log.error({error},"Fleet report progress failed");res.status(503).json({error:"Gagal mengambil progress."});}
+});
+
+router.post("/reports/:id/purge", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    await client.query("BEGIN");
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    const result=await client.query("UPDATE public.fleet_reports SET status='purged',processed_count=0,error_count=0,updated_at=NOW() WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
+    if(result.rowCount!==1){await client.query("ROLLBACK");res.status(404).json({error:"Report tidak ditemukan."});return;}
+    await client.query("COMMIT");res.json({ok:true});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report purge failed");res.status(503).json({error:"Gagal purge report."});}finally{client.release();}
+});
+
+router.delete("/reports/:id", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    await client.query("BEGIN");
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    const result=await client.query("DELETE FROM public.fleet_reports WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
+    if(result.rowCount!==1){await client.query("ROLLBACK");res.status(404).json({error:"Report tidak ditemukan."});return;}
+    await client.query("COMMIT");res.json({ok:true});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report rollback failed");res.status(503).json({error:"Gagal rollback report."});}finally{client.release();}
+});
+
+router.post("/reports/purge-all", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req);
+    await client.query("BEGIN");
+    const reports=await client.query<{count:number}>("SELECT COUNT(*)::int count FROM public.fleet_reports WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.fleet_reports WHERE company_id=$1",[cid]);
+    await client.query("COMMIT");
+    res.json({ok:true,message:`${reports.rows[0]?.count??0} report dan data turunannya dihapus.`,reportCount:reports.rows[0]?.count??0});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet purge-all failed");res.status(503).json({error:"Gagal menghapus seluruh report."});}finally{client.release();}
 });
 
 router.get("/reports", async (req: AdminRequest, res) => {
@@ -1826,6 +2036,501 @@ router.patch("/cash-payments/:id/cancel", async (req: AdminRequest, res) => {
   }finally{
     client.release();
   }
+});
+
+
+const FLEET_EXPENSE_TYPES = ["Ban","Perbaikan","Service Rutin","Asuransi","Bahan Bakar","Parkir","Tilang","Oli","Spare Part","Lainnya"] as const;
+
+async function ensureFleetOpsTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.fleet_expense_budgets (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      expense_type TEXT NOT NULL,
+      budget_month DATE NOT NULL,
+      budget_amount NUMERIC(18,2) NOT NULL CHECK (budget_amount >= 0),
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(company_id, expense_type, budget_month)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS fleet_expense_budgets_company_month_idx
+      ON public.fleet_expense_budgets(company_id,budget_month)
+  `);
+}
+
+router.get("/expenses", async (req: AdminRequest, res) => {
+  try {
+    const cid = companyId(req);
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const offset = (page - 1) * limit;
+    const dateFrom = typeof req.query.date_from === "string" ? req.query.date_from : null;
+    const dateTo = typeof req.query.date_to === "string" ? req.query.date_to : null;
+    const expenseType = typeof req.query.expense_type === "string" ? req.query.expense_type.trim() : "";
+    const vehicleId = Number(req.query.vehicle_id) || 0;
+
+    const [rows, count, totals, byType] = await Promise.all([
+      pool.query(
+        `SELECT e.*,v.plate AS vehicle_plate
+           FROM public.fleet_expenses e
+           LEFT JOIN public.fleet_vehicles v ON v.id=e.vehicle_id AND v.company_id=e.company_id
+          WHERE e.company_id=$1 AND e.deleted_at IS NULL
+            AND ($2::date IS NULL OR e.expense_date >= $2::date)
+            AND ($3::date IS NULL OR e.expense_date <= $3::date)
+            AND ($4='' OR e.expense_type=$4)
+            AND ($5=0 OR e.vehicle_id=$5)
+          ORDER BY e.expense_date DESC,e.id DESC
+          LIMIT $6 OFFSET $7`,
+        [cid,dateFrom,dateTo,expenseType,vehicleId,limit,offset],
+      ),
+      pool.query<{ count:number }>(
+        `SELECT COUNT(*)::int AS count FROM public.fleet_expenses e
+          WHERE e.company_id=$1 AND e.deleted_at IS NULL
+            AND ($2::date IS NULL OR e.expense_date >= $2::date)
+            AND ($3::date IS NULL OR e.expense_date <= $3::date)
+            AND ($4='' OR e.expense_type=$4)
+            AND ($5=0 OR e.vehicle_id=$5)`,
+        [cid,dateFrom,dateTo,expenseType,vehicleId],
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(amount),0)::numeric AS total_all,
+                COALESCE(SUM(amount) FILTER(WHERE date_trunc('month',expense_date)=date_trunc('month',CURRENT_DATE)),0)::numeric AS total_this_month
+           FROM public.fleet_expenses WHERE company_id=$1 AND deleted_at IS NULL`,
+        [cid],
+      ),
+      pool.query(
+        `SELECT expense_type,COALESCE(SUM(amount),0)::numeric AS total
+           FROM public.fleet_expenses
+          WHERE company_id=$1 AND deleted_at IS NULL
+          GROUP BY expense_type ORDER BY total DESC`,
+        [cid],
+      ),
+    ]);
+    res.json({ expenses:rows.rows,total:count.rows[0]?.count??0,page,limit,summary:{...(totals.rows[0]??{}),by_type:byType.rows} });
+  } catch(error) {
+    req.log.error({error},"Fleet expenses list failed");
+    res.status(503).json({error:"Gagal mengambil data pengeluaran fleet."});
+  }
+});
+
+router.post("/expenses", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const body=req.body??{};
+    const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
+    const amount=Number(body.amount);
+    const date=typeof body.expense_date==="string"?body.expense_date:"";
+    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)){
+      res.status(400).json({error:"Tanggal, jenis pengeluaran, dan nominal wajib valid."}); return;
+    }
+    const result=await pool.query(
+      `INSERT INTO public.fleet_expenses
+        (company_id,vehicle_id,expense_date,expense_type,description,amount,created_by,created_by_email,created_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$7,NOW(),NOW()) RETURNING *`,
+      [cid,Number(body.vehicle_id)||null,date,type,typeof body.description==="string"?body.description.trim()||null:null,amount,req.adminUser?.email??"unknown"],
+    );
+    res.status(201).json({ok:true,expense:result.rows[0]});
+  } catch(error){ req.log.error({error},"Fleet expense create failed"); res.status(503).json({error:"Gagal menyimpan pengeluaran."}); }
+});
+
+router.put("/expenses/:id", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id),body=req.body??{};
+    const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
+    const amount=Number(body.amount);
+    const date=typeof body.expense_date==="string"?body.expense_date:"";
+    if(!Number.isSafeInteger(id)||id<=0||!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)){
+      res.status(400).json({error:"Data pengeluaran tidak valid."}); return;
+    }
+    const result=await pool.query(
+      `UPDATE public.fleet_expenses SET vehicle_id=$3,expense_date=$4,expense_type=$5,description=$6,amount=$7,
+              updated_by=$8,updated_by_email=$8,updated_at=NOW()
+        WHERE id=$1 AND company_id=$2 AND deleted_at IS NULL RETURNING *`,
+      [id,cid,Number(body.vehicle_id)||null,date,type,typeof body.description==="string"?body.description.trim()||null:null,amount,req.adminUser?.email??"unknown"],
+    );
+    if(result.rowCount!==1){res.status(404).json({error:"Pengeluaran tidak ditemukan."});return;}
+    res.json({ok:true,expense:result.rows[0]});
+  }catch(error){req.log.error({error},"Fleet expense update failed");res.status(503).json({error:"Gagal memperbarui pengeluaran."});}
+});
+
+router.delete("/expenses/:id", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    const result=await pool.query(
+      "UPDATE public.fleet_expenses SET deleted_at=NOW(),updated_at=NOW() WHERE id=$1 AND company_id=$2 AND deleted_at IS NULL RETURNING id",
+      [id,cid],
+    );
+    if(result.rowCount!==1){res.status(404).json({error:"Pengeluaran tidak ditemukan."});return;}
+    res.json({ok:true});
+  }catch(error){req.log.error({error},"Fleet expense delete failed");res.status(503).json({error:"Gagal menghapus pengeluaran."});}
+});
+
+router.get("/expenses/budgets", async (req: AdminRequest, res) => {
+  try{
+    await ensureFleetOpsTables();
+    const cid=companyId(req);
+    const month=typeof req.query.month==="string"&&/^[0-9]{4}-[0-9]{2}$/.test(req.query.month)?req.query.month:new Date().toISOString().slice(0,7);
+    const result=await pool.query(
+      `WITH types(expense_type) AS (SELECT unnest($3::text[])),
+       actual AS (
+         SELECT expense_type,COALESCE(SUM(amount),0)::numeric actual_amount,COUNT(*)::int tx_count
+         FROM public.fleet_expenses
+         WHERE company_id=$1 AND deleted_at IS NULL AND to_char(expense_date,'YYYY-MM')=$2
+         GROUP BY expense_type
+       )
+       SELECT b.id,t.expense_type,$2::text AS budget_month,COALESCE(b.budget_amount,0)::numeric AS budget_amount,
+              COALESCE(a.actual_amount,0)::numeric AS actual_amount,COALESCE(a.tx_count,0)::int AS tx_count,
+              CASE WHEN COALESCE(b.budget_amount,0)>0 THEN ROUND((COALESCE(a.actual_amount,0)/b.budget_amount)*100,2) ELSE NULL END AS pct_used,
+              COALESCE(a.actual_amount,0)>COALESCE(b.budget_amount,0) AND COALESCE(b.budget_amount,0)>0 AS is_over,
+              COALESCE(a.actual_amount,0)>=COALESCE(b.budget_amount,0)*0.8 AND COALESCE(a.actual_amount,0)<=COALESCE(b.budget_amount,0) AND COALESCE(b.budget_amount,0)>0 AS is_warning,
+              b.id IS NOT NULL AS has_budget
+       FROM types t
+       LEFT JOIN public.fleet_expense_budgets b ON b.company_id=$1 AND b.expense_type=t.expense_type AND to_char(b.budget_month,'YYYY-MM')=$2
+       LEFT JOIN actual a ON a.expense_type=t.expense_type
+       ORDER BY t.expense_type`,
+      [cid,month,[...FLEET_EXPENSE_TYPES]],
+    );
+    const budgets=result.rows;
+    const summary={
+      total_budget:budgets.reduce((s,r)=>s+Number(r.budget_amount||0),0),
+      total_actual:budgets.reduce((s,r)=>s+Number(r.actual_amount||0),0),
+      over_count:budgets.filter(r=>r.is_over).length,
+      warning_count:budgets.filter(r=>r.is_warning).length,
+    };
+    res.json({month,budgets,summary});
+  }catch(error){req.log.error({error},"Fleet budgets failed");res.status(503).json({error:"Gagal mengambil anggaran fleet."});}
+});
+
+router.post("/expenses/budgets", async (req: AdminRequest, res) => {
+  try{
+    await ensureFleetOpsTables();
+    const cid=companyId(req),body=req.body??{};
+    const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
+    const month=typeof body.budget_month==="string"?body.budget_month:"";
+    const amount=Number(body.budget_amount);
+    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!/^[0-9]{4}-[0-9]{2}$/.test(month)||!Number.isFinite(amount)||amount<0){
+      res.status(400).json({error:"Data anggaran tidak valid."});return;
+    }
+    const result=await pool.query(
+      `INSERT INTO public.fleet_expense_budgets(company_id,expense_type,budget_month,budget_amount,created_by,updated_by)
+       VALUES($1,$2,($3||'-01')::date,$4,$5,$5)
+       ON CONFLICT(company_id,expense_type,budget_month)
+       DO UPDATE SET budget_amount=EXCLUDED.budget_amount,updated_by=EXCLUDED.updated_by,updated_at=NOW()
+       RETURNING *`,
+      [cid,type,month,amount,req.adminUser?.email??"unknown"],
+    );
+    res.json({ok:true,budget:result.rows[0]});
+  }catch(error){req.log.error({error},"Fleet budget save failed");res.status(503).json({error:"Gagal menyimpan anggaran."});}
+});
+
+router.delete("/expenses/budgets/:id", async (req: AdminRequest, res) => {
+  try{
+    await ensureFleetOpsTables();
+    const cid=companyId(req),id=Number(req.params.id);
+    const result=await pool.query("DELETE FROM public.fleet_expense_budgets WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
+    if(result.rowCount!==1){res.status(404).json({error:"Anggaran tidak ditemukan."});return;}
+    res.json({ok:true});
+  }catch(error){req.log.error({error},"Fleet budget delete failed");res.status(503).json({error:"Gagal menghapus anggaran."});}
+});
+
+router.get("/pipeline/monitor", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),page=Math.max(Number(req.query.page)||1,1),limit=Math.min(Math.max(Number(req.query.limit)||50,1),200),offset=(page-1)*limit;
+    const driverName=typeof req.query.driverName==="string"?req.query.driverName.trim():"";
+    const driverExtId=typeof req.query.driverExtId==="string"?req.query.driverExtId.trim():"";
+    const dateFrom=typeof req.query.dateFrom==="string"?req.query.dateFrom:null;
+    const dateTo=typeof req.query.dateTo==="string"?req.query.dateTo:null;
+    const transactionType=typeof req.query.transactionType==="string"?req.query.transactionType.trim():"";
+    const reportId=Number(req.query.reportId)||0;
+    const minDebit=Number(req.query.minDebit)||-50000;
+    const where=`company_id=$1
+      AND ($2='' OR COALESCE(driver_name,'') ILIKE '%'||$2||'%')
+      AND ($3='' OR COALESCE(driver_external_id,'') ILIKE '%'||$3||'%')
+      AND ($4::date IS NULL OR date_iso >= $4::date)
+      AND ($5::date IS NULL OR date_iso <= $5::date)
+      AND ($6='' OR COALESCE(transaction_type,'')=$6)
+      AND ($7=0 OR report_id=$7)`;
+    const args=[cid,driverName,driverExtId,dateFrom,dateTo,transactionType,reportId];
+    const [drivers,summary,count,types]=await Promise.all([
+      pool.query(
+        `SELECT COALESCE(driver_external_id,'') driver_external_id,MAX(driver_name) driver_name,MAX(COALESCE(driver_phone,phone_number)) phone_number,
+                MAX(COALESCE(vehicle_plate,vehicle)) vehicle,COUNT(*)::int tx_count,
+                COALESCE(SUM(CASE WHEN amount<0 THEN amount ELSE 0 END),0)::numeric total_debit,
+                COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0)::numeric total_credit,
+                COALESCE(SUM(amount),0)::numeric net_flow,
+                COALESCE((ARRAY_AGG(total_outstanding_balance ORDER BY date_iso DESC NULLS LAST,id DESC) FILTER(WHERE total_outstanding_balance IS NOT NULL))[1],0)::numeric latest_outstanding,
+                MIN(date_iso)::text date_first,MAX(date_iso)::text date_last,
+                COUNT(DISTINCT transaction_type)::int type_count,COUNT(DISTINCT gopay_transaction_reference_id)::int dedup_refs,
+                MAX(report_id)::int last_report_id,
+                COALESCE(SUM(CASE WHEN amount<0 THEN amount ELSE 0 END),0) <= $8 AS is_high_risk
+         FROM public.gojek_raw_transactions WHERE ${where}
+         GROUP BY COALESCE(driver_external_id,'')
+         ORDER BY total_debit ASC,MAX(driver_name)
+         LIMIT $9 OFFSET $10`,
+        [...args,minDebit,limit,offset],
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int total_rows,COUNT(DISTINCT driver_external_id)::int driver_count,
+                COUNT(DISTINCT COALESCE(vehicle_plate,vehicle))::int vehicle_count,
+                COALESCE(SUM(CASE WHEN amount<0 THEN amount ELSE 0 END),0)::numeric total_debit,
+                COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0)::numeric total_credit,
+                COALESCE(SUM(amount),0)::numeric net_flow
+         FROM public.gojek_raw_transactions WHERE ${where}`,args),
+      pool.query<{count:number}>(`SELECT COUNT(DISTINCT COALESCE(driver_external_id,''))::int count FROM public.gojek_raw_transactions WHERE ${where}`,args),
+      pool.query<{transaction_type:string}>(`SELECT DISTINCT transaction_type FROM public.gojek_raw_transactions WHERE company_id=$1 AND NULLIF(transaction_type,'') IS NOT NULL ORDER BY transaction_type`,[cid]),
+    ]);
+    res.json({drivers:drivers.rows,summary:summary.rows[0]??{},transactionTypes:types.rows.map(r=>r.transaction_type),pagination:{page,limit,offset,totalDrivers:count.rows[0]?.count??0},debitThreshold:minDebit});
+  }catch(error){req.log.error({error},"Fleet pipeline monitor failed");res.status(503).json({error:"Gagal memuat pipeline monitor."});}
+});
+
+
+router.get("/pipeline/export-csv", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req);
+    const driverName=typeof req.query.driverName==="string"?req.query.driverName.trim():"";
+    const driverExtId=typeof req.query.driverExtId==="string"?req.query.driverExtId.trim():"";
+    const dateFrom=typeof req.query.dateFrom==="string"?req.query.dateFrom:null;
+    const dateTo=typeof req.query.dateTo==="string"?req.query.dateTo:null;
+    const transactionType=typeof req.query.transactionType==="string"?req.query.transactionType.trim():"";
+    const reportId=Number(req.query.reportId)||0;
+    const mode=req.query.mode==="summary"?"summary":"detail";
+    let headers:string[]=[];
+    let rows:unknown[][]=[];
+    if(mode==="summary"){
+      const result=await pool.query(
+        `SELECT COALESCE(driver_external_id,'') AS driver_id,MAX(driver_name) AS driver_name,
+                MAX(COALESCE(driver_phone,phone_number)) AS phone,MAX(COALESCE(vehicle_plate,vehicle)) AS vehicle,
+                COUNT(*)::int AS tx_count,
+                COALESCE(SUM(CASE WHEN amount<0 THEN amount ELSE 0 END),0)::numeric AS total_debit,
+                COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0)::numeric AS total_credit,
+                COALESCE(SUM(amount),0)::numeric AS net_flow,
+                MAX(date_iso)::text AS last_date
+           FROM public.gojek_raw_transactions
+          WHERE company_id=$1
+            AND ($2='' OR COALESCE(driver_name,'') ILIKE '%'||$2||'%')
+            AND ($3='' OR COALESCE(driver_external_id,'') ILIKE '%'||$3||'%')
+            AND ($4::date IS NULL OR date_iso >= $4::date)
+            AND ($5::date IS NULL OR date_iso <= $5::date)
+            AND ($6='' OR COALESCE(transaction_type,'')=$6)
+            AND ($7=0 OR report_id=$7)
+          GROUP BY COALESCE(driver_external_id,'')
+          ORDER BY total_debit ASC`,
+        [cid,driverName,driverExtId,dateFrom,dateTo,transactionType,reportId]);
+      headers=["Driver ID","Driver Name","Phone","Vehicle","Transaction Count","Total Debit","Total Credit","Net Flow","Last Date"];
+      rows=result.rows.map(r=>[r.driver_id,r.driver_name,r.phone,r.vehicle,r.tx_count,r.total_debit,r.total_credit,r.net_flow,r.last_date]);
+    }else{
+      const result=await pool.query(
+        `SELECT id,report_id,date_iso,driver_external_id,driver_name,COALESCE(driver_phone,phone_number) phone,
+                COALESCE(vehicle_plate,vehicle) vehicle,transaction_type,amount,total_outstanding_balance,gopay_transaction_reference_id,service_type
+           FROM public.gojek_raw_transactions
+          WHERE company_id=$1
+            AND ($2='' OR COALESCE(driver_name,'') ILIKE '%'||$2||'%')
+            AND ($3='' OR COALESCE(driver_external_id,'') ILIKE '%'||$3||'%')
+            AND ($4::date IS NULL OR date_iso >= $4::date)
+            AND ($5::date IS NULL OR date_iso <= $5::date)
+            AND ($6='' OR COALESCE(transaction_type,'')=$6)
+            AND ($7=0 OR report_id=$7)
+          ORDER BY date_iso DESC NULLS LAST,id DESC LIMIT 100000`,
+        [cid,driverName,driverExtId,dateFrom,dateTo,transactionType,reportId]);
+      headers=["ID","Report ID","Date","Driver ID","Driver Name","Phone","Vehicle","Transaction Type","Amount","Outstanding","GoPay Ref","Service"];
+      rows=result.rows.map(r=>[r.id,r.report_id,r.date_iso,r.driver_external_id,r.driver_name,r.phone,r.vehicle,r.transaction_type,r.amount,r.total_outstanding_balance,r.gopay_transaction_reference_id,r.service_type]);
+    }
+    const esc=(v:unknown)=>{const s=String(v??"");return /[",\n\r]/.test(s)?`"${s.replaceAll('"','""')}"`:s;};
+    const csv=[headers.map(esc).join(","),...rows.map(row=>row.map(esc).join(","))].join("\r\n");
+    res.setHeader("Content-Type","text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition",`attachment; filename="fleet-${mode}-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.send("\uFEFF"+csv);
+  }catch(error){req.log.error({error},"Fleet pipeline export failed");res.status(503).json({error:"Export pipeline gagal."});}
+});
+
+router.get("/pipeline/dlq", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),page=Math.max(Number(req.query.page)||1,1),limit=Math.min(Math.max(Number(req.query.limit)||50,1),200),offset=(page-1)*limit;
+    const resolved=String(req.query.resolved??"false")==="true";
+    const reportId=Number(req.query.reportId)||0;
+    const [rows,summary]=await Promise.all([
+      pool.query(
+        `SELECT f.*,r.original_filename FROM public.gojek_failed_rows f
+         LEFT JOIN public.fleet_reports r ON r.id=f.report_id
+         WHERE f.company_id=$1 AND f.resolved=$2 AND ($3=0 OR f.report_id=$3)
+         ORDER BY f.created_at DESC,f.id DESC LIMIT $4 OFFSET $5`,
+        [cid,resolved,reportId,limit,offset]),
+      pool.query(
+        `SELECT COUNT(*)::text total,COUNT(*) FILTER(WHERE error_stage='transform')::text transform_errors
+         FROM public.gojek_failed_rows WHERE company_id=$1 AND resolved=$2 AND ($3=0 OR report_id=$3)`,
+        [cid,resolved,reportId]),
+    ]);
+    res.json({failedRows:rows.rows,summary:summary.rows[0]??{total:"0",transform_errors:"0"}});
+  }catch(error){req.log.error({error},"Fleet DLQ list failed");res.status(503).json({error:"Gagal mengambil DLQ."});}
+});
+
+router.post("/pipeline/dlq/resolve-all/:reportId", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),reportId=Number(req.params.reportId);
+    const result=await pool.query(
+      `UPDATE public.gojek_failed_rows SET resolved=true,resolved_at=NOW()
+       WHERE company_id=$1 AND report_id=$2 AND resolved=false RETURNING id`,[cid,reportId]);
+    res.json({ok:true,resolvedCount:result.rowCount??0});
+  }catch(error){req.log.error({error},"Fleet DLQ resolve-all failed");res.status(503).json({error:"Gagal resolve DLQ."});}
+});
+
+router.post("/pipeline/dlq/:id/retry", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    await client.query("BEGIN");
+    const failed=await client.query(
+      `SELECT f.*,r.* FROM public.gojek_failed_rows f
+       LEFT JOIN public.gojek_raw_transactions r ON r.id=f.raw_row_id
+       WHERE f.id=$1 AND f.company_id=$2 AND f.resolved=false FOR UPDATE OF f`,[id,cid]);
+    const row=failed.rows[0] as Record<string,unknown>|undefined;
+    if(!row){await client.query("ROLLBACK");res.status(404).json({error:"Baris DLQ tidak ditemukan."});return;}
+    if(!row.raw_row_id){await client.query("ROLLBACK");res.status(409).json({error:"DLQ tidak memiliki raw_row_id untuk retry aman."});return;}
+    await client.query(
+      `INSERT INTO public.fleet_transactions
+       (company_id,report_id,driver_external_id,driver_name,vehicle_plate,transaction_date,trip_count,gross_revenue,net_revenue,outstanding_balance,service_type,raw_data,amount,transaction_type,driver_phone,gopay_reference_id)
+       VALUES($1,$2,$3,$4,$5,$6,0,GREATEST(COALESCE($7,0),0),COALESCE($7,0),COALESCE($8,0),$9,$10,$7,$11,$12,$13)
+       ON CONFLICT DO NOTHING`,
+      [cid,row.report_id,row.driver_external_id,row.driver_name,row.vehicle_plate??row.vehicle,row.date_iso,row.amount,row.total_outstanding_balance,row.service_type,row.raw_json??row.raw_data,row.transaction_type,row.driver_phone??row.phone_number,row.gopay_transaction_reference_id],
+    );
+    await client.query("UPDATE public.gojek_failed_rows SET resolved=true,resolved_at=NOW(),retry_count=retry_count+1 WHERE id=$1",[id]);
+    await client.query("COMMIT");
+    res.json({ok:true});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet DLQ retry failed");res.status(503).json({error:"Retry DLQ gagal."});}finally{client.release();}
+});
+
+router.post("/pipeline/reconcile", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),onlyReport=Number(req.body?.reportId)||0;
+    const reports=await pool.query<{id:number}>(
+      `SELECT id FROM public.fleet_reports WHERE company_id=$1 AND ($2=0 OR id=$2) ORDER BY id DESC LIMIT 200`,[cid,onlyReport]);
+    const reconciliation:Record<string,unknown>[]=[];
+    for(const rpt of reports.rows){
+      const [raw,tx,dlq]=await Promise.all([
+        pool.query(`SELECT COUNT(*)::int count,COALESCE(SUM(amount),0)::numeric amount FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2`,[cid,rpt.id]),
+        pool.query(`SELECT COUNT(*)::int count,COALESCE(SUM(amount),0)::numeric amount FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2`,[cid,rpt.id]),
+        pool.query(`SELECT COUNT(*)::int count FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2 AND resolved=false`,[cid,rpt.id]),
+      ]);
+      const rawCount=Number(raw.rows[0]?.count??0),txCount=Number(tx.rows[0]?.count??0),dlqCount=Number(dlq.rows[0]?.count??0);
+      const rawAmountSum=Number(raw.rows[0]?.amount??0),txAmountSum=Number(tx.rows[0]?.amount??0);
+      const missingRows=Math.max(rawCount-txCount-dlqCount,0),excessRows=Math.max(txCount+dlqCount-rawCount,0);
+      const amountMismatch=Math.abs(rawAmountSum-txAmountSum)>0.01;
+      const score=Math.max(0,100-Math.min(50,missingRows*5)-Math.min(20,excessRows*5)-(amountMismatch?20:0));
+      const grade=score>=95?"A":score>=80?"B":score>=60?"C":score>=40?"D":"F";
+      const mismatches:string[]=[];
+      if(missingRows)mismatches.push(`${missingRows} raw row belum transformed/DLQ`);
+      if(excessRows)mismatches.push(`${excessRows} transformed row berlebih`);
+      if(amountMismatch)mismatches.push(`Selisih amount Rp ${Math.round(rawAmountSum-txAmountSum).toLocaleString("id-ID")}`);
+      reconciliation.push({reportId:rpt.id,rawCount,txCount,dlqCount,missingRows,excessRows,amountMismatch,rawAmountSum,txAmountSum,mismatches,status:mismatches.length?"mismatch":"ok",healthScore:score,healthGrade:grade});
+      await pool.query(
+        `INSERT INTO public.fleet_reconciliation_reports(company_id,report_id,reconcile_date,raw_count,ledger_count,matched_count,unmatched_raw,unmatched_ledger,total_raw_amount,total_ledger_amount,variance,status,notes)
+         VALUES($1,$2,CURRENT_DATE,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [cid,rpt.id,rawCount,txCount,Math.min(rawCount,txCount),missingRows,excessRows,rawAmountSum,txAmountSum,rawAmountSum-txAmountSum,mismatches.length?"mismatch":"ok",mismatches.join("; ")||null],
+      );
+    }
+    const ok=reconciliation.filter(r=>r.status==="ok").length,mismatch=reconciliation.length-ok;
+    const totalMissing=reconciliation.reduce((s,r)=>s+Number(r.missingRows||0),0);
+    const totalAmountMismatches=reconciliation.filter(r=>r.amountMismatch).length;
+    const avgHealthScore=reconciliation.length?Math.round(reconciliation.reduce((s,r)=>s+Number(r.healthScore||0),0)/reconciliation.length):100;
+    res.json({reconciliation,summary:{totalReports:reconciliation.length,ok,mismatch,totalMissing,totalAmountMismatches,avgHealthScore}});
+  }catch(error){req.log.error({error},"Fleet pipeline reconciliation failed");res.status(503).json({error:"Rekonsiliasi pipeline gagal."});}
+});
+
+router.get("/row-diff/reports", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req);
+    const result=await pool.query(
+      `SELECT r.id report_id,r.original_filename file_name,r.created_at uploaded_at,
+              (SELECT COUNT(*) FROM public.gojek_raw_transactions x WHERE x.company_id=$1 AND x.report_id=r.id)::int raw_count,
+              (SELECT COUNT(*) FROM public.fleet_transactions x WHERE x.company_id=$1 AND x.report_id=r.id)::int tx_count
+       FROM public.fleet_reports r WHERE r.company_id=$1 ORDER BY r.id DESC LIMIT 200`,[cid]);
+    res.json({reports:result.rows});
+  }catch(error){req.log.error({error},"Fleet row diff reports failed");res.status(503).json({error:"Gagal mengambil daftar report."});}
+});
+
+router.get("/row-diff", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),reportId=Number(req.query.reportId);
+    if(!reportId){res.status(400).json({error:"reportId wajib."});return;}
+    const [raw,tx]=await Promise.all([
+      pool.query(`SELECT * FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2 ORDER BY id`,[cid,reportId]),
+      pool.query(`SELECT * FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2 ORDER BY id`,[cid,reportId]),
+    ]);
+    const txRows=tx.rows as Record<string,unknown>[],used=new Set<number>();
+    const matched:Record<string,unknown>[]=[],missingInTx:Record<string,unknown>[]=[];
+    for(const rr of raw.rows as Record<string,unknown>[]){
+      const ref=String(rr.gopay_transaction_reference_id??"");
+      let idx=ref?txRows.findIndex((t,i)=>!used.has(i)&&String(t.gopay_reference_id??"")===ref):-1;
+      let method="gopay_ref";
+      if(idx<0){
+        idx=txRows.findIndex((t,i)=>!used.has(i)&&String(t.driver_external_id??"")===String(rr.driver_external_id??"")&&String(t.transaction_date??"").slice(0,10)===String(rr.date_iso??"").slice(0,10)&&String(t.transaction_type??"")===String(rr.transaction_type??""));
+        method="fallback";
+      }
+      if(idx<0){
+        missingInTx.push({rawId:rr.id,gopayRef:rr.gopay_transaction_reference_id??null,driverExternalId:rr.driver_external_id??"",driverName:rr.driver_name??"",dateIso:rr.date_iso??"",transactionType:rr.transaction_type??"",rawAmount:Number(rr.amount??0),rawOutstanding:Number(rr.total_outstanding_balance??0),vehicle:rr.vehicle_plate??rr.vehicle??"",serviceType:rr.service_type??"",dateTimeJkt:rr.date_time_jkt??""});
+        continue;
+      }
+      used.add(idx); const tt=txRows[idx];
+      const rawAmount=Number(rr.amount??0),txAmount=Number(tt.amount??tt.net_revenue??0),rawOut=Number(rr.total_outstanding_balance??0),txOut=Number(tt.outstanding_balance??0),delta=txAmount-rawAmount;
+      matched.push({rawId:rr.id,txId:tt.id,gopayRef:rr.gopay_transaction_reference_id??null,driverExternalId:rr.driver_external_id??"",driverName:rr.driver_name??"",dateIso:rr.date_iso??"",txDate:tt.transaction_date??"",transactionType:rr.transaction_type??"",rawAmount,txAmount,delta,amountMismatch:Math.abs(delta)>0.01,rawOutstanding:rawOut,txOutstanding:txOut,outstandingMismatch:Math.abs(rawOut-txOut)>0.01,matchMethod:method});
+    }
+    const excessInTx=txRows.map((tt,i)=>({tt,i})).filter(x=>!used.has(x.i)).map(({tt})=>({txId:tt.id,gopayRef:tt.gopay_reference_id??null,driverExternalId:tt.driver_external_id??"",driverName:tt.driver_name??"",txDate:tt.transaction_date??"",transactionType:tt.transaction_type??"",txAmount:Number(tt.amount??tt.net_revenue??0),txOutstanding:Number(tt.outstanding_balance??0),vehiclePlate:tt.vehicle_plate??"",serviceType:tt.service_type??""}));
+    const totalRawAmount=(raw.rows as Record<string,unknown>[]).reduce((s,r)=>s+Number(r.amount??0),0),totalTxAmount=txRows.reduce((s,r)=>s+Number(r.amount??r.net_revenue??0),0);
+    const amountMismatchCount=matched.filter(m=>m.amountMismatch).length;
+    res.json({reportId,summary:{rawCount:raw.rowCount??0,txCount:tx.rowCount??0,matchedCount:matched.length,missingCount:missingInTx.length,excessCount:excessInTx.length,amountMismatchCount,totalRawAmount,totalTxAmount,totalDelta:totalTxAmount-totalRawAmount,totalMismatchDelta:matched.filter(m=>m.amountMismatch).reduce((s,m)=>s+Number(m.delta||0),0)},matched,missingInTx,excessInTx});
+  }catch(error){req.log.error({error},"Fleet row diff failed");res.status(503).json({error:"Row diff gagal."});}
+});
+
+router.get("/accounting/journals", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),status=typeof req.query.status==="string"&&req.query.status!=="all"?req.query.status:"",limit=Math.min(Math.max(Number(req.query.limit)||100,1),200);
+    const result=await pool.query(`SELECT * FROM public.fleet_accounting_journals WHERE company_id=$1 AND ($2='' OR status=$2) ORDER BY journal_date DESC,id DESC LIMIT $3`,[cid,status,limit]);
+    res.json({journals:result.rows,total:result.rows.length});
+  }catch(error){req.log.error({error},"Fleet accounting journals failed");res.status(503).json({error:"Gagal mengambil jurnal fleet."});}
+});
+
+router.post("/accounting/journals/generate", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),body=req.body??{},from=String(body.periodStart??""),to=String(body.periodEnd??""),ppnRate=Number(body.ppnRate??11);
+    if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(from)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(to)||from>to||!Number.isFinite(ppnRate)||ppnRate<0||ppnRate>100){res.status(400).json({error:"Periode/PPN tidak valid."});return;}
+    const agg=await pool.query(
+      `SELECT COALESCE(SUM(gross_revenue),0)::numeric gross,COALESCE(SUM(net_revenue),0)::numeric net,
+              COALESCE(SUM(commission),0)::numeric commission,COALESCE(SUM(incentive),0)::numeric incentive,
+              COALESCE(SUM(outstanding_balance),0)::numeric outstanding
+       FROM public.fleet_transactions WHERE company_id=$1 AND transaction_date BETWEEN $2::date AND $3::date`,[cid,from,to]);
+    const a=agg.rows[0]??{},gross=Number(a.gross??0),net=Number(a.net??0),commission=Number(a.commission??0),incentive=Number(a.incentive??0),outstanding=Number(a.outstanding??0);
+    const ppn=gross*(ppnRate/100),ref=`FLT-${from.replaceAll("-","")}-${to.replaceAll("-","")}`;
+    const existing=await pool.query("SELECT * FROM public.fleet_accounting_journals WHERE company_id=$1 AND reference_no=$2 LIMIT 1",[cid,ref]);
+    if(existing.rows[0]){res.json({ok:true,journal:existing.rows[0],idempotent:true});return;}
+    const result=await pool.query(
+      `INSERT INTO public.fleet_accounting_journals(company_id,journal_date,reference_no,status,journal_type,gross_revenue,outstanding_amount,driver_payout,ppn_amount,ppn_rate,net_revenue,commission_total,incentive_total,period_start,period_end,created_by,notes,raw_stats)
+       VALUES($1,CURRENT_DATE,$2,'draft','fleet_revenue',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) RETURNING *`,
+      [cid,ref,gross,outstanding,Math.max(gross-net,0),ppn,ppnRate,net,commission,incentive,from,to,req.adminUser?.email??"unknown",typeof body.notes==="string"?body.notes:null,JSON.stringify({source:"fleet_transactions",generatedAt:new Date().toISOString()})]);
+    res.status(201).json({ok:true,journal:result.rows[0]});
+  }catch(error){req.log.error({error},"Fleet journal generate failed");res.status(503).json({error:"Gagal generate jurnal fleet."});}
+});
+
+router.put("/accounting/journals/:id/approve", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    const result=await pool.query(`UPDATE public.fleet_accounting_journals SET status='approved',approved_by=$3,approved_at=NOW(),updated_at=NOW() WHERE id=$1 AND company_id=$2 AND status='draft' RETURNING *`,[id,cid,req.adminUser?.email??"unknown"]);
+    if(result.rowCount!==1){res.status(409).json({error:"Jurnal tidak ditemukan atau bukan draft."});return;}
+    res.json({ok:true,journal:result.rows[0]});
+  }catch(error){req.log.error({error},"Fleet journal approve failed");res.status(503).json({error:"Gagal approve jurnal."});}
+});
+
+router.put("/accounting/journals/:id/post", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    const journal=await pool.query("SELECT * FROM public.fleet_accounting_journals WHERE id=$1 AND company_id=$2 LIMIT 1",[id,cid]);
+    if(!journal.rows[0]){res.status(404).json({error:"Jurnal tidak ditemukan."});return;}
+    if(journal.rows[0].status!=="approved"){res.status(409).json({error:"Jurnal harus berstatus approved sebelum posting."});return;}
+    res.status(409).json({error:"Posting Fleet ke Central Finance belum diaktifkan. Jurnal tetap approved agar tidak membuat posting ganda atau bentrok dengan Central Finance."});
+  }catch(error){req.log.error({error},"Fleet journal post guard failed");res.status(503).json({error:"Gagal memvalidasi posting jurnal."});}
 });
 
 router.get("/validation/report", async (req: AdminRequest, res) => {

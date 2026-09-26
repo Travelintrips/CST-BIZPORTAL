@@ -35,6 +35,30 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain("public.fleet_vehicles");
   });
 
+  it("restores expenses, transaction upload, pipeline, DLQ and reconciliation APIs", () => {
+    for (const route of [
+      'router.get("/expenses"',
+      'router.post("/expenses"',
+      'router.get("/expenses/budgets"',
+      'router.post("/expenses/budgets"',
+      'router.post("/reports/preview"',
+      'router.post("/reports/upload"',
+      'router.get("/reports/:id/progress"',
+      'router.get("/pipeline/monitor"',
+      'router.get("/pipeline/export-csv"',
+      'router.get("/pipeline/dlq"',
+      'router.post("/pipeline/reconcile"',
+      'router.get("/row-diff/reports"',
+      'router.get("/row-diff"',
+      'router.get("/accounting/journals"',
+      'router.post("/accounting/journals/generate"',
+      'router.put("/accounting/journals/:id/approve"',
+      'router.put("/accounting/journals/:id/post"',
+    ]) expect(fleetRoute).toContain(route);
+    expect(fleetRoute).toContain("Posting Fleet ke Central Finance belum diaktifkan");
+    expect(fleetRoute).not.toContain("insert into public.accounting_entries");
+  });
+
   it("restores the operational Fleet surfaces used by BizPortal pages", () => {
     for (const route of [
       'router.get("/transactions"',

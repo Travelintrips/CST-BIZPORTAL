@@ -111,7 +111,7 @@ export default function PipelineMonitorPage() {
     setPage(1);
   }
 
-  async function exportExcel(mode: "detail" | "summary") {
+  async function exportCsv(mode: "detail" | "summary") {
     setExporting(true);
     try {
       const p = new URLSearchParams();
@@ -123,13 +123,13 @@ export default function PipelineMonitorPage() {
       if (applied.reportId)        p.set("reportId", applied.reportId);
       if (mode === "summary")      p.set("mode", "summary");
 
-      const res = await fetch(`${BASE}/pipeline/export-excel?${p.toString()}`, { credentials: "include" });
+      const res = await fetch(`${BASE}/pipeline/export-csv?${p.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error("Export gagal");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = mode === "summary" ? `fleet-driver-summary-${Date.now()}.xlsx` : `fleet-transactions-${Date.now()}.xlsx`;
+      a.download = mode === "summary" ? `fleet-driver-summary-${Date.now()}.csv` : `fleet-transactions-${Date.now()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success("Export berhasil diunduh");
@@ -167,21 +167,21 @@ export default function PipelineMonitorPage() {
               variant="outline"
               size="sm"
               className="border-slate-600 text-slate-300 hover:text-white gap-1.5"
-              onClick={() => exportExcel("summary")}
+              onClick={() => exportCsv("summary")}
               disabled={exporting}
             >
               {exporting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-              Export Summary
+              Export Summary CSV
             </Button>
             <Button
               variant="outline"
               size="sm"
               className="border-slate-600 text-slate-300 hover:text-white gap-1.5"
-              onClick={() => exportExcel("detail")}
+              onClick={() => exportCsv("detail")}
               disabled={exporting}
             >
               {exporting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-              Export Detail
+              Export Detail CSV
             </Button>
             <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white" onClick={() => refetch()}>
               <RefreshCw className="w-4 h-4" />
