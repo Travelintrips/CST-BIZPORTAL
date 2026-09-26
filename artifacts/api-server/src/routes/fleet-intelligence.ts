@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
 import { authenticateAdmin, type AdminRequest } from "./admin-auth";
 
@@ -129,6 +130,86 @@ function parseSnapshotCsv(content: string): Array<Omit<SnapshotRow, "match_statu
       status: statusIdx >= 0 ? String(cells[statusIdx] ?? "").trim() : "Active",
     };
   }).filter((row) => row.driver_name);
+}
+
+
+type GojekTransactionRow = {
+  driverName: string;
+  driverExtId: string;
+  driverPhone: string;
+  txDate: string;
+  vehiclePlate: string;
+  amount: number;
+  outstanding: number;
+  transactionType: string;
+  gopayRef: string;
+  serviceType: string;
+  raw: Record<string,string>;
+};
+
+function parseGojekTransactionCsv(content: string) {
+  const lines=content.replace(/^\uFEFF/,"").split(/\r?\n/).filter(line=>line.trim());
+  if(lines.length<2) return {headers:[] as string[],rows:[] as GojekTransactionRow[],mapping:{} as Record<string,string|null>,warnings:["File tidak memiliki data."]};
+  const headers=csvCells(lines[0]).map(h=>h.trim());
+  const normalized=headers.map(h=>h.toLowerCase().replace(/[()]/g,"").replace(/[_-]+/g," ").replace(/\s+/g," ").trim());
+  const find=(...names:string[])=>normalized.findIndex(h=>names.includes(h));
+  const idx={
+    driverName:find("driver name","nama driver","driver"),
+    driverExtId:find("driver id","driver external id","driver externalid","id driver"),
+    driverPhone:find("phone number","driver phone","phone","no hp","nomor telepon"),
+    txDate:find("date time jkt","date time","datetime","transaction date","tanggal waktu","tanggal"),
+    simpleDate:find("date","tanggal"),
+    vehiclePlate:find("vehicle","vehicle plate","license plate","plat kendaraan","plate"),
+    amount:find("amount","nominal","transaction amount"),
+    outstanding:find("total outstanding balance","outstanding","outstanding balance"),
+    transactionType:find("transaction type","jenis transaksi","type"),
+    gopayRef:find("gopay transaction reference id","gopay reference id","gopay ref id","reference id"),
+    serviceType:find("service type","service","layanan"),
+  };
+  if(idx.driverName<0||idx.amount<0) throw new Error("CSV transaksi wajib memiliki kolom Driver Name dan Amount.");
+  const mapping:Record<string,string|null>={};
+  for(const [key,index] of Object.entries(idx)) mapping[key]=index>=0?headers[index]:null;
+  const warnings:string[]=[];
+  if(idx.gopayRef<0) warnings.push("GoPay Reference ID tidak ditemukan; dedup akan memakai fallback.");
+  if(idx.driverExtId<0) warnings.push("Driver ID tidak ditemukan.");
+  const rows=lines.slice(1).map(line=>{
+    const cells=csvCells(line),raw:Record<string,string>={};
+    headers.forEach((h,i)=>{raw[h]=cells[i]??"";});
+    const dateRaw=String(cells[idx.txDate>=0?idx.txDate:idx.simpleDate]??"").trim();
+    let txDate="";
+    const iso=dateRaw.match(/(20\d{2})[-\/]([01]?\d)[-\/]([0-3]?\d)/);
+    const dmy=dateRaw.match(/([0-3]?\d)[-\/]([01]?\d)[-\/](20\d{2})/);
+    if(iso) txDate=`${iso[1]}-${String(iso[2]).padStart(2,"0")}-${String(iso[3]).padStart(2,"0")}`;
+    else if(dmy) txDate=`${dmy[3]}-${String(dmy[2]).padStart(2,"0")}-${String(dmy[1]).padStart(2,"0")}`;
+    return {
+      driverName:String(cells[idx.driverName]??"").trim(),
+      driverExtId:idx.driverExtId>=0?String(cells[idx.driverExtId]??"").trim():"",
+      driverPhone:idx.driverPhone>=0?cleanPhone(cells[idx.driverPhone]):"",
+      txDate,
+      vehiclePlate:idx.vehiclePlate>=0?String(cells[idx.vehiclePlate]??"").trim():"",
+      amount:numberValue(cells[idx.amount]),
+      outstanding:idx.outstanding>=0?numberValue(cells[idx.outstanding]):0,
+      transactionType:idx.transactionType>=0?String(cells[idx.transactionType]??"").trim():"",
+      gopayRef:idx.gopayRef>=0?String(cells[idx.gopayRef]??"").trim():"",
+      serviceType:idx.serviceType>=0?String(cells[idx.serviceType]??"").trim():"",
+      raw,
+    };
+  }).filter(r=>r.driverName||r.driverExtId||r.amount!==0);
+  return {headers,rows,mapping,warnings};
+}
+
+function summarizeGojekRows(rows:GojekTransactionRow[]) {
+  const typeBreakdown:Record<string,{count:number;total:number}>={};
+  let totalCredit=0,totalDebit=0;
+  const drivers=new Set<string>(),vehicles=new Set<string>();
+  for(const row of rows){
+    if(row.amount>=0) totalCredit+=row.amount; else totalDebit+=row.amount;
+    if(row.driverExtId||row.driverName) drivers.add(row.driverExtId||row.driverName);
+    if(row.vehiclePlate) vehicles.add(row.vehiclePlate);
+    const key=row.transactionType||"Unknown";
+    const current=typeBreakdown[key]??{count:0,total:0}; current.count+=1; current.total+=row.amount; typeBreakdown[key]=current;
+  }
+  return {transactionCount:rows.length,totalCredit,totalDebit,netFlow:totalCredit+totalDebit,vehicleCoverage:vehicles.size,driverCoverage:drivers.size,typeBreakdown};
 }
 
 async function ensureFleetTables(): Promise<void> {
@@ -841,6 +922,135 @@ router.get("/partners", async (req: AdminRequest, res) => {
     req.log.error({ error }, "Fleet partners failed");
     res.status(503).json({ error: "Gagal mengambil partner fleet." });
   }
+});
+
+
+router.post("/reports/preview", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req);
+    const content=typeof req.body?.content==="string"?req.body.content:"";
+    const fileName=typeof req.body?.fileName==="string"?req.body.fileName:"report.csv";
+    if(!content.trim()){res.status(400).json({error:"Isi file CSV tidak tersedia."});return;}
+    const parsed=parseGojekTransactionCsv(content);
+    const fileHash=createHash("sha256").update(content).digest("hex");
+    const dup=await pool.query("SELECT id,original_filename,status FROM public.fleet_reports WHERE company_id=$1 AND file_hash=$2 ORDER BY id DESC LIMIT 1",[cid,fileHash]);
+    res.json({
+      data:summarizeGojekRows(parsed.rows),
+      meta:{version:"standalone-v1",generatedAt:new Date().toISOString()},
+      fileHash,rowCount:parsed.rows.length,headers:parsed.headers,columnMapping:parsed.mapping,
+      previewRows:parsed.rows.slice(0,20).map(r=>r.raw),warnings:parsed.warnings,
+      duplicateReport:dup.rows[0]??null,fileName,
+    });
+  }catch(error){req.log.error({error},"Fleet report preview failed");res.status(400).json({error:error instanceof Error?error.message:"Gagal preview report."});}
+});
+
+router.post("/reports/upload", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req);
+    const content=typeof req.body?.content==="string"?req.body.content:"";
+    const fileName=typeof req.body?.fileName==="string"?req.body.fileName.slice(0,255):"report.csv";
+    const skipDuplicateCheck=req.body?.skipDuplicateCheck===true||req.body?.skipDuplicateCheck==="true";
+    if(!content.trim()){res.status(400).json({error:"Isi file CSV tidak tersedia."});return;}
+    const parsed=parseGojekTransactionCsv(content),fileHash=createHash("sha256").update(content).digest("hex");
+    if(!skipDuplicateCheck){
+      const dup=await client.query("SELECT id,original_filename,status FROM public.fleet_reports WHERE company_id=$1 AND file_hash=$2 ORDER BY id DESC LIMIT 1",[cid,fileHash]);
+      if(dup.rows[0]){res.status(409).json({error:"File yang sama sudah pernah diupload.",duplicateReportId:dup.rows[0].id});return;}
+    }
+    await client.query("BEGIN");
+    const report=await client.query<{id:number}>(
+      `INSERT INTO public.fleet_reports(company_id,partner_id,filename,original_filename,file_hash,report_type,period_start,period_end,status,row_count,processed_count,error_count,uploaded_by,uploaded_by_email,column_mapping,summary_stats,created_at,updated_at)
+       VALUES($1,$2,$3,$3,$4,'gojek_driver',$5,$6,'processing',$7,0,0,$8,$8,$9::jsonb,$10::jsonb,NOW(),NOW()) RETURNING id`,
+      [cid,Number(req.body?.partnerId)||null,fileName,fileHash,typeof req.body?.periodStart==="string"&&req.body.periodStart?req.body.periodStart:null,typeof req.body?.periodEnd==="string"&&req.body.periodEnd?req.body.periodEnd:null,parsed.rows.length,req.adminUser?.email??"unknown",JSON.stringify(parsed.mapping),JSON.stringify(summarizeGojekRows(parsed.rows))]);
+    const reportId=report.rows[0].id;
+    let rawInserted=0,successRows=0,failedRows=0;
+    for(let i=0;i<parsed.rows.length;i+=1){
+      const row=parsed.rows[i];
+      const raw=await client.query<{id:number}>(
+        `INSERT INTO public.gojek_raw_transactions(company_id,report_id,date_time_jkt,driver_external_id,driver_name,phone_number,vehicle,amount,total_outstanding_balance,transaction_type,gopay_transaction_reference_id,date,raw_json,service_type,driver_phone,vehicle_plate,date_iso)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12,$13::jsonb,$14,$6,$7,$15::date)
+         ON CONFLICT DO NOTHING RETURNING id`,
+        [cid,reportId,row.raw[parsed.mapping.txDate??""]??row.txDate,row.driverExtId||null,row.driverName,row.driverPhone||null,row.vehiclePlate||null,row.amount,row.outstanding,row.transactionType||null,row.gopayRef,row.txDate||null,JSON.stringify(row.raw),row.serviceType||null,row.txDate||null]);
+      if(!raw.rows[0]?.id) continue;
+      rawInserted+=1;
+      if(!row.txDate){
+        await client.query(`INSERT INTO public.gojek_failed_rows(report_id,company_id,raw_row_id,row_index,error_reason,error_stage,raw_data) VALUES($1,$2,$3,$4,'Tanggal transaksi tidak dapat diparse','transform',$5::jsonb)`,[reportId,cid,raw.rows[0].id,i+2,JSON.stringify(row.raw)]);
+        failedRows+=1; continue;
+      }
+      try{
+        await client.query(
+          `INSERT INTO public.fleet_transactions(company_id,report_id,driver_external_id,driver_name,vehicle_plate,transaction_date,trip_count,gross_revenue,incentive,commission,deduction,net_revenue,outstanding_balance,service_type,raw_data,amount,transaction_type,driver_phone,gopay_reference_id)
+           VALUES($1,$2,$3,$4,$5,$6,0,GREATEST($7,0),0,0,0,$7,$8,$9,$10::jsonb,$7,$11,$12,NULLIF($13,''))
+           ON CONFLICT DO NOTHING`,
+          [cid,reportId,row.driverExtId||null,row.driverName,row.vehiclePlate||null,row.txDate,row.amount,row.outstanding,row.serviceType||null,JSON.stringify(row.raw),row.transactionType||null,row.driverPhone||null,row.gopayRef]);
+        successRows+=1;
+      }catch(rowError){
+        await client.query(`INSERT INTO public.gojek_failed_rows(report_id,company_id,raw_row_id,row_index,error_reason,error_stage,raw_data) VALUES($1,$2,$3,$4,$5,'transform',$6::jsonb)`,[reportId,cid,raw.rows[0].id,i+2,rowError instanceof Error?rowError.message:"Transform gagal",JSON.stringify(row.raw)]);
+        failedRows+=1;
+      }
+    }
+    const status=failedRows===0?"done":successRows>0?"partial":"error";
+    await client.query("UPDATE public.fleet_reports SET status=$2,processed_count=$3,error_count=$4,updated_at=NOW() WHERE id=$1",[reportId,status,successRows,failedRows]);
+    await client.query("COMMIT");
+    res.status(201).json({reportId,message:`Upload selesai: ${successRows} berhasil, ${failedRows} gagal`,status});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report upload failed");res.status(500).json({error:error instanceof Error?error.message:"Upload report gagal."});}finally{client.release();}
+});
+
+router.get("/reports/:id/progress", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    const report=await pool.query("SELECT * FROM public.fleet_reports WHERE id=$1 AND company_id=$2 LIMIT 1",[id,cid]);
+    if(!report.rows[0]){res.status(404).json({error:"Report tidak ditemukan."});return;}
+    const [raw,dlq]=await Promise.all([
+      pool.query<{count:number}>("SELECT COUNT(*)::int count FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]),
+      pool.query<{count:number}>("SELECT COUNT(*)::int count FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2 AND resolved=false",[cid,id]),
+    ]);
+    const r=report.rows[0],failed=Number(r.error_count??0),success=Number(r.processed_count??0),total=Number(r.row_count??0),health=total?Math.max(0,Math.round((success/total)*100)):100;
+    res.json({reportId:id,status:r.status,rowCount:total,rawInserted:raw.rows[0]?.count??0,successRows:success,failedRows:failed,dlqCount:dlq.rows[0]?.count??0,healthScore:health,grade:health>=95?"A":health>=80?"B":health>=60?"C":health>=40?"D":"F",durationMs:null,updatedAt:r.updated_at});
+  }catch(error){req.log.error({error},"Fleet report progress failed");res.status(503).json({error:"Gagal mengambil progress."});}
+});
+
+router.post("/reports/:id/purge", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    await client.query("BEGIN");
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    const result=await client.query("UPDATE public.fleet_reports SET status='purged',processed_count=0,error_count=0,updated_at=NOW() WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
+    if(result.rowCount!==1){await client.query("ROLLBACK");res.status(404).json({error:"Report tidak ditemukan."});return;}
+    await client.query("COMMIT");res.json({ok:true});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report purge failed");res.status(503).json({error:"Gagal purge report."});}finally{client.release();}
+});
+
+router.delete("/reports/:id", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req),id=Number(req.params.id);
+    await client.query("BEGIN");
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1 AND report_id=$2",[cid,id]);
+    const result=await client.query("DELETE FROM public.fleet_reports WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
+    if(result.rowCount!==1){await client.query("ROLLBACK");res.status(404).json({error:"Report tidak ditemukan."});return;}
+    await client.query("COMMIT");res.json({ok:true});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet report rollback failed");res.status(503).json({error:"Gagal rollback report."});}finally{client.release();}
+});
+
+router.post("/reports/purge-all", async (req: AdminRequest, res) => {
+  const client=await pool.connect();
+  try{
+    const cid=companyId(req);
+    await client.query("BEGIN");
+    const reports=await client.query<{count:number}>("SELECT COUNT(*)::int count FROM public.fleet_reports WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.gojek_failed_rows WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.fleet_transactions WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.gojek_raw_transactions WHERE company_id=$1",[cid]);
+    await client.query("DELETE FROM public.fleet_reports WHERE company_id=$1",[cid]);
+    await client.query("COMMIT");
+    res.json({ok:true,message:`${reports.rows[0]?.count??0} report dan data turunannya dihapus.`,reportCount:reports.rows[0]?.count??0});
+  }catch(error){await client.query("ROLLBACK").catch(()=>undefined);req.log.error({error},"Fleet purge-all failed");res.status(503).json({error:"Gagal menghapus seluruh report."});}finally{client.release();}
 });
 
 router.get("/reports", async (req: AdminRequest, res) => {
