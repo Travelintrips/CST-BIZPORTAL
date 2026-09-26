@@ -529,7 +529,6 @@ router.post("/outstanding/repair", async (req: AdminRequest, res) => {
 
 router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
   try {
-    await ensureFleetTables();
     const cid = companyId(req);
     const content = typeof req.body?.content === "string" ? req.body.content : "";
     if (!content.trim()) {
@@ -668,7 +667,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
           driverId = driver.rows[0].id;
           await client.query(
             `UPDATE public.fleet_drivers
-                SET name=$3,
+                SET full_name=$3,
                     phone=NULLIF($4,''),
                     vehicle_plate=NULLIF($5,''),
                     rental_fee_daily=$6,
@@ -678,7 +677,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
                     last_active_date=CASE WHEN $7='active' THEN CURRENT_DATE ELSE last_active_date END,
                     source_last_synced_at=NOW(),
                     updated_at=NOW()
-              WHERE id=$1 AND company_id=$2`,
+              WHERE id=$1 AND company_id=$2::text`,
             [
               driverId, cid, driverName, phone, plate, fee,
               classification.internalStatus,
