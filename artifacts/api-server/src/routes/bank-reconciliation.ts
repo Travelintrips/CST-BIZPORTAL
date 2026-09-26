@@ -85,7 +85,7 @@ interface MatchingMutation {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement";
+  candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -101,6 +101,8 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
   switch (candidateType) {
     case "sport_payment":
       return "sport_center.sport_payments";
+    case "sport_group_payment":
+      return "sport_center.booking_groups";
     case "sport_company_invoice":
       return "sport_center.company_invoices";
     case "tenant_invoice":
@@ -418,8 +420,9 @@ async function loadLocalMatchCandidates(
           where sp.normalized_group_id is null
          ),
          candidates as (
-           select * from grouped
-           union all
+           -- Grouped booking payments are represented by the canonical
+           -- sport_group_payment candidate below. sport_payments may contain
+           -- one mirrored row per booking, so SUM(sp.amount) is not bank truth.
            select * from singles
          )
          select c.id, c.amount, c.paid_date, c.payment_reference, c.description,
@@ -473,6 +476,147 @@ async function loadLocalMatchCandidates(
       // Sport Center is an optional source on installations that only use
       // bank imports and vendor invoices. Keep matching usable when that
       // optional schema is not installed.
+      const code = (error as { code?: string }).code;
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+
+    try {
+      const sportGroupPayments = await client.query<{
+        id: number;
+        amount: string;
+        group_total: string;
+        deposit_created: string;
+        deposit_applied: string;
+        paid_date: string | null;
+        payment_reference: string | null;
+        description: string | null;
+        customer_name: string | null;
+        order_ref: string | null;
+      }>(
+        `select
+             bg.id::bigint as id,
+             (
+               coalesce(bg.total_payment_override, bg.net_payment, bg.total_payment)::numeric
+               + coalesce((
+                   select sum(cda.amount)
+                     from sport_center.customer_deposit_allocations cda
+                    where cda.company_id = $1
+                      and cda.source_group_ref = bg.group_ref
+                      and cda.status in ('available','reserved','applied')
+                 ), 0)
+               - coalesce((
+                   select sum(cda.amount)
+                     from sport_center.customer_deposit_allocations cda
+                    where cda.company_id = $1
+                      and cda.target_group_ref = bg.group_ref
+                      and cda.status in ('reserved','applied')
+                 ), 0)
+             )::numeric as amount,
+             coalesce(bg.total_payment_override, bg.net_payment, bg.total_payment)::numeric as group_total,
+             coalesce((
+               select sum(cda.amount)
+                 from sport_center.customer_deposit_allocations cda
+                where cda.company_id = $1
+                  and cda.source_group_ref = bg.group_ref
+                  and cda.status in ('available','reserved','applied')
+             ), 0)::numeric as deposit_created,
+             coalesce((
+               select sum(cda.amount)
+                 from sport_center.customer_deposit_allocations cda
+                where cda.company_id = $1
+                  and cda.target_group_ref = bg.group_ref
+                  and cda.status in ('reserved','applied')
+             ), 0)::numeric as deposit_applied,
+             $3::date::text as paid_date,
+             bg.group_ref as payment_reference,
+             concat_ws(
+               ' ',
+               bg.customer_name,
+               bg.group_ref,
+               'sport center group',
+               min(sb.booking_date)::text,
+               max(sb.booking_date)::text
+             ) as description,
+             bg.customer_name,
+             bg.group_ref as order_ref
+           from sport_center.booking_groups bg
+           join sport_center.sport_bookings sb
+             on nullif(btrim(sb.group_ref::text), '') = bg.group_ref
+          where exists (
+                  select 1
+                    from sport_center.facility_company_mappings fcm
+                   where fcm.facility_id = sb.facility_id
+                     and fcm.company_id = $1
+                     and fcm.is_active = true
+                     and fcm.approval_status = 'OWNER_APPROVED'
+                )
+            and exists (
+                  select 1
+                    from sport_center.sport_payments sp
+                    join sport_center.sport_bookings paid_booking
+                      on paid_booking.id = sp.booking_id
+                   where nullif(btrim(paid_booking.group_ref::text), '') = bg.group_ref
+                     and lower(coalesce(sp.status::text, '')) in
+                         ('confirmed','paid','completed','success','settled')
+                     and lower(coalesce(sp.payment_method::text, '')) not like '%qris%'
+                     and (coalesce(sp.paid_at, sp.created_at) at time zone 'Asia/Jakarta')::date = $3::date
+                )
+          group by bg.id, bg.group_ref, bg.customer_name, bg.total_payment_override, bg.net_payment, bg.total_payment
+         having abs((
+                   coalesce(bg.total_payment_override, bg.net_payment, bg.total_payment)::numeric
+                   + coalesce((
+                       select sum(cda.amount)
+                         from sport_center.customer_deposit_allocations cda
+                        where cda.company_id = $1
+                          and cda.source_group_ref = bg.group_ref
+                          and cda.status in ('available','reserved','applied')
+                     ), 0)
+                   - coalesce((
+                       select sum(cda.amount)
+                         from sport_center.customer_deposit_allocations cda
+                        where cda.company_id = $1
+                          and cda.target_group_ref = bg.group_ref
+                          and cda.status in ('reserved','applied')
+                     ), 0)
+                 ) - $2::numeric) < 0.01
+            and not exists (
+                  select 1
+                    from public.bank_reconciliation_matches brm
+                   where brm.candidate_type = 'sport_group_payment'
+                     and brm.candidate_id = bg.id
+                     and brm.candidate_source = 'sport_center.booking_groups'
+                     and brm.status in ('approved','posted')
+                )
+          order by bg.id`,
+        [mutation.company_id, amount, date],
+      );
+
+      for (const group of sportGroupPayments.rows) {
+        const referenceMatch =
+          Boolean(mutation.provider_order_id) &&
+          normalizeMatchText(mutation.provider_order_id) === normalizeMatchText(group.payment_reference);
+        const nameMatch = tokenOverlap(mutation.description, group.description);
+        const dateMatch = group.paid_date === date;
+        const depositCreated = Number(group.deposit_created ?? 0);
+        const depositApplied = Number(group.deposit_applied ?? 0);
+        candidates.push({
+          candidateType: "sport_group_payment",
+          candidateId: Number(group.id),
+          score: Math.min(100, 85 + (referenceMatch ? 10 : nameMatch ? 5 : 0)),
+          amountMatch: true,
+          dateMatch,
+          referenceMatch,
+          nameMatch,
+          reason: depositApplied > 0
+            ? `Nominal bank cocok dengan group setelah DP lama Rp ${depositApplied.toLocaleString("id-ID")} digunakan.`
+            : depositCreated > 0
+              ? `Nominal bank cocok dengan tagihan group + DP baru Rp ${depositCreated.toLocaleString("id-ID")}.`
+              : "Nominal dan tanggal pembayaran group Sport Center cocok.",
+          customerName: group.customer_name,
+          orderRef: group.order_ref,
+        });
+      }
+    } catch (error) {
       const code = (error as { code?: string }).code;
       if (code !== "42P01" && code !== "42703") throw error;
     }
@@ -1192,7 +1336,7 @@ type SourceReceiptJournal = {
 
 function isSourceOwnedInboundCandidate(candidateType: string | null): boolean {
   const type = String(candidateType ?? "").toLowerCase();
-  return type === "sport_payment" || type === "tenant_invoice";
+  return type === "sport_payment" || type === "sport_group_payment" || type === "tenant_invoice";
 }
 
 async function resolvePostedSourceReceiptJournal(
@@ -1222,6 +1366,25 @@ async function resolvePostedSourceReceiptJournal(
         order by
           case when ae.source_payment_id = $2 then 0 else 1 end,
           ae.id desc
+        limit 2`,
+      [companyId, candidateId, amount],
+    );
+  } else if (type === "sport_group_payment") {
+    sourceEntries = await client.query(
+      `select ae.id, ae.entry_number, ae.total_debit::text
+         from public.accounting_entries ae
+        where ae.company_id = $1
+          and ae.status = 'posted'
+          and ae.source::text = 'sport_center_group_booking'
+          and ae.source_id = $2
+          and exists (
+            select 1
+              from public.accounting_entry_lines receipt_line
+             where receipt_line.entry_id = ae.id
+               and receipt_line.debit > 0
+               and abs(receipt_line.debit::numeric - $3::numeric) < 0.01
+          )
+        order by ae.id desc
         limit 2`,
       [companyId, candidateId, amount],
     );
@@ -1264,7 +1427,9 @@ async function resolvePostedSourceReceiptJournal(
     throw new ApprovalError(
       type === "sport_payment"
         ? "Payment Sport Center belum memiliki jurnal sumber posted yang sesuai nominal. Rekonsiliasi diblokir agar tidak membuat pendapatan/piutang ganda."
-        : "Pembayaran tenant belum memiliki jurnal sumber pendapatan posted yang sesuai nominal. Rekonsiliasi diblokir agar tidak membuat pendapatan/piutang ganda.",
+        : type === "sport_group_payment"
+          ? "Group payment Sport Center belum memiliki jurnal canonical posted dengan debit bank sesuai mutasi. Rekonsiliasi diblokir agar DP dan pendapatan tidak terhitung ganda."
+          : "Pembayaran tenant belum memiliki jurnal sumber pendapatan posted yang sesuai nominal. Rekonsiliasi diblokir agar tidak membuat pendapatan/piutang ganda.",
       422,
       "SOURCE_JOURNAL_REQUIRED",
     );
@@ -1736,6 +1901,28 @@ async function assertApprovalCandidateExists(
         for update`,
       [candidateId, companyId],
     );
+  } else if (candidateType === "sport_group_payment") {
+    if (candidateSource && candidateSource !== "sport_center.booking_groups") {
+      throw new ApprovalError("Sumber kandidat group Sport Center tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select bg.id
+         from sport_center.booking_groups bg
+        where bg.id = $1
+          and exists (
+            select 1
+              from sport_center.sport_bookings sb
+              join sport_center.facility_company_mappings fcm
+                on fcm.facility_id = sb.facility_id
+               and fcm.company_id = $2
+               and fcm.is_active = true
+               and fcm.approval_status = 'OWNER_APPROVED'
+             where nullif(btrim(sb.group_ref::text), '') = bg.group_ref
+          )
+        limit 1
+        for update`,
+      [candidateId, companyId],
+    );
   } else if (candidateType === "sport_company_invoice") {
     if (candidateSource && candidateSource !== "sport_center.company_invoices") {
       throw new ApprovalError("Sumber kandidat invoice perusahaan Sport Center tidak valid.", 409, "STALE_CANDIDATE");
@@ -2177,6 +2364,8 @@ async function approveBankMutation(
   if (selectedCandidateType && selectedCandidateId != null && !selectedCandidateSource) {
     selectedCandidateSource = selectedCandidateType === "sport_payment"
       ? "sport_center.sport_payments"
+      : selectedCandidateType === "sport_group_payment"
+        ? "sport_center.booking_groups"
       : selectedCandidateType === "sport_company_invoice"
         ? "sport_center.company_invoices"
         : selectedCandidateType === "vendor_invoice"
@@ -2789,6 +2978,7 @@ router.post("/bank-reconciliation/:mutationId/post", async (req, res): Promise<v
 
     const sourceOwnedReclassification =
       approvedMatch?.candidate_type === "sport_payment"
+      || approvedMatch?.candidate_type === "sport_group_payment"
       || approvedMatch?.candidate_type === "tenant_invoice";
     const result = await postBankMutationCanonical(
       client,
@@ -3544,9 +3734,29 @@ const mutationListColumns = `
          from public.accounting_entries candidate_entry
         where candidate_entry.company_id = bm.company_id
           and candidate_entry.status = 'posted'
-          and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
           and (
             (
+              bm.linked_transaction_type = 'sport_group_payment'
+              and exists (
+                select 1
+                  from public.accounting_entry_lines bank_line
+                 where bank_line.entry_id = candidate_entry.id
+                   and bank_line.debit > 0
+                   and abs(bank_line.debit::numeric - bm.amount::numeric) < 0.01
+              )
+            )
+            or (
+              coalesce(bm.linked_transaction_type, '') <> 'sport_group_payment'
+              and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+            )
+          )
+          and (
+            (
+              bm.linked_transaction_type = 'sport_group_payment'
+              and candidate_entry.source::text = 'sport_center_group_booking'
+              and candidate_entry.source_id = bm.linked_transaction_id
+            )
+            or (
               bm.linked_transaction_type = 'sport_payment'
               and (
                 candidate_entry.source_payment_id = bm.linked_transaction_id
@@ -3576,6 +3786,9 @@ const mutationListColumns = `
           )
         order by
           case
+            when bm.linked_transaction_type = 'sport_group_payment'
+             and candidate_entry.source::text = 'sport_center_group_booking'
+             and candidate_entry.source_id = bm.linked_transaction_id then 0
             when bm.linked_transaction_type = 'sport_payment'
              and candidate_entry.source_payment_id = bm.linked_transaction_id then 0
             when bm.linked_transaction_type = 'tenant_invoice'
@@ -3641,6 +3854,7 @@ const mutationListColumns = `
       and match.candidate_source is not null
       and (
         (match.candidate_type = 'sport_payment' and match.candidate_source = 'sport_center.sport_payments')
+        or (match.candidate_type = 'sport_group_payment' and match.candidate_source = 'sport_center.booking_groups')
         or (match.candidate_type = 'sport_company_invoice' and match.candidate_source = 'sport_center.company_invoices')
         or (match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments')
         or (match.candidate_type = 'vendor_invoice' and match.candidate_source = 'public.vendor_invoices')
@@ -3738,6 +3952,63 @@ async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Pr
       }
     } catch {
       // The Sport Center schema is optional for bank-only installations.
+    }
+  }
+
+  const sportGroupIds = idsFor("sport_group_payment");
+  if (sportGroupIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select
+             bg.id,
+             bg.group_ref as reference,
+             bg.customer_name as name,
+             coalesce(bg.total_payment_override, bg.net_payment, bg.total_payment)::numeric as group_total,
+             coalesce((
+               select sum(cda.amount)
+                 from sport_center.customer_deposit_allocations cda
+                where cda.company_id = 1
+                  and cda.source_group_ref = bg.group_ref
+                  and cda.status in ('available','reserved','applied')
+             ),0)::numeric as deposit_created,
+             coalesce((
+               select sum(cda.amount)
+                 from sport_center.customer_deposit_allocations cda
+                where cda.company_id = 1
+                  and cda.target_group_ref = bg.group_ref
+                  and cda.status in ('reserved','applied')
+             ),0)::numeric as deposit_applied,
+             count(distinct sb.id)::int as booking_count,
+             min(sb.booking_date)::text as first_booking_date,
+             max(sb.booking_date)::text as last_booking_date
+           from sport_center.booking_groups bg
+           left join sport_center.sport_bookings sb
+             on nullif(btrim(sb.group_ref::text), '') = bg.group_ref
+          where bg.id = any($1::bigint[])
+          group by bg.id`,
+        [sportGroupIds],
+      );
+      for (const row of result.rows) {
+        const groupTotal = Number(row.group_total ?? 0);
+        const depositCreated = Number(row.deposit_created ?? 0);
+        const depositApplied = Number(row.deposit_applied ?? 0);
+        details.set(candidateDetailKey("sport_group_payment", row.id), {
+          amount: groupTotal + depositCreated - depositApplied,
+          grossGroupAmount: groupTotal,
+          depositCreatedAmount: depositCreated,
+          depositAppliedAmount: depositApplied,
+          name: row.name,
+          reference: row.reference,
+          orderRef: row.reference,
+          sourceType: "sport_group_payment",
+          status: "confirmed",
+          bookingCount: row.booking_count,
+          firstBookingDate: row.first_booking_date,
+          lastBookingDate: row.last_booking_date,
+        });
+      }
+    } catch {
+      // Deposit-aware group details are additive to core reconciliation.
     }
   }
 
