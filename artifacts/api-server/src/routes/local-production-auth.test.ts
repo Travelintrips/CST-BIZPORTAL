@@ -132,6 +132,40 @@ describe("local production email OTP authentication", () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
 
+  it("keeps owner password login available through the production session path", async () => {
+    const password = "owner-password";
+    const passwordHash = await hash(password, 4);
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("to_jsonb(u)")) {
+        return {
+          rows: [{
+            user_data: {
+              id: "owner-1",
+              email: "owner@example.com",
+              role: "owner",
+              status: "active",
+              is_active: true,
+              company_id: 1,
+              password_hash: passwordHash,
+            },
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const response = await request(server, "/auth/email-login", {
+      email: "owner@example.com",
+      password,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      user: { email: "owner@example.com", role: "owner", companyId: 1 },
+    });
+    expect(response.headers["set-cookie"]?.[0]).toContain("bizportal_supabase_session=");
+  });
+
   it("returns the same generic response for an unknown email without sending", async () => {
     activeUser = false;
     const response = await request(server, "/auth/email-otp/send", { email: "unknown@example.com" });
