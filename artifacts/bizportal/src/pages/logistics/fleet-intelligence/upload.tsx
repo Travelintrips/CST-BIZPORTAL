@@ -818,6 +818,7 @@ function SnapshotUploadTab() {
   const [step, setStep] = useState<SnapshotStep>("select");
   const [previewData, setPreviewData] = useState<SnapshotPreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<{ updated: number; inserted: number; skipped: number; errors?: number; total: number; message: string } | null>(null);
   const [logDays, setLogDays] = useState<7 | 30>(30);
 
@@ -882,7 +883,9 @@ function SnapshotUploadTab() {
       }
       return res.json() as Promise<{ updated: number; inserted: number; skipped: number; errors: number; total: number; message: string }>;
     },
+    onMutate: () => setImportError(null),
     onSuccess: (data) => {
+      setImportError(null);
       toast.success(data.message);
       setImportResult(data);
       setStep("done");
@@ -893,14 +896,16 @@ function SnapshotUploadTab() {
       refetchLogs();
     },
     onError: (e: Error) => {
-      const message = e.name === "TimeoutError" ? "Import timeout setelah 60 detik. Tidak ada perubahan parsial yang disimpan; coba lagi." : e.message;
+      const message = e.name === "TimeoutError"
+        ? "Import timeout setelah 60 detik. Coba refresh Riwayat Import sebelum mengulang."
+        : e.message;
+      setImportError(message);
       toast.error(message);
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   function reset() {
-    setFile(null); setPreviewData(null); setPreviewError(null); setImportResult(null); setStep("select");
+    setFile(null); setPreviewData(null); setPreviewError(null); setImportError(null); setImportResult(null); setStep("select");
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -908,6 +913,7 @@ function SnapshotUploadTab() {
     setFile(nextFile);
     setPreviewData(null);
     setPreviewError(null);
+    setImportError(null);
     setImportResult(null);
     setStep("select");
   }
@@ -936,8 +942,8 @@ function SnapshotUploadTab() {
               { col: "Phone Number", desc: 'No. HP — bisa diawali tab (otomatis dibersihkan)' },
               { col: "License Plate", desc: 'Plat kendaraan — boleh kosong (driver "Need to assign")' },
               { col: "Rental fee(Daily)", desc: "Rental fee harian — boleh 0" },
-              { col: "Outstanding", desc: "Saldo outstanding — baris dengan nilai 0 akan dilewati" },
-              { col: "Status", desc: '"Active" atau "Need to assign"' },
+              { col: "Outstanding", desc: "Saldo outstanding — nilai 0 tetap menyinkronkan master driver dan menutup outstanding lama" },
+              { col: "Status", desc: '"Active", "Need to assign", "Resign", atau "Fired"' },
             ].map(({ col, desc }) => (
               <div key={col} className="flex items-start gap-2">
                 <code className="bg-slate-700/80 px-1.5 py-0.5 rounded text-indigo-300 whitespace-nowrap shrink-0">{col}</code>
@@ -1130,6 +1136,11 @@ function SnapshotUploadTab() {
                 : <><Database className="w-5 h-5 mr-2" /> Konfirmasi Import {previewData.total} Driver</>}
             </Button>
           </div>
+          {importError && (
+            <div className="rounded-lg border border-red-600/40 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+              {importError}
+            </div>
+          )}
         </div>
       )}
 
