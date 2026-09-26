@@ -770,7 +770,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
        ORDER BY i.row_no,d.id DESC
     `, [cid]);
 
-    if (await tableExists("fleet_vehicles")) {
+    {
       await client.query(
         `UPDATE public.fleet_vehicles v
             SET driver_id=r.driver_id,
@@ -821,7 +821,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
             o.driver_id=r.driver_id
             OR (o.driver_id IS NULL AND lower(o.driver_name)=lower(r.driver_name))
           )
-      RETURNING o.id,r.outstanding`,
+      RETURNING o.id,o.outstanding_amount`,
       [cid],
     );
 
@@ -843,8 +843,8 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
       [cid],
     );
 
-    const outstandingResolved = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding)<=0).length;
-    const outstandingUpserted = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding)>0).length + (insertedOutstanding.rowCount ?? 0);
+    const outstandingResolved = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding_amount)<=0).length;
+    const outstandingUpserted = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding_amount)>0).length + (insertedOutstanding.rowCount ?? 0);
     const driverUpdated = updatedDrivers.rowCount ?? 0;
     const driverInserted = insertedDrivers.rowCount ?? 0;
     const errors = prepared.length !== inputRows.length ? inputRows.length - prepared.length : 0;
