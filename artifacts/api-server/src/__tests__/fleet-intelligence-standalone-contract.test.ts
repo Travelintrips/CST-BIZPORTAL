@@ -72,6 +72,16 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).not.toContain("accountingPosted:false");
   });
 
+  it("restores WA reminders only for active drivers with outstanding", () => {
+    expect(fleetRoute).toContain('router.post("/outstanding/wa-reminder"');
+    expect(fleetRoute).toContain('router.post("/outstanding/wa-blast"');
+    expect(fleetRoute).toContain('router.post("/outstanding/:id/wa"');
+    expect(fleetRoute).toContain('router.get("/outstanding/wa-logs"');
+    expect(fleetRoute).toContain('router.get("/outstanding/auto-blast-settings"');
+    expect(fleetRoute).toContain('router.put("/outstanding/auto-blast-settings"');
+    expect(fleetRoute).toContain("sendFleetOutstandingReminders");
+  });
+
   it("restores the operational Fleet surfaces used by BizPortal pages", () => {
     for (const route of [
       'router.get("/transactions"',

@@ -475,11 +475,15 @@ export default function FleetOutstandingPage() {
     if (allSelected) setSelectedIds((prev) => { const next = new Set(prev); visibleIds.forEach((id) => next.delete(id)); return next; });
     else setSelectedIds((prev) => { const next = new Set(prev); visibleIds.forEach((id) => next.add(id)); return next; });
   }
-  function selectAbove500k() {
-    const ids500k = sortedList
-      .filter((o) => parseFloat(String(o.outstanding_amount ?? 0)) >= 500_000 && String(o.driver_phone ?? "").trim())
+  function selectActiveOutstanding() {
+    const ids = sortedList
+      .filter((o) =>
+        String(o.driver_status ?? "") === "active" &&
+        parseFloat(String(o.outstanding_amount ?? 0)) > 0 &&
+        String(o.driver_phone ?? "").trim(),
+      )
       .map((o) => Number(o.id));
-    setSelectedIds(new Set(ids500k));
+    setSelectedIds(new Set(ids));
   }
 
   /* ── WA helpers ───────────────────────────────────────────────────── */
@@ -516,8 +520,11 @@ export default function FleetOutstandingPage() {
   /* ── derived ──────────────────────────────────────────────────────── */
   const list     = data?.outstanding ?? [];
   const summary  = data?.summary ?? {};
-  const eligible500k = list.filter(
-    (o) => parseFloat(String(o.outstanding_amount ?? 0)) >= 500_000 && String(o.driver_phone ?? "").trim(),
+  const eligibleActive = list.filter(
+    (o) =>
+      String(o.driver_status ?? "") === "active" &&
+      parseFloat(String(o.outstanding_amount ?? 0)) > 0 &&
+      String(o.driver_phone ?? "").trim(),
   );
   const noPlateCount = list.filter((o) => {
     const p = String(o.vehicle_plate ?? "").trim();
@@ -587,12 +594,12 @@ export default function FleetOutstandingPage() {
                   Kirim WA ke Terpilih ({selectedIds.size})
                 </Button>
               )}
-              {status === "open" && eligible500k.length > 0 && (
+              {status === "open" && eligibleActive.length > 0 && (
                 <Button variant="outline" size="sm"
                   className="gap-2 border-green-600 text-green-400 hover:bg-green-900/20"
                   onClick={() => setBulkOpen(true)}>
                   <MessageCircle className="w-4 h-4" />
-                  Blast ≥500rb ({eligible500k.length})
+                  Reminder Driver Aktif ({eligibleActive.length})
                 </Button>
               )}
               <Button variant="outline" size="sm"
@@ -667,8 +674,8 @@ export default function FleetOutstandingPage() {
                 <CardContent className="p-4 flex items-center gap-3">
                   <MessageCircle className="w-8 h-8 text-green-400" />
                   <div>
-                    <div className="text-2xl font-bold text-white">{eligible500k.length}</div>
-                    <div className="text-slate-400 text-sm">Perlu Notifikasi WA (≥500rb)</div>
+                    <div className="text-2xl font-bold text-white">{eligibleActive.length}</div>
+                    <div className="text-slate-400 text-sm">Driver Aktif + Outstanding</div>
                   </div>
                 </CardContent>
               </Card>
@@ -687,7 +694,7 @@ export default function FleetOutstandingPage() {
                         <div className="text-white text-sm font-medium">Auto-Blast WA Harian</div>
                         <div className="text-slate-400 text-xs">
                           {autoBlastEnabled
-                            ? <>Aktif — kirim WA otomatis ke semua driver outstanding ≥Rp 500rb setiap hari jam <strong className="text-green-400">{String(autoBlastHour).padStart(2,"0")}:00 WIB</strong></>
+                            ? <>Aktif — kirim WA otomatis hanya ke driver <strong className="text-green-400">aktif</strong> yang masih memiliki outstanding, setiap hari jam <strong className="text-green-400">{String(autoBlastHour).padStart(2,"0")}:00 WIB</strong></>
                             : "Nonaktif — aktifkan untuk kirim WA reminder otomatis setiap hari"}
                           {autoBlastLastRun && (
                             <span className="ml-2 text-slate-500">· Terakhir: {autoBlastLastRun}</span>
@@ -755,9 +762,9 @@ export default function FleetOutstandingPage() {
                 {status === "open" && sortedList.length > 0 && (
                   <div className="flex items-center gap-2 flex-wrap mt-1">
                     <button
-                      onClick={selectAbove500k}
+                      onClick={selectActiveOutstanding}
                       className="px-3 py-1 text-xs font-medium rounded-full border border-amber-600/60 text-amber-400 hover:bg-amber-900/20 transition-colors flex items-center gap-1.5">
-                      <AlertTriangle className="w-3 h-3" /> Pilih ≥500rb
+                      <AlertTriangle className="w-3 h-3" /> Pilih Driver Aktif
                     </button>
                     {selectedIds.size > 0 && (
                       <button
@@ -860,6 +867,8 @@ export default function FleetOutstandingPage() {
                                         type="checkbox"
                                         className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer"
                                         checked={selectedIds.has(Number(o.id))}
+                                        disabled={String(o.driver_status ?? "") !== "active"}
+                                        title={String(o.driver_status ?? "") !== "active" ? "Reminder WA hanya untuk driver aktif" : undefined}
                                         onChange={() => toggleSelect(Number(o.id))}
                                       />
                                     </td>
@@ -899,6 +908,8 @@ export default function FleetOutstandingPage() {
                                         {hasPhone && (
                                           <Button size="sm" variant="outline"
                                             className="border-green-600 text-green-400 hover:bg-green-900/30 h-7 text-xs"
+                                            disabled={String(o.driver_status ?? "") !== "active"}
+                                            title={String(o.driver_status ?? "") !== "active" ? "Reminder WA hanya untuk driver aktif" : undefined}
                                             onClick={() => openWaModal(o)}>
                                             <MessageCircle className="w-3 h-3 mr-1" /> WA
                                           </Button>
@@ -1316,7 +1327,7 @@ export default function FleetOutstandingPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Send className="w-5 h-5 text-green-400" />
-                Kirim WA ke {eligible500k.length} Driver (≥ Rp 500rb)
+                Kirim WA ke {eligibleActive.length} Driver Aktif dengan Outstanding
               </DialogTitle>
               <DialogDescription className="text-slate-400 text-xs">
                 Data nama, plat, HP, dan jumlah diisi otomatis per driver.
@@ -1338,7 +1349,7 @@ export default function FleetOutstandingPage() {
                 <Button className="flex-1 bg-green-600 hover:bg-green-700 gap-2"
                   disabled={waAllMutation.isPending} onClick={() => waAllMutation.mutate()}>
                   <Send className="w-4 h-4" />
-                  {waAllMutation.isPending ? "Mengirim..." : `Kirim ke ${eligible500k.length} Driver`}
+                  {waAllMutation.isPending ? "Mengirim..." : `Kirim ke ${eligibleActive.length} Driver`}
                 </Button>
               </div>
             </div>
