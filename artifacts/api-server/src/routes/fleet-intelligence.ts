@@ -617,7 +617,6 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
 });
 
 router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
-  const client = await pool.connect();
   try {
     const cid = companyId(req);
     const inputRows = Array.isArray(req.body?.rows) ? req.body.rows as SnapshotRow[] : [];
@@ -626,264 +625,57 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
       return;
     }
 
-    const fileName = typeof req.body?.fileName === "string" ? req.body.fileName.slice(0,255) : "drivers.csv";
+    const fileName = typeof req.body?.fileName === "string"
+      ? req.body.fileName.slice(0,255)
+      : "drivers.csv";
+
     const prepared = inputRows
-      .map((row,index) => {
+      .map((row) => {
         const driverName = String(row.driver_name ?? "").trim();
         if (!driverName) return null;
         const phone = cleanPhone(row.phone_number);
         const plate = String(row.license_plate ?? "").trim().toUpperCase();
         const fee = numberValue(row.rental_fee_daily);
         const outstanding = numberValue(row.outstanding);
-        const classification = classifyDriver({ ...row, license_plate: plate, rental_fee_daily: fee });
+        const classification = classifyDriver({
+          ...row,
+          license_plate: plate,
+          rental_fee_daily: fee,
+        });
         return {
-          row_no:index + 1,
-          driver_name:driverName,
-          phone_number:phone,
-          license_plate:plate,
-          rental_fee_daily:fee,
+          driver_name: driverName,
+          phone_number: phone,
+          license_plate: plate,
+          rental_fee_daily: fee,
           outstanding,
-          internal_status:classification.internalStatus,
-          applicator_status:classification.applicatorStatus,
-          vehicle_ownership:classification.vehicleOwnership,
+          internal_status: classification.internalStatus,
+          applicator_status: classification.applicatorStatus,
+          vehicle_ownership: classification.vehicleOwnership,
         };
       })
-      .filter(Boolean);
+      .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    await client.query("BEGIN");
-    await client.query(`
-      CREATE TEMP TABLE _fleet_import_input(
-        row_no integer primary key,
-        driver_name text not null,
-        phone_number text,
-        license_plate text,
-        rental_fee_daily numeric(18,2) not null,
-        outstanding numeric(18,2) not null,
-        internal_status text not null,
-        applicator_status text,
-        vehicle_ownership text
-      ) ON COMMIT DROP
-    `);
-
-    await client.query(
-      `INSERT INTO _fleet_import_input
-       (row_no,driver_name,phone_number,license_plate,rental_fee_daily,outstanding,internal_status,applicator_status,vehicle_ownership)
-       SELECT x.row_no,x.driver_name,x.phone_number,x.license_plate,x.rental_fee_daily,x.outstanding,x.internal_status,x.applicator_status,x.vehicle_ownership
-       FROM jsonb_to_recordset($1::jsonb) AS x(
-         row_no integer,
-         driver_name text,
-         phone_number text,
-         license_plate text,
-         rental_fee_daily numeric,
-         outstanding numeric,
-         internal_status text,
-         applicator_status text,
-         vehicle_ownership text
-       )`,
-      [JSON.stringify(prepared)],
-    );
-
-    const updatedDrivers = await client.query(
-      `UPDATE public.fleet_drivers d
-          SET full_name=i.driver_name,
-              phone=NULLIF(i.phone_number,''),
-              vehicle_plate=NULLIF(i.license_plate,''),
-              rental_fee_daily=i.rental_fee_daily,
-              status=i.internal_status,
-              applicator_status=i.applicator_status,
-              vehicle_ownership=i.vehicle_ownership,
-              last_active_date=CASE WHEN i.internal_status='active' THEN CURRENT_DATE ELSE d.last_active_date END,
-              source_last_synced_at=NOW(),
-              updated_at=NOW()
-         FROM _fleet_import_input i
-        WHERE d.company_id=$1::text
-          AND (
-            (
-              regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') <> ''
-              AND right(regexp_replace(COALESCE(d.phone,''),'[^0-9]','','g'),9)
-                  = right(regexp_replace(i.phone_number,'[^0-9]','','g'),9)
-            )
-            OR (
-              regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') = ''
-              AND lower(d.full_name)=lower(i.driver_name)
-            )
-          )
-      RETURNING d.id`,
-      [cid],
-    );
-
-    const insertedDrivers = await client.query(
-      `INSERT INTO public.fleet_drivers
-       (company_id,full_name,license_number,phone,vehicle_plate,rental_fee_daily,status,applicator_status,vehicle_ownership,last_active_date,source_last_synced_at,created_at,updated_at)
-       SELECT $1::text,
-              i.driver_name,
-              'GOCAR-' || COALESCE(NULLIF(right(regexp_replace(i.phone_number,'[^0-9]','','g'),12),''),
-                                  substr(md5(i.driver_name || ':' || i.row_no::text),1,12)),
-              NULLIF(i.phone_number,''),
-              NULLIF(i.license_plate,''),
-              i.rental_fee_daily,
-              i.internal_status,
-              i.applicator_status,
-              i.vehicle_ownership,
-              CASE WHEN i.internal_status='active' THEN CURRENT_DATE ELSE NULL END,
-              NOW(),NOW(),NOW()
-         FROM _fleet_import_input i
-        WHERE NOT EXISTS (
-          SELECT 1
-            FROM public.fleet_drivers d
-           WHERE d.company_id=$1::text
-             AND (
-               (
-                 regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') <> ''
-                 AND right(regexp_replace(COALESCE(d.phone,''),'[^0-9]','','g'),9)
-                     = right(regexp_replace(i.phone_number,'[^0-9]','','g'),9)
-               )
-               OR (
-                 regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') = ''
-                 AND lower(d.full_name)=lower(i.driver_name)
-               )
-             )
-        )
-      RETURNING id`,
-      [cid],
-    );
-
-    await client.query(`
-      CREATE TEMP TABLE _fleet_import_resolved ON COMMIT DROP AS
-      SELECT DISTINCT ON (i.row_no)
-             i.*,
-             d.id AS driver_id
-        FROM _fleet_import_input i
-        JOIN public.fleet_drivers d
-          ON d.company_id=$1::text
-         AND (
-           (
-             regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') <> ''
-             AND right(regexp_replace(COALESCE(d.phone,''),'[^0-9]','','g'),9)
-                 = right(regexp_replace(i.phone_number,'[^0-9]','','g'),9)
-           )
-           OR (
-             regexp_replace(COALESCE(i.phone_number,''),'[^0-9]','','g') = ''
-             AND lower(d.full_name)=lower(i.driver_name)
-           )
-         )
-       ORDER BY i.row_no,d.id DESC
-    `, [cid]);
-
-    {
-      await client.query(
-        `UPDATE public.fleet_vehicles v
-            SET driver_id=r.driver_id,
-                vehicle_type='car',
-                status=CASE WHEN r.internal_status='active' THEN 'active' ELSE 'inactive' END,
-                notes='Synced from GoCar Drivers export; ownership=' || COALESCE(r.vehicle_ownership,'unassigned'),
-                updated_at=NOW()
-           FROM _fleet_import_resolved r
-          WHERE v.company_id=$1
-            AND NULLIF(r.license_plate,'') IS NOT NULL
-            AND upper(v.plate)=upper(r.license_plate)`,
-        [cid],
-      );
-      await client.query(
-        `INSERT INTO public.fleet_vehicles
-         (company_id,driver_id,plate,vehicle_type,status,notes,created_at,updated_at)
-         SELECT $1,r.driver_id,upper(r.license_plate),'car',
-                CASE WHEN r.internal_status='active' THEN 'active' ELSE 'inactive' END,
-                'Synced from GoCar Drivers export; ownership=' || COALESCE(r.vehicle_ownership,'unassigned'),
-                NOW(),NOW()
-           FROM _fleet_import_resolved r
-          WHERE NULLIF(r.license_plate,'') IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM public.fleet_vehicles v
-               WHERE v.company_id=$1 AND upper(v.plate)=upper(r.license_plate)
-            )`,
-        [cid],
-      );
-    }
-
-    const updatedOutstanding = await client.query(
-      `UPDATE public.fleet_outstanding o
-          SET driver_id=r.driver_id,
-              driver_name=r.driver_name,
-              driver_phone=NULLIF(r.phone_number,''),
-              vehicle_plate=NULLIF(r.license_plate,''),
-              outstanding_amount=r.outstanding,
-              rental_fee_daily=r.rental_fee_daily,
-              last_updated_date=CURRENT_DATE,
-              snapshot_source='gojek_driver_export',
-              status=CASE WHEN r.outstanding>0 THEN 'open' ELSE 'resolved' END,
-              resolved_at=CASE WHEN r.outstanding>0 THEN NULL ELSE NOW() END,
-              updated_at=NOW()
-         FROM _fleet_import_resolved r
-        WHERE o.company_id=$1
-          AND o.status='open'
-          AND (
-            o.driver_id=r.driver_id
-            OR (o.driver_id IS NULL AND lower(o.driver_name)=lower(r.driver_name))
-          )
-      RETURNING o.id,o.outstanding_amount`,
-      [cid],
-    );
-
-    const insertedOutstanding = await client.query(
-      `INSERT INTO public.fleet_outstanding
-       (company_id,driver_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,rental_fee_daily,last_updated_date,status,snapshot_source,created_at,updated_at)
-       SELECT $1,r.driver_id,r.driver_name,NULLIF(r.phone_number,''),NULLIF(r.license_plate,''),
-              r.outstanding,r.rental_fee_daily,CURRENT_DATE,'open','gojek_driver_export',NOW(),NOW()
-         FROM _fleet_import_resolved r
-        WHERE r.outstanding>0
-          AND NOT EXISTS (
-            SELECT 1
-              FROM public.fleet_outstanding o
-             WHERE o.company_id=$1
-               AND o.status='open'
-               AND (o.driver_id=r.driver_id OR (o.driver_id IS NULL AND lower(o.driver_name)=lower(r.driver_name)))
-          )
-      RETURNING id`,
-      [cid],
-    );
-
-    const outstandingResolved = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding_amount)<=0).length;
-    const outstandingUpserted = updatedOutstanding.rows.filter((row:any)=>Number(row.outstanding_amount)>0).length + (insertedOutstanding.rowCount ?? 0);
-    const driverUpdated = updatedDrivers.rowCount ?? 0;
-    const driverInserted = insertedDrivers.rowCount ?? 0;
-    const errors = prepared.length !== inputRows.length ? inputRows.length - prepared.length : 0;
-
-    await client.query(
-      `INSERT INTO public.fleet_outstanding_import_log
-       (company_id,report_file_name,uploaded_by,total_rows,rows_imported,rows_skipped,unmatched_drivers,notes)
-       VALUES($1,$2,$3,$4,$5,$6,0,$7)`,
+    const result = await pool.query<{ result: Record<string, unknown> }>(
+      `SELECT public.fleet_import_driver_snapshot($1,$2,$3,$4::jsonb) AS result`,
       [
         cid,
         fileName,
         req.adminUser?.email ?? "unknown",
-        inputRows.length,
-        driverUpdated + driverInserted,
-        errors,
-        JSON.stringify({driverUpdated,driverInserted,outstandingUpserted,outstandingResolved,errors,mode:"batch"}),
+        JSON.stringify(prepared),
       ],
     );
 
-    await client.query("COMMIT");
-    res.json({
-      ok:true,
-      updated:driverUpdated,
-      inserted:driverInserted,
-      skipped:errors,
-      errors,
-      total:inputRows.length,
-      driverUpdated,
-      driverInserted,
-      outstandingUpserted,
-      outstandingResolved,
-      message:`${driverUpdated} driver diperbarui, ${driverInserted} driver baru, ${outstandingUpserted} outstanding aktif${outstandingResolved ? `, ${outstandingResolved} outstanding diselesaikan` : ""}${errors ? `, ${errors} dilewati` : ""}`,
-    });
+    const payload = result.rows[0]?.result;
+    if (!payload) {
+      res.status(500).json({ error: "Import selesai tanpa hasil." });
+      return;
+    }
+    res.json(payload);
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    req.log.error({ error }, "Fleet driver master batch sync failed");
-    res.status(500).json({ error: error instanceof Error ? error.message : "Gagal sinkronisasi master driver dan outstanding." });
-  } finally {
-    client.release();
+    req.log.error({ error }, "Fleet driver master RPC sync failed");
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Gagal sinkronisasi master driver dan outstanding.",
+    });
   }
 });
 
