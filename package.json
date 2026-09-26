@@ -13,7 +13,8 @@
     "start": "node --max-http-header-size=65536 --enable-source-maps ./index.js",
     "typecheck:libs": "tsc --build --force",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "test:auth:production": "pnpm --filter @workspace/api-server exec vitest run src/routes/local-production-auth.test.ts src/routes/dev-auth.test.ts src/__tests__/production-auth-startup-contract.test.ts"
+    "test:auth:production": "pnpm --filter @workspace/api-server exec vitest run src/__tests__/production-auth-startup-contract.test.ts",
+    "test:auth:integration": "pnpm --filter @workspace/api-server exec vitest run src/routes/local-production-auth.test.ts src/routes/dev-auth.test.ts"
   },
   "private": true,
   "dependencies": {
