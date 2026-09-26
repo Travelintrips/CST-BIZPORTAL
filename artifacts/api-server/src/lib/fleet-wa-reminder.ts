@@ -184,6 +184,7 @@ export async function sendFleetOutstandingReminders(args: {
   suppressHours?: number;
   ids?: number[];
   sendType?: "manual" | "selected" | "auto";
+  minOutstanding?: number;
 }): Promise<FleetReminderSweepResult> {
   const companyId = args.companyId;
   const suppressHours = Math.max(1, Math.min(168, Number(args.suppressHours) || 24));
@@ -191,6 +192,8 @@ export async function sendFleetOutstandingReminders(args: {
   const ids = Array.isArray(args.ids) ? args.ids.filter((id) => Number.isSafeInteger(id) && id > 0) : [];
   const token = await getFonnteToken();
   if (!token) throw new Error("FONNTE_TOKEN belum dikonfigurasi.");
+
+  const minOutstanding = Math.max(0, Number(args.minOutstanding) || 0);
 
   const deviceProfile = await getFonnteDeviceProfile(token);
   const configuredSender = await getConfiguredFleetSender();
@@ -200,11 +203,11 @@ export async function sendFleetOutstandingReminders(args: {
   // operationally verified, while the token still controls the real provider route.
   const senderDevice = configuredSender ?? deviceProfile.device;
 
-  const params: unknown[] = [companyId, suppressHours];
+  const params: unknown[] = [companyId, suppressHours, minOutstanding];
   let idFilter = "";
   if (ids.length) {
     params.push(ids);
-    idFilter = ` AND o.id = ANY($${params.length}::int[])`;
+    idFilter = ` AND o.id = ANY(${params.length}::int[])`;
   }
 
   const result = await pool.query<ReminderRow & { suppressed: boolean }>(
@@ -226,7 +229,7 @@ export async function sendFleetOutstandingReminders(args: {
         AND d.company_id=o.company_id::text
       WHERE o.company_id=$1
         AND o.status='open'
-        AND o.outstanding_amount > 0
+        AND o.outstanding_amount >= $3
         AND d.status='active'
         AND NULLIF(d.vehicle_plate,'') IS NOT NULL
         ${idFilter}
@@ -352,6 +355,7 @@ export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepRes
         actor: "fleet-auto-reminder",
         suppressHours: 20,
         sendType: "auto",
+        minOutstanding: 50_000,
       });
       const extended = result as FleetReminderSweepResult & {
         senderDevice?: string | null;
