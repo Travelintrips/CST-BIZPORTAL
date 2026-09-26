@@ -92,6 +92,25 @@ async function updateWorkerState(companyId: number, patch: {
   ).catch(() => undefined);
 }
 
+async function getConfiguredFleetSender(): Promise<string | null> {
+  const envSender = process.env.FONNTE_SENDER_WA?.trim();
+  if (envSender) return normalizePhone(envSender);
+  try {
+    const result = await pool.query<{ value: string }>(
+      `SELECT value
+         FROM public.portal_content
+        WHERE key='fleet_fonnte_sender_wa'
+          AND trim(COALESCE(value,'')) <> ''
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 1`,
+    );
+    const value = result.rows[0]?.value?.trim();
+    return value ? normalizePhone(value) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function getFonnteDeviceProfile(token: string): Promise<{ device: string | null; deviceStatus: string | null }> {
   try {
     const response = await fetch("https://api.fonnte.com/device", {
@@ -174,7 +193,12 @@ export async function sendFleetOutstandingReminders(args: {
   if (!token) throw new Error("FONNTE_TOKEN belum dikonfigurasi.");
 
   const deviceProfile = await getFonnteDeviceProfile(token);
-  const senderDevice = deviceProfile.device;
+  const configuredSender = await getConfiguredFleetSender();
+  // Fonnte's device/profile endpoint may report the account/admin profile device
+  // rather than the WhatsApp number that actually appears as the outbound sender.
+  // For Fleet audit logs, prefer the explicitly configured sender that has been
+  // operationally verified, while the token still controls the real provider route.
+  const senderDevice = configuredSender ?? deviceProfile.device;
 
   const params: unknown[] = [companyId, suppressHours];
   let idFilter = "";
