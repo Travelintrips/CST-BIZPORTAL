@@ -280,7 +280,7 @@ describe("Google Sheet bank mutation sync", () => {
       match_status: "approved",
       match_result: "canonical settlement dibuat dari payment terpilih",
       coa_code: "1-1024-CST",
-      coa_name: "Payment Clearing Sport Center / QRIS CST",
+      coa_name: "QR Payement sc",
     });
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
@@ -296,6 +296,13 @@ describe("Google Sheet bank mutation sync", () => {
     expect(sql).toContain("sport_center.payment_settlement_batches");
     expect(sql).toContain("sport_center.accounting_journal_lines");
     expect(sql).toContain("canonical_contra");
+    expect(sql).toContain("qris_sheet_classification");
+    expect(sql).toContain("'QR Payement sc'::text as coa_name");
+    expect(sql).toContain("qris_match.candidate_type = 'qris_settlement'");
+    expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled'");
+    expect(sql.indexOf("qris_sheet_classification.coa_code")).toBeLessThan(
+      sql.indexOf("rule_classification.coa_code"),
+    );
     expect(sql).toContain("line.account_code = '1199'");
     expect(sql).toContain("canonical_clearing.code");
     expect(sql).toContain("coa.code like '1-1024-%'");
@@ -308,10 +315,45 @@ describe("Google Sheet bank mutation sync", () => {
     expect(updates).toEqual(expect.arrayContaining([
       { range: "'Mutasi Bank'!F2", values: [["RECONCILED"]] },
       { range: "'Mutasi Bank'!G2", values: [["1-1024-CST"]] },
-      { range: "'Mutasi Bank'!H2", values: [["Payment Clearing Sport Center / QRIS CST"]] },
+      { range: "'Mutasi Bank'!H2", values: [["QR Payement sc"]] },
       { range: "'Mutasi Bank'!I2", values: [["100"]] },
     ]));
   });
+  it("projects QR Payement sc for a matched canonical QRIS candidate before approval", async () => {
+    storedMutations.push({
+      id: 14,
+      mutation_key: "qris-candidate-key",
+      canonical_key: "qris-candidate-fallback",
+      status: "matched",
+      reconciliation_status: "matched",
+      journal_entry_id: null,
+      company_id: 42,
+      match_score: 100,
+      match_reason: "Nominal net dan tanggal settlement QRIS canonical cocok.",
+      match_status: "candidate",
+      match_result: "Nominal net dan tanggal settlement QRIS canonical cocok.",
+      coa_code: "1-1024-CST",
+      coa_name: "QR Payement sc",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon", "coa", "nama_coa", "match_score", "match_result", "last_sync"],
+      ["2026-09-23", "QRTRAVELI DR", "0", "258180", "qris-candidate-key", "", "", "", "", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!F2", values: [["MATCHED"]] },
+      { range: "'Mutasi Bank'!G2", values: [["1-1024-CST"]] },
+      { range: "'Mutasi Bank'!H2", values: [["QR Payement sc"]] },
+      { range: "'Mutasi Bank'!I2", values: [["100"]] },
+    ]));
+  });
+
   it("prefers the validated Rule AI target COA over a technical bank reclassification contra", async () => {
     storedMutations.push({
       id: 13,
