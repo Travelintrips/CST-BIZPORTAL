@@ -287,13 +287,30 @@ router.get("/dashboard", async (req: AdminRequest, res) => {
       ? req.query.month
       : null;
 
-    const outstanding = await pool.query(
-      `SELECT COUNT(*)::int AS count,
-              COALESCE(SUM(outstanding_amount),0)::numeric AS total_amount
-         FROM public.fleet_outstanding
-        WHERE company_id=$1 AND status='open'`,
-      [cid],
-    );
+    const [outstanding, driverSnapshot] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS count,
+                COALESCE(SUM(outstanding_amount),0)::numeric AS total_amount,
+                COUNT(*) FILTER (WHERE outstanding_amount >= 1000000)::int AS high_count
+           FROM public.fleet_outstanding
+          WHERE company_id=$1 AND status='open'`,
+        [cid],
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total_drivers,
+                COUNT(*) FILTER (WHERE status='active')::int AS active_drivers,
+                COUNT(*) FILTER (WHERE status='inactive')::int AS inactive_drivers,
+                COUNT(*) FILTER (WHERE status='suspended')::int AS suspended_drivers,
+                COUNT(*) FILTER (WHERE applicator_status='resign')::int AS resign_drivers,
+                COUNT(*) FILTER (WHERE applicator_status='need_to_assign')::int AS need_to_assign_drivers,
+                COUNT(*) FILTER (WHERE vehicle_ownership='company')::int AS company_units,
+                COUNT(*) FILTER (WHERE vehicle_ownership='partner_private')::int AS partner_private_units,
+                COUNT(*) FILTER (WHERE vehicle_ownership='unassigned')::int AS unassigned_units
+           FROM public.fleet_drivers
+          WHERE company_id=$1::text`,
+        [cid],
+      ),
+    ]);
 
     const topDrivers = await pool.query(
       `SELECT driver_name AS name, vehicle_plate, 0::int AS trips, outstanding_amount AS outstanding
@@ -318,6 +335,12 @@ router.get("/dashboard", async (req: AdminRequest, res) => {
     let trend: Record<string, unknown>[] = [];
     let rawTotals: Record<string, unknown> = { raw_outstanding_total: 0, raw_row_count: 0 };
     let lastUploadDate: string | null = null;
+    const snapshotSummary = {
+      ...(driverSnapshot.rows[0] ?? {}),
+      open_outstanding_count: Number(outstanding.rows[0]?.count ?? 0),
+      open_outstanding_total: Number(outstanding.rows[0]?.total_amount ?? 0),
+      high_outstanding_count: Number(outstanding.rows[0]?.high_count ?? 0),
+    };
 
     if (await tableExists("gojek_raw_transactions")) {
       const periodSql = month
@@ -393,6 +416,8 @@ router.get("/dashboard", async (req: AdminRequest, res) => {
       topDrivers: topDrivers.rows,
       outstanding: outstanding.rows[0] ?? { count: 0, total_amount: 0 },
       rawTotals,
+      snapshotSummary,
+      dataSource: Number((rawTotals as Record<string, unknown>).raw_row_count ?? 0) > 0 ? "transactions" : "driver_snapshot",
       lastUploadDate,
     });
   } catch (error) {
