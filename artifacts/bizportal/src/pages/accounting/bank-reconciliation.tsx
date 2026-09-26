@@ -1123,6 +1123,7 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   invoice: "Invoice",
   expense: "Expense",
   sport_payment: "Sport",
+  sport_group_payment: "Sport Group / DP",
   qris_settlement: "QRIS Settlement",
   tenant_invoice: "Tenant Invoice",
   vendor_payment: "Vendor Payment",
@@ -1702,6 +1703,7 @@ function isExactMatch(m: BankMutation): boolean {
 
 const REAL_TRANSACTION_CANDIDATE_TYPES = new Set([
   "sport_payment",
+  "sport_group_payment",
   "qris_settlement",
   "tenant_invoice",
   "vendor_invoice",
