@@ -26,6 +26,26 @@ function fmtNum(v: unknown) {
   return new Intl.NumberFormat("id-ID").format(parseFloat(String(v ?? 0)) || 0);
 }
 
+function driverDisplayStatus(o: Pick<OutstandingRow, "driver_status" | "applicator_status" | "vehicle_plate" | "rental_fee_daily">) {
+  const applicator = String(o.applicator_status ?? "").toLowerCase();
+  const plate = String(o.vehicle_plate ?? "").trim();
+  const rental = Number(o.rental_fee_daily ?? 0);
+
+  if (applicator === "fired" || String(o.driver_status ?? "").toLowerCase() === "suspended") {
+    return { label: "Suspended", className: "bg-rose-500/20 text-rose-300 border border-rose-600" };
+  }
+  if (applicator === "resign") {
+    return { label: "Resign", className: "bg-blue-500/20 text-blue-300 border border-blue-600" };
+  }
+  if (applicator === "need_to_assign" || (!plate && rental <= 0)) {
+    return { label: "Need to assign", className: "bg-amber-500/20 text-amber-300 border border-amber-600" };
+  }
+  if (String(o.driver_status ?? "").toLowerCase() === "active" && plate && rental > 0) {
+    return { label: "Active", className: "bg-emerald-500/20 text-emerald-300 border border-emerald-600" };
+  }
+  return { label: "Inactive", className: "bg-slate-500/20 text-slate-300 border border-slate-600" };
+}
+
 type DashboardData = {
   kpi: Record<string, unknown>;
   trend: Array<Record<string, unknown>>;
@@ -45,6 +65,8 @@ type OutstandingRow = {
   rental_fee_daily: number;
   outstanding_amount: number;
   status: string;
+  driver_status?: string | null;
+  applicator_status?: string | null;
 };
 
 type OstSortCol = "driver_name" | "rental_fee_daily" | "outstanding_amount";
@@ -644,14 +666,20 @@ export default function FleetIntelligenceDashboard() {
                               {fmtIdr(amount)}
                             </td>
                             <td className="px-4 py-3">
-                              <Badge className={String(o.status) === "open"
-                                ? "bg-amber-500/20 text-amber-300 border border-amber-600 text-xs"
-                                : "bg-emerald-500/20 text-emerald-300 border border-emerald-600 text-xs"}>
-                                {String(o.status) === "open" ? "Active" : String(o.status)}
-                              </Badge>
+                              {(() => {
+                                const display = driverDisplayStatus(o);
+                                return (
+                                  <Badge className={`${display.className} text-xs`}>
+                                    {display.label}
+                                  </Badge>
+                                );
+                              })()}
                             </td>
                             <td className="px-4 py-3">
-                              {Boolean(String(o.driver_phone ?? "").trim()) && (
+                              {String(o.driver_status ?? "").toLowerCase() === "active" &&
+                               Boolean(String(o.vehicle_plate ?? "").trim()) &&
+                               Number(o.rental_fee_daily ?? 0) > 0 &&
+                               Boolean(String(o.driver_phone ?? "").trim()) && (
                                 <Button size="sm" variant="outline"
                                   className="border-green-600 text-green-400 hover:bg-green-900/30 h-7 text-xs gap-1"
                                   onClick={() => openWaModal(o)}>

@@ -26,6 +26,26 @@ function fmtIdr(v: unknown) {
 function fmtNum(v: unknown) {
   return new Intl.NumberFormat("id-ID").format(parseFloat(String(v ?? 0)) || 0);
 }
+function getDriverDisplayStatus(o: Record<string, unknown>) {
+  const applicator = String(o.applicator_status ?? "").toLowerCase();
+  const driverStatus = String(o.driver_status ?? "").toLowerCase();
+  const plate = String(o.vehicle_plate ?? "").trim();
+  const rental = Number(o.rental_fee_daily ?? 0);
+
+  if (applicator === "fired" || driverStatus === "suspended") {
+    return { label: "Suspended", className: "bg-rose-500/20 text-rose-300 border border-rose-600" };
+  }
+  if (applicator === "resign") {
+    return { label: "Resign", className: "bg-blue-500/20 text-blue-300 border border-blue-600" };
+  }
+  if (applicator === "need_to_assign" || (!plate && rental <= 0)) {
+    return { label: "Need to assign", className: "bg-amber-500/20 text-amber-300 border border-amber-600" };
+  }
+  if (driverStatus === "active" && plate && rental > 0) {
+    return { label: "Active", className: "bg-emerald-500/20 text-emerald-300 border border-emerald-600" };
+  }
+  return { label: "Inactive", className: "bg-slate-500/20 text-slate-300 border border-slate-600" };
+}
 function fmtDatetime(v: unknown): string {
   if (!v || v === "null") return "-";
   try {
@@ -778,7 +798,7 @@ export default function FleetOutstandingPage() {
                 {/* Filter chips */}
                 <div className="flex items-center gap-2 flex-wrap mt-1">
                   {(["all", "has_plate", "no_plate"] as const).map((f) => {
-                    const labels = { all: `Semua (${list.length})`, has_plate: `Active (${hasPlateCount})`, no_plate: `Need to Assign (${noPlateCount})` };
+                    const labels = { all: `Semua (${list.length})`, has_plate: `Ada Unit (${hasPlateCount})`, no_plate: `Tanpa Unit (${noPlateCount})` };
                     const active = plateFilter === f;
                     const colorMap = {
                       all: active ? "bg-indigo-600 text-white border-indigo-500" : "bg-slate-700/60 text-slate-400 border-slate-600 hover:text-white hover:border-slate-500",
@@ -889,15 +909,10 @@ export default function FleetOutstandingPage() {
                                   </td>
                                   <td className="px-4 py-3">
                                     {(() => {
-                                      const plate = String(o.vehicle_plate ?? "").trim();
-                                      const hasPlate = plate && plate !== "-";
-                                      return hasPlate ? (
-                                        <Badge className="bg-emerald-500/20 text-emerald-300 border border-emerald-600 text-xs">
-                                          Active
-                                        </Badge>
-                                      ) : (
-                                        <Badge className="bg-orange-500/20 text-orange-300 border border-orange-600 text-xs">
-                                          Need to Assign
+                                      const display = getDriverDisplayStatus(o);
+                                      return (
+                                        <Badge className={`${display.className} text-xs`}>
+                                          {display.label}
                                         </Badge>
                                       );
                                     })()}
