@@ -676,7 +676,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
           vehicle_ownership: classification.vehicleOwnership,
         };
       })
-      .filter((row): row is NonNullable<typeof row> => row !== null);
+      .filter((row) => row !== null);
 
     const result = await pool.query<{ result: Record<string, unknown> }>(
       `SELECT public.fleet_import_driver_snapshot($1,$2,$3,$4::jsonb) AS result`,
