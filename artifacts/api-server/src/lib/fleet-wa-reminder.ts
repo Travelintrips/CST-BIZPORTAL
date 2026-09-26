@@ -166,7 +166,7 @@ function reminderMessage(row: ReminderRow): string {
   return [
     `Yth. Bapak/Ibu ${row.driver_name},`,
     "",
-    "Pengingat outstanding driver GoCar - PT Cahaya Sejati Teknologi.",
+    "Pengingat outstanding driver GoCar - PT Diva Servis.",
     plate ? `Kendaraan: ${plate}` : null,
     `Outstanding saat ini: ${formatIdr(row.outstanding_amount)}`,
     "",
@@ -174,7 +174,7 @@ function reminderMessage(row: ReminderRow): string {
     "Jika pembayaran sudah dilakukan, abaikan pesan ini dan simpan bukti pembayaran untuk verifikasi.",
     "",
     "Terima kasih.",
-    "PT Cahaya Sejati Teknologi",
+    "PT Diva Servis",
   ].filter(Boolean).join("\n");
 }
 
