@@ -292,6 +292,34 @@ export default function FleetIntelligenceDashboard() {
     return { filteredRows: sorted, highCount, totalOutstanding, allDriverCount };
   }, [ostData?.outstanding, search, showHighOnly, sortCol, sortDir]);
 
+  const groupedOutstanding = useMemo(() => {
+    const groups = [
+      { key: "active", label: "Active", className: "bg-emerald-950/40 text-emerald-300 border-emerald-700/50" },
+      { key: "need_to_assign", label: "Need to assign", className: "bg-amber-950/40 text-amber-300 border-amber-700/50" },
+      { key: "resign", label: "Resign", className: "bg-blue-950/40 text-blue-300 border-blue-700/50" },
+      { key: "suspended", label: "Suspended", className: "bg-rose-950/40 text-rose-300 border-rose-700/50" },
+      { key: "inactive", label: "Inactive", className: "bg-slate-800 text-slate-300 border-slate-700" },
+    ] as const;
+
+    const buckets = new Map<string, OutstandingRow[]>();
+    for (const row of filteredRows) {
+      const display = driverDisplayStatus(row);
+      const key =
+        display.label === "Active" ? "active" :
+        display.label === "Need to assign" ? "need_to_assign" :
+        display.label === "Resign" ? "resign" :
+        display.label === "Suspended" ? "suspended" :
+        "inactive";
+      const list = buckets.get(key) ?? [];
+      list.push(row);
+      buckets.set(key, list);
+    }
+
+    return groups
+      .map((group) => ({ ...group, rows: buckets.get(group.key) ?? [] }))
+      .filter((group) => group.rows.length > 0);
+  }, [filteredRows]);
+
   return (
     <AppShell>
       <div className="space-y-6">
@@ -644,119 +672,62 @@ export default function FleetIntelligenceDashboard() {
                           </td>
                         </tr>
                       )
-                    : filteredRows.map((o) => {
-                        const amount = parseFloat(String(o.outstanding_amount ?? 0));
-                        const isHigh = amount >= 1_000_000;
-                        const isAbove500k = amount >= 500_000;
-                        const rentalFee = parseFloat(String(o.rental_fee_daily ?? 0));
-                        const isSelected = selectedIds.has(o.id);
-                        return (
-                          <tr key={o.id} className={`border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors ${isSelected ? "bg-indigo-900/10" : isHigh ? "bg-red-950/10" : ""}`}>
-                            <td className="px-3 py-3">
-                              <input type="checkbox" className="w-3.5 h-3.5 accent-indigo-500"
-                                checked={isSelected} onChange={() => toggleSelect(o.id)} />
-                            </td>
-                            <td className="px-4 py-3 font-medium text-white text-sm">{String(o.driver_name ?? "-")}</td>
-                            <td className="px-4 py-3 text-slate-400 text-xs">{String(o.driver_phone ?? "-")}</td>
-                            <td className="px-4 py-3 text-slate-400 font-mono text-xs">{String(o.vehicle_plate ?? "-")}</td>
-                            <td className="px-4 py-3 text-slate-300 text-xs tabular-nums">
-                              {rentalFee > 0 ? fmtIdr(rentalFee) : "—"}
-                            </td>
-                            <td className={`px-4 py-3 font-bold tabular-nums text-sm ${isHigh ? "text-red-400" : isAbove500k ? "text-amber-400" : "text-slate-300"}`}>
-                              {fmtIdr(amount)}
-                            </td>
-                            <td className="px-4 py-3">
-                              {(() => {
-                                const display = driverDisplayStatus(o);
-                                return (
-                                  <Badge className={`${display.className} text-xs`}>
-                                    {display.label}
-                                  </Badge>
-                                );
-                              })()}
-                            </td>
-                            <td className="px-4 py-3">
-                              {String(o.driver_status ?? "").toLowerCase() === "active" &&
-                               Boolean(String(o.vehicle_plate ?? "").trim()) &&
-                               Number(o.rental_fee_daily ?? 0) > 0 &&
-                               Boolean(String(o.driver_phone ?? "").trim()) && (
-                                <Button size="sm" variant="outline"
-                                  className="border-green-600 text-green-400 hover:bg-green-900/30 h-7 text-xs gap-1"
-                                  onClick={() => openWaModal(o)}>
-                                  <MessageCircle className="w-3 h-3" /> Kirim WA
-                                </Button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })
-                  }
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Top Drivers */}
-        <Card className="bg-slate-800/60 border-slate-700">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-white text-base">Top 10 Driver</CardTitle>
-              {fmtUploadDate && (
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Data per: <span className="text-slate-400 font-medium">{fmtUploadDate}</span>
-                </p>
-              )}
-            </div>
-            <Link href="/logistics/fleet-intelligence/outstanding">
-              <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">Lihat Semua →</Button>
-            </Link>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="text-left py-2 text-slate-400 font-medium">#</th>
-                    <th className="text-left py-2 text-slate-400 font-medium">Driver</th>
-                    <th className="text-left py-2 text-slate-400 font-medium">Plat</th>
-                    <th className="text-right py-2 text-slate-400 font-medium">Trip</th>
-                    <th className="text-right py-2 text-slate-400 font-medium">Outstanding</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoading
-                    ? Array.from({ length: 5 }).map((_, i) => (
-                        <tr key={i} className="border-b border-slate-700/50">
-                          <td colSpan={5} className="py-2"><div className="h-4 bg-slate-700 rounded animate-pulse" /></td>
-                        </tr>
-                      ))
-                    : topDrivers.map((d: any, i: number) => {
-                        const amt = parseFloat(String(d.outstanding ?? 0));
-                        const amtColor = amt >= 1_000_000
-                          ? "text-red-400"
-                          : amt >= 500_000
-                          ? "text-amber-400"
-                          : "text-emerald-400";
-                        const rowBg = amt >= 1_000_000
-                          ? "border-red-900/40 bg-red-950/20"
-                          : amt >= 500_000
-                          ? "border-amber-900/40 bg-amber-950/10"
-                          : "border-slate-700/50";
-                        return (
-                          <tr key={i} className={`border-b ${rowBg} hover:bg-slate-700/30 transition-colors`}>
-                            <td className="py-2 pr-2 text-slate-400">{i + 1}</td>
-                            <td className="py-2 font-medium text-white">{String(d.name)}</td>
-                            <td className="py-2">
-                              <span className="text-xs font-mono bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">
-                                {String(d.vehicle_plate ?? "-")}
-                              </span>
-                            </td>
-                            <td className="py-2 text-right text-slate-300">{fmtNum(d.trips)}</td>
-                            <td className={`py-2 text-right font-semibold ${amtColor}`}>{fmtIdr(d.outstanding)}</td>
-                          </tr>
-                        );
-                      })}
+                    : groupedOutstanding.flatMap((group) => [
+                        <tr key={`group-${group.key}`} className="border-y border-slate-700/60">
+                          <td colSpan={8} className={`px-4 py-2 ${group.className}`}>
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-xs uppercase tracking-wide">{group.label}</span>
+                              <span className="text-xs font-medium">{group.rows.length} driver</span>
+                            </div>
+                          </td>
+                        </tr>,
+                        ...group.rows.map((o) => {
+                          const amount = parseFloat(String(o.outstanding_amount ?? 0));
+                          const isHigh = amount >= 1_000_000;
+                          const isAbove500k = amount >= 500_000;
+                          const rentalFee = parseFloat(String(o.rental_fee_daily ?? 0));
+                          const isSelected = selectedIds.has(o.id);
+                          return (
+                            <tr key={o.id} className={`border-b border-slate-700/30 hover:bg-slate-700/20 transition-colors ${isSelected ? "bg-indigo-900/10" : isHigh ? "bg-red-950/10" : ""}`}>
+                              <td className="px-3 py-3">
+                                <input type="checkbox" className="w-3.5 h-3.5 accent-indigo-500"
+                                  checked={isSelected} onChange={() => toggleSelect(o.id)} />
+                              </td>
+                              <td className="px-4 py-3 font-medium text-white text-sm">{String(o.driver_name ?? "-")}</td>
+                              <td className="px-4 py-3 text-slate-400 text-xs">{String(o.driver_phone ?? "-")}</td>
+                              <td className="px-4 py-3 text-slate-400 font-mono text-xs">{String(o.vehicle_plate ?? "-")}</td>
+                              <td className="px-4 py-3 text-slate-300 text-xs tabular-nums">
+                                {rentalFee > 0 ? fmtIdr(rentalFee) : "—"}
+                              </td>
+                              <td className={`px-4 py-3 font-bold tabular-nums text-sm ${isHigh ? "text-red-400" : isAbove500k ? "text-amber-400" : "text-slate-300"}`}>
+                                {fmtIdr(amount)}
+                              </td>
+                              <td className="px-4 py-3">
+                                {(() => {
+                                  const display = driverDisplayStatus(o);
+                                  return (
+                                    <Badge className={`${display.className} text-xs`}>
+                                      {display.label}
+                                    </Badge>
+                                  );
+                                })()}
+                              </td>
+                              <td className="px-4 py-3">
+                                {String(o.driver_status ?? "").toLowerCase() === "active" &&
+                                 Boolean(String(o.vehicle_plate ?? "").trim()) &&
+                                 Number(o.rental_fee_daily ?? 0) > 0 &&
+                                 Boolean(String(o.driver_phone ?? "").trim()) && (
+                                  <Button size="sm" variant="outline"
+                                    className="border-green-600 text-green-400 hover:bg-green-900/30 h-7 text-xs gap-1"
+                                    onClick={() => openWaModal(o)}>
+                                    <MessageCircle className="w-3 h-3" /> Kirim WA
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        }),
+                      ])}
                 </tbody>
               </table>
             </div>
