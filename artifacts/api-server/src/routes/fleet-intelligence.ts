@@ -280,7 +280,6 @@ async function tableExists(name: string): Promise<boolean> {
 
 router.get("/dashboard", async (req: AdminRequest, res) => {
   try {
-    await ensureFleetTables();
     const cid = companyId(req);
     const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
     const month = typeof req.query.month === "string" && /^\d{4}-\d{2}$/.test(req.query.month)
@@ -429,7 +428,6 @@ router.get("/dashboard", async (req: AdminRequest, res) => {
 
 router.get("/outstanding", async (req: AdminRequest, res) => {
   try {
-    await ensureFleetTables();
     const cid = companyId(req);
     const status = typeof req.query.status === "string" && req.query.status.trim()
       ? req.query.status.trim()
