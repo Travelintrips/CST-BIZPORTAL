@@ -2,6 +2,7 @@ import { Router } from "express";
 import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
 import { authenticateAdmin, type AdminRequest } from "./admin-auth";
+import { sendFleetOutstandingReminders } from "../lib/fleet-wa-reminder";
 
 const router = Router();
 
@@ -812,6 +813,114 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
     res.status(500).json({ error: "Gagal sinkronisasi master driver dan outstanding." });
   } finally {
     client.release();
+  }
+});
+
+
+router.get("/outstanding/wa-logs", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const limit=Math.min(Math.max(Number(req.query.limit)||100,1),500);
+    const offset=Math.max(Number(req.query.offset)||0,0);
+    const [rows,count]=await Promise.all([
+      pool.query(
+        `SELECT * FROM public.fleet_wa_logs
+          WHERE company_id=$1
+          ORDER BY sent_at DESC,id DESC
+          LIMIT $2 OFFSET $3`,
+        [cid,limit,offset],
+      ),
+      pool.query<{count:number}>("SELECT COUNT(*)::int count FROM public.fleet_wa_logs WHERE company_id=$1",[cid]),
+    ]);
+    res.json({logs:rows.rows,total:count.rows[0]?.count??0});
+  } catch(error) {
+    req.log.error({error},"Fleet WA logs failed");
+    res.status(503).json({error:"Gagal mengambil riwayat WhatsApp Fleet."});
+  }
+});
+
+router.get("/outstanding/auto-blast-settings", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const result=await pool.query(
+      `SELECT fleet_auto_blast_enabled,fleet_auto_blast_hour,fleet_auto_blast_last_run
+         FROM public.accounting_settings
+        WHERE company_id=$1
+        LIMIT 1`,
+      [cid],
+    );
+    const row=result.rows[0] as Record<string,unknown>|undefined;
+    res.json({
+      enabled:Boolean(row?.fleet_auto_blast_enabled),
+      hour:Number(row?.fleet_auto_blast_hour??8),
+      last_run:row?.fleet_auto_blast_last_run??null,
+    });
+  } catch(error) {
+    req.log.error({error},"Fleet auto reminder settings failed");
+    res.status(503).json({error:"Gagal mengambil pengaturan pengingat WA."});
+  }
+});
+
+router.put("/outstanding/auto-blast-settings", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const enabled=req.body?.enabled===true||req.body?.enabled==="true";
+    const hour=Math.max(0,Math.min(23,Number(req.body?.hour??8)||8));
+    const existing=await pool.query("SELECT id FROM public.accounting_settings WHERE company_id=$1 LIMIT 1",[cid]);
+    if(existing.rows[0]?.id){
+      await pool.query(
+        `UPDATE public.accounting_settings
+            SET fleet_auto_blast_enabled=$2,fleet_auto_blast_hour=$3,updated_at=NOW()
+          WHERE id=$1`,
+        [existing.rows[0].id,enabled,hour],
+      );
+    }else{
+      await pool.query(
+        `INSERT INTO public.accounting_settings(company_id,fleet_auto_blast_enabled,fleet_auto_blast_hour)
+         VALUES($1,$2,$3)`,
+        [cid,enabled,hour],
+      );
+    }
+    res.json({ok:true,enabled,hour});
+  } catch(error) {
+    req.log.error({error},"Fleet auto reminder settings update failed");
+    res.status(503).json({error:"Gagal menyimpan pengaturan pengingat WA."});
+  }
+});
+
+router.post("/outstanding/wa-reminder", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const result=await sendFleetOutstandingReminders({
+      companyId:cid,
+      actor:req.adminUser?.email??"system",
+      suppressHours:Number(req.body?.suppress_hours)||24,
+      sendType:"manual",
+    });
+    res.json({ok:true,...result});
+  } catch(error) {
+    req.log.error({error},"Fleet WA reminder failed");
+    res.status(503).json({error:error instanceof Error?error.message:"Gagal mengirim pengingat WA Fleet."});
+  }
+});
+
+router.post("/outstanding/wa-blast", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const ids=Array.isArray(req.body?.ids)?req.body.ids.map(Number).filter((id:number)=>Number.isSafeInteger(id)&&id>0):[];
+    if(!ids.length){res.status(400).json({error:"Tidak ada driver yang dipilih."});return;}
+    if(ids.length>100){res.status(400).json({error:"Maksimal 100 driver per pengiriman."});return;}
+    const result=await sendFleetOutstandingReminders({
+      companyId:cid,
+      actor:req.adminUser?.email??"system",
+      suppressHours:Number(req.body?.suppress_hours)||24,
+      ids,
+      sendType:"selected",
+    });
+    res.json({ok:true,total:result.eligible,...result});
+  } catch(error) {
+    req.log.error({error},"Fleet selected WA blast failed");
+    res.status(503).json({error:error instanceof Error?error.message:"Gagal mengirim WA Fleet."});
   }
 });
 
