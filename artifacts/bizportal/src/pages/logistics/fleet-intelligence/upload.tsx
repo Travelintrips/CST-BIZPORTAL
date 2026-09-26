@@ -817,6 +817,7 @@ function SnapshotUploadTab() {
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState<SnapshotStep>("select");
   const [previewData, setPreviewData] = useState<SnapshotPreviewResult | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<{ updated: number; inserted: number; skipped: number; errors?: number; total: number; message: string } | null>(null);
   const [logDays, setLogDays] = useState<7 | 30>(30);
 
@@ -836,11 +837,16 @@ function SnapshotUploadTab() {
     mutationFn: async () => {
       if (!file) throw new Error("Pilih file terlebih dahulu");
       const content = await file.text();
+      const firstLine = content.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0]?.toLowerCase() ?? "";
+      if (!firstLine.includes("driver name") || !firstLine.includes("outstanding")) {
+        throw new Error("Format CSV tidak sesuai. Kolom Driver Name dan Outstanding wajib ada.");
+      }
       const res = await fetch("/api/logistics/fleet/outstanding/snapshot/preview", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, fileName: file.name }),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -848,8 +854,13 @@ function SnapshotUploadTab() {
       }
       return res.json() as Promise<SnapshotPreviewResult>;
     },
-    onSuccess: (data) => { setPreviewData(data); setStep("preview"); },
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: () => setPreviewError(null),
+    onSuccess: (data) => { setPreviewData(data); setPreviewError(null); setStep("preview"); },
+    onError: (e: Error) => {
+      const message = e.name === "TimeoutError" ? "Preview timeout setelah 30 detik. Coba lagi." : e.message;
+      setPreviewError(message);
+      toast.error(message);
+    },
   });
 
   const importMutation = useMutation({
@@ -884,8 +895,22 @@ function SnapshotUploadTab() {
   });
 
   function reset() {
-    setFile(null); setPreviewData(null); setImportResult(null); setStep("select");
+    setFile(null); setPreviewData(null); setPreviewError(null); setImportResult(null); setStep("select");
     if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function chooseFile(nextFile: File | null) {
+    setFile(nextFile);
+    setPreviewData(null);
+    setPreviewError(null);
+    setImportResult(null);
+    setStep("select");
+  }
+
+  function runPreview() {
+    if (!file || previewMutation.isPending) return;
+    setPreviewError(null);
+    previewMutation.mutate();
   }
 
   const totalOutstanding = (previewData?.rows ?? []).reduce((s, r) => s + r.outstanding, 0);
@@ -944,11 +969,11 @@ function SnapshotUploadTab() {
               className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${dragging ? "border-emerald-500 bg-emerald-900/10" : "border-slate-600 hover:border-slate-500 bg-slate-900/30"}`}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) { setFile(f); setPreviewData(null); setStep("select"); } }}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) chooseFile(f); }}
               onClick={() => fileRef.current?.click()}
             >
-              <input ref={fileRef} type="file" accept=".csv" className="hidden"
-                onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreviewData(null); }} />
+              <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden"
+                onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} />
               <FileSpreadsheet className="w-10 h-10 text-slate-400 mx-auto mb-3" />
               {file ? (
                 <div>
@@ -965,14 +990,20 @@ function SnapshotUploadTab() {
             </div>
 
             <Button
+              type="button"
               className="w-full bg-emerald-600 hover:bg-emerald-700 h-12 text-base font-semibold disabled:opacity-50"
               disabled={!file || previewMutation.isPending}
-              onClick={() => previewMutation.mutate()}
+              onClick={runPreview}
             >
               {previewMutation.isPending
                 ? <><RefreshCw className="w-5 h-5 mr-2 animate-spin" /> Menganalisis...</>
                 : <><Eye className="w-5 h-5 mr-2" /> Preview Sebelum Import</>}
             </Button>
+            {previewError && (
+              <div className="rounded-lg border border-red-600/40 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+                {previewError}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
