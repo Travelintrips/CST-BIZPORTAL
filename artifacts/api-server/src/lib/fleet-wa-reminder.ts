@@ -51,7 +51,31 @@ async function getFonnteToken(): Promise<string> {
   }
 }
 
-async function sendFonnte(target: string, message: string, token: string): Promise<void> {
+async function getFonnteDeviceProfile(token: string): Promise<{ device: string | null; deviceStatus: string | null }> {
+  try {
+    const response = await fetch("https://api.fonnte.com/device", {
+      method: "POST",
+      headers: { Authorization: token },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const payload = await response.json().catch(() => null) as {
+      status?: boolean | string;
+      device?: string;
+      device_status?: string;
+    } | null;
+    if (!response.ok || payload?.status === false || payload?.status === "false") {
+      return { device: null, deviceStatus: null };
+    }
+    return {
+      device: payload?.device ? normalizePhone(payload.device) : null,
+      deviceStatus: payload?.device_status ? String(payload.device_status) : null,
+    };
+  } catch {
+    return { device: null, deviceStatus: null };
+  }
+}
+
+async function sendFonnte(target: string, message: string, token: string): Promise<{ messageId: string | null }> {
   const response = await fetch("https://api.fonnte.com/send", {
     method: "POST",
     headers: {
@@ -70,6 +94,11 @@ async function sendFonnte(target: string, message: string, token: string): Promi
   if (!response.ok || rejected) {
     throw new Error(payload?.reason ?? payload?.message ?? `Fonnte returned ${response.status}`);
   }
+  const rawId = (payload as Record<string, unknown> | null)?.id
+    ?? (payload as Record<string, unknown> | null)?.message_id
+    ?? (payload as Record<string, unknown> | null)?.requestid
+    ?? null;
+  return { messageId: rawId == null ? null : String(rawId) };
 }
 
 function reminderMessage(row: ReminderRow): string {
@@ -102,6 +131,9 @@ export async function sendFleetOutstandingReminders(args: {
   const ids = Array.isArray(args.ids) ? args.ids.filter((id) => Number.isSafeInteger(id) && id > 0) : [];
   const token = await getFonnteToken();
   if (!token) throw new Error("FONNTE_TOKEN belum dikonfigurasi.");
+
+  const deviceProfile = await getFonnteDeviceProfile(token);
+  const senderDevice = deviceProfile.device;
 
   const params: unknown[] = [companyId, suppressHours];
   let idFilter = "";
@@ -154,12 +186,12 @@ export async function sendFleetOutstandingReminders(args: {
     }
     const message = reminderMessage(row);
     try {
-      await sendFonnte(phone, message, token);
+      const provider = await sendFonnte(phone, message, token);
       await pool.query(
         `INSERT INTO public.fleet_wa_logs
-          (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'sent')`,
-        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType],
+          (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status,sender_device,provider_message_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'sent',$10,$11)`,
+        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType,senderDevice,provider.messageId],
       );
       await pool.query(
         `UPDATE public.fleet_outstanding
@@ -172,9 +204,9 @@ export async function sendFleetOutstandingReminders(args: {
       failed += 1;
       await pool.query(
         `INSERT INTO public.fleet_wa_logs
-          (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'failed')`,
-        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType],
+          (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status,sender_device,error_detail)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'failed',$10,$11)`,
+        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType,senderDevice,error instanceof Error ? error.message : String(error)],
       ).catch(() => undefined);
     }
   }
@@ -186,7 +218,9 @@ export async function sendFleetOutstandingReminders(args: {
     failed,
     skippedSuppressed,
     skippedNoPhone,
-  };
+    senderDevice,
+    deviceStatus: deviceProfile.deviceStatus,
+  } as FleetReminderSweepResult & { senderDevice: string | null; deviceStatus: string | null };
 }
 
 export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepResult[]> {
