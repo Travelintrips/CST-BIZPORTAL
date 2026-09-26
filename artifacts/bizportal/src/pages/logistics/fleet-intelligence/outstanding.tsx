@@ -642,8 +642,8 @@ export default function FleetOutstandingPage() {
         {/* ── Header ─────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-white">Outstanding Balance</h1>
-            <p className="text-slate-400 text-sm mt-1">Saldo hutang / piutang driver yang belum terselesaikan</p>
+            <h1 className="text-2xl font-bold text-white">Driver & Outstanding Fleet</h1>
+            <p className="text-slate-400 text-sm mt-1">Seluruh driver dari CSV terakhir, dikelompokkan berdasarkan status dan nilai outstanding</p>
           </div>
           {activeTab === "list" && (
             <div className="flex items-center gap-2 flex-wrap">
@@ -689,7 +689,7 @@ export default function FleetOutstandingPage() {
         {/* ── Tabs ───────────────────────────────────────────────────── */}
         <div className="flex gap-1 bg-slate-800/60 border border-slate-700 rounded-lg p-1 w-fit">
           {([
-            { key: "list",   label: "Daftar Outstanding",   icon: <Users className="w-4 h-4" /> },
+            { key: "list",   label: "Daftar Driver & Outstanding",   icon: <Users className="w-4 h-4" /> },
             { key: "upload", label: "Ringkasan Outstanding", icon: <Upload className="w-4 h-4" /> },
           ] as const).map((t) => (
             <button
@@ -928,7 +928,7 @@ export default function FleetOutstandingPage() {
                                 const hasPhone    = Boolean(String(o.driver_phone ?? "").trim());
                                 const rentalFee   = parseFloat(String(o.rental_fee_daily ?? 0));
                                 return (
-                                  <tr key={String(o.id)} className={`border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors ${selectedIds.has(Number(o.id)) ? "bg-indigo-900/10" : ""}`}>
+                                  <tr key={`driver-${String(o.driver_id ?? o.id)}`} className={`border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors ${Number(o.id ?? 0) > 0 && selectedIds.has(Number(o.id)) ? "bg-indigo-900/10" : ""}`}>
                                     {status === "open" && (
                                       <td className="px-3 py-3">
                                         <input
