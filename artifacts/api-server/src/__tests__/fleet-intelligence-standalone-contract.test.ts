@@ -20,6 +20,8 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain('router.get("/outstanding"');
     expect(fleetRoute).toContain('router.post("/outstanding/repair"');
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/preview"');
+    expect(fleetRoute).toContain("full_name=$3");
+    expect(fleetRoute).toContain("company_id=$2::text");
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/confirm"');
   });
 
