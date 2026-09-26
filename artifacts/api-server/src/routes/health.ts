@@ -1,6 +1,10 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { getRuntimeDatabaseUrl, pool } from "@workspace/db";
+import {
+  initializeProductionSessionSigning,
+  isDevelopmentEnvironment,
+} from "./dev-auth";
 
 const router: IRouter = Router();
 
@@ -17,18 +21,23 @@ router.get("/health/ready", async (_req, res) => {
   try {
     await pool.query<{ ok: number }>("select 1 as ok");
     const runtimeDatabaseUrl = await getRuntimeDatabaseUrl();
+    if (!isDevelopmentEnvironment()) {
+      await initializeProductionSessionSigning();
+    }
     res.json({
       status: "ok",
       ready: true,
       database: "connected",
+      authSessionSigning: "ready",
       databaseProvider: runtimeDatabaseUrl.includes("supabase") ? "supabase" : "postgres",
     });
   } catch (error) {
     res.status(503).json({
       status: "degraded",
       ready: false,
-      database: "unavailable",
-      error: error instanceof Error ? error.message : "Database connection failed",
+      database: "unavailable-or-auth-not-ready",
+      authSessionSigning: "not-ready",
+      error: error instanceof Error ? error.message : "Runtime readiness failed",
     });
   }
 });
