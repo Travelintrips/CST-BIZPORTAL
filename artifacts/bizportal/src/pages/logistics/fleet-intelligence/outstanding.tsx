@@ -27,11 +27,15 @@ function fmtNum(v: unknown) {
   return new Intl.NumberFormat("id-ID").format(parseFloat(String(v ?? 0)) || 0);
 }
 function getDriverDisplayStatus(o: Record<string, unknown>) {
+  const presentInLatest = o.source_present_in_latest_snapshot !== false;
   const applicator = String(o.applicator_status ?? "").toLowerCase();
   const driverStatus = String(o.driver_status ?? "").toLowerCase();
   const plate = String(o.vehicle_plate ?? "").trim();
   const rental = Number(o.rental_fee_daily ?? 0);
 
+  if (!presentInLatest) {
+    return { label: "Tidak ada di snapshot terbaru", className: "bg-violet-500/20 text-violet-300 border border-violet-600" };
+  }
   if (applicator === "fired" || driverStatus === "suspended") {
     return { label: "Suspended", className: "bg-rose-500/20 text-rose-300 border border-rose-600" };
   }
@@ -555,6 +559,7 @@ export default function FleetOutstandingPage() {
   const summary  = data?.summary ?? {};
   const eligibleActive = list.filter(
     (o) =>
+      o.source_present_in_latest_snapshot !== false &&
       String(o.driver_status ?? "") === "active" &&
       Number(o.rental_fee_daily ?? 0) > 0 &&
       parseFloat(String(o.outstanding_amount ?? 0)) > 0 &&
@@ -601,6 +606,7 @@ export default function FleetOutstandingPage() {
       { key: "resign", label: "Resign", className: "bg-blue-950/50 text-blue-300 border-blue-700/50" },
       { key: "suspended", label: "Suspended", className: "bg-rose-950/50 text-rose-300 border-rose-700/50" },
       { key: "inactive", label: "Inactive", className: "bg-slate-800 text-slate-300 border-slate-700" },
+      { key: "missing_snapshot", label: "Tidak ada di snapshot terbaru", className: "bg-violet-950/50 text-violet-300 border-violet-700/50" },
     ] as const;
     const buckets = new Map<string, Array<Record<string, unknown>>>();
     for (const row of sortedList) {
@@ -610,6 +616,7 @@ export default function FleetOutstandingPage() {
         display.label === "Need to assign" ? "need_to_assign" :
         display.label === "Resign" ? "resign" :
         display.label === "Suspended" ? "suspended" :
+        display.label === "Tidak ada di snapshot terbaru" ? "missing_snapshot" :
         "inactive";
       const bucket = buckets.get(key) ?? [];
       bucket.push(row);
@@ -643,7 +650,7 @@ export default function FleetOutstandingPage() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold text-white">Driver & Outstanding Fleet</h1>
-            <p className="text-slate-400 text-sm mt-1">Seluruh driver dari CSV terakhir, dikelompokkan berdasarkan status dan nilai outstanding</p>
+            <p className="text-slate-400 text-sm mt-1">Driver pada snapshot terbaru ditambah driver lama yang tidak lagi muncul, dikelompokkan berdasarkan status</p>
           </div>
           {activeTab === "list" && (
             <div className="flex items-center gap-2 flex-wrap">
@@ -726,8 +733,8 @@ export default function FleetOutstandingPage() {
                 <CardContent className="p-4 flex items-center gap-3">
                   <AlertTriangle className="w-8 h-8 text-red-400" />
                   <div>
-                    <div className="text-2xl font-bold text-white">{fmtNum(summary.driver_count ?? summary.count)}</div>
-                    <div className="text-slate-400 text-sm">{status === "open" ? "Total Driver dari CSV Terakhir" : "Driver dengan Outstanding"}</div>
+                    <div className="text-2xl font-bold text-white">{fmtNum(summary.current_snapshot_count ?? summary.driver_count ?? summary.count)}</div>
+                    <div className="text-slate-400 text-sm">{status === "open" ? "Driver di Snapshot Terbaru" : "Driver dengan Outstanding"}</div>
                   </div>
                 </CardContent>
               </Card>
