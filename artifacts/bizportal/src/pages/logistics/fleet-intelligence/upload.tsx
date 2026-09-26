@@ -846,7 +846,7 @@ function SnapshotUploadTab() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, fileName: file.name }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -857,7 +857,7 @@ function SnapshotUploadTab() {
     onMutate: () => setPreviewError(null),
     onSuccess: (data) => { setPreviewData(data); setPreviewError(null); setStep("preview"); },
     onError: (e: Error) => {
-      const message = e.name === "TimeoutError" ? "Preview timeout setelah 30 detik. Coba lagi." : e.message;
+      const message = e.name === "TimeoutError" ? "Preview timeout setelah 60 detik. Coba lagi." : e.message;
       setPreviewError(message);
       toast.error(message);
     },
