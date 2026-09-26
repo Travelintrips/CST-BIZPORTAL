@@ -874,6 +874,7 @@ function SnapshotUploadTab() {
           rows: previewData.rows,
           fileName: file?.name ?? "snapshot.csv",
         }),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -890,6 +891,10 @@ function SnapshotUploadTab() {
       qc.invalidateQueries({ queryKey: ["fleet-outstanding-index"] });
       qc.invalidateQueries({ queryKey: ["fleet-dashboard"] });
       refetchLogs();
+    },
+    onError: (e: Error) => {
+      const message = e.name === "TimeoutError" ? "Import timeout setelah 60 detik. Tidak ada perubahan parsial yang disimpan; coba lagi." : e.message;
+      toast.error(message);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -1142,7 +1147,7 @@ function SnapshotUploadTab() {
             <div className="grid grid-cols-3 gap-3">
               {[
                 { label: "Driver Diperbarui", val: importResult.updated, cls: "text-emerald-400" },
-                { label: "Driver Baru (Unmatched)", val: importResult.inserted, cls: "text-amber-400" },
+                { label: "Driver Baru", val: importResult.inserted, cls: "text-amber-400" },
                 { label: "Dilewati", val: importResult.skipped, cls: "text-slate-400" },
               ].map((s) => (
                 <div key={s.label} className="bg-slate-900/60 rounded-lg p-3 text-center">
