@@ -2287,6 +2287,66 @@ router.get("/pipeline/monitor", async (req: AdminRequest, res) => {
   }catch(error){req.log.error({error},"Fleet pipeline monitor failed");res.status(503).json({error:"Gagal memuat pipeline monitor."});}
 });
 
+
+router.get("/pipeline/export-csv", async (req: AdminRequest, res) => {
+  try{
+    const cid=companyId(req);
+    const driverName=typeof req.query.driverName==="string"?req.query.driverName.trim():"";
+    const driverExtId=typeof req.query.driverExtId==="string"?req.query.driverExtId.trim():"";
+    const dateFrom=typeof req.query.dateFrom==="string"?req.query.dateFrom:null;
+    const dateTo=typeof req.query.dateTo==="string"?req.query.dateTo:null;
+    const transactionType=typeof req.query.transactionType==="string"?req.query.transactionType.trim():"";
+    const reportId=Number(req.query.reportId)||0;
+    const mode=req.query.mode==="summary"?"summary":"detail";
+    let headers:string[]=[];
+    let rows:unknown[][]=[];
+    if(mode==="summary"){
+      const result=await pool.query(
+        `SELECT COALESCE(driver_external_id,'') AS driver_id,MAX(driver_name) AS driver_name,
+                MAX(COALESCE(driver_phone,phone_number)) AS phone,MAX(COALESCE(vehicle_plate,vehicle)) AS vehicle,
+                COUNT(*)::int AS tx_count,
+                COALESCE(SUM(CASE WHEN amount<0 THEN amount ELSE 0 END),0)::numeric AS total_debit,
+                COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0)::numeric AS total_credit,
+                COALESCE(SUM(amount),0)::numeric AS net_flow,
+                MAX(date_iso)::text AS last_date
+           FROM public.gojek_raw_transactions
+          WHERE company_id=$1
+            AND ($2='' OR COALESCE(driver_name,'') ILIKE '%'||$2||'%')
+            AND ($3='' OR COALESCE(driver_external_id,'') ILIKE '%'||$3||'%')
+            AND ($4::date IS NULL OR date_iso >= $4::date)
+            AND ($5::date IS NULL OR date_iso <= $5::date)
+            AND ($6='' OR COALESCE(transaction_type,'')=$6)
+            AND ($7=0 OR report_id=$7)
+          GROUP BY COALESCE(driver_external_id,'')
+          ORDER BY total_debit ASC`,
+        [cid,driverName,driverExtId,dateFrom,dateTo,transactionType,reportId]);
+      headers=["Driver ID","Driver Name","Phone","Vehicle","Transaction Count","Total Debit","Total Credit","Net Flow","Last Date"];
+      rows=result.rows.map(r=>[r.driver_id,r.driver_name,r.phone,r.vehicle,r.tx_count,r.total_debit,r.total_credit,r.net_flow,r.last_date]);
+    }else{
+      const result=await pool.query(
+        `SELECT id,report_id,date_iso,driver_external_id,driver_name,COALESCE(driver_phone,phone_number) phone,
+                COALESCE(vehicle_plate,vehicle) vehicle,transaction_type,amount,total_outstanding_balance,gopay_transaction_reference_id,service_type
+           FROM public.gojek_raw_transactions
+          WHERE company_id=$1
+            AND ($2='' OR COALESCE(driver_name,'') ILIKE '%'||$2||'%')
+            AND ($3='' OR COALESCE(driver_external_id,'') ILIKE '%'||$3||'%')
+            AND ($4::date IS NULL OR date_iso >= $4::date)
+            AND ($5::date IS NULL OR date_iso <= $5::date)
+            AND ($6='' OR COALESCE(transaction_type,'')=$6)
+            AND ($7=0 OR report_id=$7)
+          ORDER BY date_iso DESC NULLS LAST,id DESC LIMIT 100000`,
+        [cid,driverName,driverExtId,dateFrom,dateTo,transactionType,reportId]);
+      headers=["ID","Report ID","Date","Driver ID","Driver Name","Phone","Vehicle","Transaction Type","Amount","Outstanding","GoPay Ref","Service"];
+      rows=result.rows.map(r=>[r.id,r.report_id,r.date_iso,r.driver_external_id,r.driver_name,r.phone,r.vehicle,r.transaction_type,r.amount,r.total_outstanding_balance,r.gopay_transaction_reference_id,r.service_type]);
+    }
+    const esc=(v:unknown)=>{const s=String(v??"");return /[",\n\r]/.test(s)?`"${s.replaceAll('"','""')}"`:s;};
+    const csv=[headers.map(esc).join(","),...rows.map(row=>row.map(esc).join(","))].join("\r\n");
+    res.setHeader("Content-Type","text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition",`attachment; filename="fleet-${mode}-${new Date().toISOString().slice(0,10)}.csv"`);
+    res.send("\uFEFF"+csv);
+  }catch(error){req.log.error({error},"Fleet pipeline export failed");res.status(503).json({error:"Export pipeline gagal."});}
+});
+
 router.get("/pipeline/dlq", async (req: AdminRequest, res) => {
   try{
     const cid=companyId(req),page=Math.max(Number(req.query.page)||1,1),limit=Math.min(Math.max(Number(req.query.limit)||50,1),200),offset=(page-1)*limit;
