@@ -44,6 +44,7 @@ export function isDevelopmentEnvironment(): boolean {
 }
 
 let initializedProductionSessionSecret: string | null = null;
+let productionSessionInitialization: Promise<void> | null = null;
 
 function deriveProductionSessionSecret(databaseCredential: string): string {
   return crypto
@@ -101,45 +102,58 @@ function getSessionSecret(): string | null {
 
 export async function initializeProductionSessionSigning(): Promise<void> {
   if (isDevelopmentEnvironment()) return;
-
-  const explicitSecret = getExplicitSessionSecret();
-  if (explicitSecret) {
-    initializedProductionSessionSecret = explicitSecret;
+  if (getSessionSecret()) return;
+  if (productionSessionInitialization) {
+    await productionSessionInitialization;
     return;
   }
 
-  // Standalone Hostinger starts the compiled API directly, so secrets stored
-  // in the canonical GCP bundle are not automatically copied into process.env.
-  // Load the session secret explicitly from the same production bundle first.
-  // This keeps signing stable across restarts and database credential rotation.
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const bundledSecret = await getBundledProductionSessionSecret();
-      if (bundledSecret) {
-        initializedProductionSessionSecret = bundledSecret;
-        return;
-      }
-
-      // Backward-compatible safety net for installations whose production
-      // bundle predates SESSION_SECRET. The DB URL is already a required,
-      // high-entropy credential and is resolved through the canonical runtime
-      // path, not by assuming it exists in process.env.
-      const databaseCredential = await getRuntimeDatabaseUrl();
-      initializedProductionSessionSecret =
-        deriveProductionSessionSecret(databaseCredential);
+  productionSessionInitialization = (async () => {
+    const explicitSecret = getExplicitSessionSecret();
+    if (explicitSecret) {
+      initializedProductionSessionSecret = explicitSecret;
       return;
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    }
+
+    // Standalone Hostinger starts the compiled API directly, so secrets stored
+    // in the canonical GCP bundle are not automatically copied into process.env.
+    // Load the session secret explicitly from the same production bundle first.
+    // This keeps signing stable across restarts and database credential rotation.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const bundledSecret = await getBundledProductionSessionSecret();
+        if (bundledSecret) {
+          initializedProductionSessionSecret = bundledSecret;
+          return;
+        }
+
+        // Backward-compatible safety net for installations whose production
+        // bundle predates SESSION_SECRET. The DB URL is already a required,
+        // high-entropy credential and is resolved through the canonical runtime
+        // path, not by assuming it exists in process.env.
+        const databaseCredential = await getRuntimeDatabaseUrl();
+        initializedProductionSessionSecret =
+          deriveProductionSessionSecret(databaseCredential);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+        }
       }
     }
-  }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Production session signing could not be initialized");
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Production session signing could not be initialized");
+  })();
+
+  try {
+    await productionSessionInitialization;
+  } finally {
+    productionSessionInitialization = null;
+  }
 }
 
 function getDevIdentitySecret(): string | null {
