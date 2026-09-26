@@ -411,10 +411,18 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
       : "open";
     const [rows, summary] = await Promise.all([
       pool.query(
-        `SELECT *
-           FROM public.fleet_outstanding
-          WHERE company_id=$1 AND status=$2
-          ORDER BY outstanding_amount DESC, driver_name ASC`,
+        `SELECT o.*,
+                d.status AS driver_status,
+                d.applicator_status,
+                d.vehicle_ownership,
+                COALESCE(NULLIF(d.phone,''),o.driver_phone) AS driver_phone,
+                COALESCE(NULLIF(d.vehicle_plate,''),o.vehicle_plate) AS vehicle_plate
+           FROM public.fleet_outstanding o
+           LEFT JOIN public.fleet_drivers d
+             ON d.id=o.driver_id
+            AND d.company_id=o.company_id::text
+          WHERE o.company_id=$1 AND o.status=$2
+          ORDER BY o.outstanding_amount DESC,o.driver_name ASC`,
         [cid, status],
       ),
       pool.query(
@@ -816,6 +824,34 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
   }
 });
 
+
+
+router.post("/outstanding/:id/wa", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const id=Number(req.params.id);
+    if(!Number.isSafeInteger(id)||id<=0){res.status(400).json({error:"ID outstanding tidak valid."});return;}
+    const result=await sendFleetOutstandingReminders({
+      companyId:cid,
+      actor:req.adminUser?.email??"system",
+      suppressHours:1,
+      ids:[id],
+      sendType:"selected",
+    });
+    if(result.eligible===0){
+      res.status(409).json({error:"Driver tidak memenuhi syarat reminder: harus aktif dan memiliki outstanding > 0."});
+      return;
+    }
+    if(result.sent===0&&result.skippedSuppressed>0){
+      res.status(409).json({error:"Reminder baru saja dikirim. Tunggu sebelum mengirim ulang agar tidak duplikat/spam."});
+      return;
+    }
+    res.json({ok:true,...result});
+  } catch(error) {
+    req.log.error({error},"Fleet single WA reminder failed");
+    res.status(503).json({error:error instanceof Error?error.message:"Gagal mengirim WA Fleet."});
+  }
+});
 
 router.get("/outstanding/wa-logs", async (req: AdminRequest, res) => {
   try {
