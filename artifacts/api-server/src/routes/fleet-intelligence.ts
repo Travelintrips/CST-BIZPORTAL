@@ -1831,6 +1831,27 @@ router.patch("/cash-payments/:id/cancel", async (req: AdminRequest, res) => {
 
 const FLEET_EXPENSE_TYPES = ["Ban","Perbaikan","Service Rutin","Asuransi","Bahan Bakar","Parkir","Tilang","Oli","Spare Part","Lainnya"] as const;
 
+async function ensureFleetOpsTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.fleet_expense_budgets (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      expense_type TEXT NOT NULL,
+      budget_month DATE NOT NULL,
+      budget_amount NUMERIC(18,2) NOT NULL CHECK (budget_amount >= 0),
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(company_id, expense_type, budget_month)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS fleet_expense_budgets_company_month_idx
+      ON public.fleet_expense_budgets(company_id,budget_month)
+  `);
+}
+
 router.get("/expenses", async (req: AdminRequest, res) => {
   try {
     const cid = companyId(req);
@@ -1940,6 +1961,7 @@ router.delete("/expenses/:id", async (req: AdminRequest, res) => {
 
 router.get("/expenses/budgets", async (req: AdminRequest, res) => {
   try{
+    await ensureFleetOpsTables();
     const cid=companyId(req);
     const month=typeof req.query.month==="string"&&/^[0-9]{4}-[0-9]{2}$/.test(req.query.month)?req.query.month:new Date().toISOString().slice(0,7);
     const result=await pool.query(
@@ -1975,6 +1997,7 @@ router.get("/expenses/budgets", async (req: AdminRequest, res) => {
 
 router.post("/expenses/budgets", async (req: AdminRequest, res) => {
   try{
+    await ensureFleetOpsTables();
     const cid=companyId(req),body=req.body??{};
     const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
     const month=typeof body.budget_month==="string"?body.budget_month:"";
@@ -1996,6 +2019,7 @@ router.post("/expenses/budgets", async (req: AdminRequest, res) => {
 
 router.delete("/expenses/budgets/:id", async (req: AdminRequest, res) => {
   try{
+    await ensureFleetOpsTables();
     const cid=companyId(req),id=Number(req.params.id);
     const result=await pool.query("DELETE FROM public.fleet_expense_budgets WHERE id=$1 AND company_id=$2 RETURNING id",[id,cid]);
     if(result.rowCount!==1){res.status(404).json({error:"Anggaran tidak ditemukan."});return;}
