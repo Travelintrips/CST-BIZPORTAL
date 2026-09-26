@@ -18,6 +18,8 @@ describe("standalone fleet intelligence contract", () => {
   it("provides the dashboard and outstanding endpoints used by the live Fleet UI", () => {
     expect(fleetRoute).toContain('router.get("/dashboard"');
     expect(fleetRoute).toContain('router.get("/outstanding"');
+    expect(fleetRoute).toContain("d.status AS driver_status");
+    expect(fleetRoute).toContain("d.applicator_status");
     expect(fleetRoute).toContain('router.post("/outstanding/repair"');
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/preview"');
     expect(fleetRoute).toContain("full_name=$3");
