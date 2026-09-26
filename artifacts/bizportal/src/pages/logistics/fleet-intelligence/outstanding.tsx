@@ -232,6 +232,10 @@ type ImportResult = {
   ok: boolean;
   updated: number;
   inserted: number;
+  newDrivers?: number;
+  missingFromLatestSnapshot?: number;
+  outstandingUpserted?: number;
+  outstandingResolved?: number;
   skipped: number;
   total: number;
   message: string;
@@ -1204,7 +1208,10 @@ export default function FleetOutstandingPage() {
                   <div className="flex gap-4 mt-2 flex-wrap">
                     {[
                       { label: "Diperbarui", value: importResult.updated, cls: "text-blue-400" },
-                      { label: "Driver baru", value: importResult.inserted, cls: "text-amber-400" },
+                      { label: "Driver baru", value: importResult.newDrivers ?? importResult.inserted, cls: "text-amber-400" },
+                      { label: "Tidak ada di snapshot terbaru", value: importResult.missingFromLatestSnapshot ?? 0, cls: "text-violet-400" },
+                      { label: "Outstanding aktif", value: importResult.outstandingUpserted ?? 0, cls: "text-red-400" },
+                      { label: "Outstanding jadi Rp0", value: importResult.outstandingResolved ?? 0, cls: "text-emerald-400" },
                       { label: "Dilewati", value: importResult.skipped, cls: "text-slate-400" },
                     ].map((s) => (
                       <div key={s.label} className="text-center">
@@ -1562,13 +1569,17 @@ export default function FleetOutstandingPage() {
               Konfirmasi Import Outstanding
             </DialogTitle>
             <DialogDescription className="text-slate-400 text-sm">
-              Import bersifat <strong className="text-amber-300">per-driver</strong>: data outstanding lama
-              dari <strong className="text-white">{previewMeta?.total ?? 0} driver</strong> (outstanding &gt; 0)
-              akan dihapus dan diganti data CSV baru.
-              Driver dengan outstanding = 0 tidak terpengaruh.
+              File ini akan menjadi <strong className="text-amber-300">snapshot driver terbaru</strong>.
+              Data driver yang cocok akan diperbarui mengikuti CSV, termasuk status, plat, Rental fee (Daily),
+              dan outstanding. Outstanding yang berubah menjadi Rp0 akan ditandai resolved; outstanding baru
+              akan dibuat otomatis.
+              <span className="block mt-2">
+                Driver lama yang tidak lagi muncul di file tidak dihapus. Mereka akan diberi status
+                <strong className="text-violet-300"> Tidak ada di snapshot terbaru</strong> dan tidak ikut WA otomatis.
+              </span>
               {previewMeta?.unmatched ? (
                 <span className="block mt-2 text-amber-400">
-                  ⚠ {previewMeta.unmatched} driver tidak ditemukan di DB — akan dibuat sebagai entri baru (unmatched).
+                  ⚠ {previewMeta.unmatched} driver belum ada di database — akan otomatis dibuat sebagai driver baru.
                 </span>
               ) : null}
             </DialogDescription>
