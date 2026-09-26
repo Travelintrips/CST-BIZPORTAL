@@ -32,6 +32,8 @@ type DashboardData = {
   topDrivers: Array<Record<string, unknown>>;
   outstanding: Record<string, unknown>;
   rawTotals: Record<string, unknown>;
+  snapshotSummary?: Record<string, unknown>;
+  dataSource?: "transactions" | "driver_snapshot";
   lastUploadDate: string | null;
 };
 
@@ -108,7 +110,9 @@ export default function FleetIntelligenceDashboard() {
         params.set("days", period);
       }
       const res = await fetch(`/api/logistics/fleet/dashboard?${params}`, { credentials: "include" });
-      return res.json();
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(String(payload?.error ?? "Gagal memuat dashboard Fleet"));
+      return payload as DashboardData;
     },
   });
 
@@ -116,7 +120,9 @@ export default function FleetIntelligenceDashboard() {
     queryKey: ["fleet-outstanding-index"],
     queryFn: async () => {
       const res = await fetch("/api/logistics/fleet/outstanding?status=open", { credentials: "include" });
-      return res.json() as Promise<{ outstanding: OutstandingRow[]; summary: Record<string, unknown> }>;
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(String(payload?.error ?? "Gagal memuat outstanding Fleet"));
+      return payload as { outstanding: OutstandingRow[]; summary: Record<string, unknown> };
     },
   });
 
@@ -162,6 +168,8 @@ export default function FleetIntelligenceDashboard() {
   const topDrivers = data?.topDrivers ?? [];
   const outstandingSummary = data?.outstanding ?? {};
   const rawTotals = data?.rawTotals ?? {};
+  const snapshotSummary = data?.snapshotSummary ?? {};
+  const dataSource = data?.dataSource ?? "driver_snapshot";
   const lastUploadDate = data?.lastUploadDate ?? null;
   const fmtUploadDate = lastUploadDate
     ? new Date(lastUploadDate).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
@@ -169,6 +177,16 @@ export default function FleetIntelligenceDashboard() {
   const rawOutstanding = parseFloat(String(rawTotals.raw_outstanding_total ?? 0));
   const tableOutstanding = parseFloat(String(outstandingSummary?.total_amount ?? 0));
   const outstandingStale = rawOutstanding > 0 && Math.abs(rawOutstanding - tableOutstanding) / rawOutstanding > 0.01;
+  const statusChartData = [
+    { label: "Aktif", value: Number(snapshotSummary.active_drivers ?? 0) },
+    { label: "Tidak Aktif", value: Number(snapshotSummary.inactive_drivers ?? 0) },
+    { label: "Suspend", value: Number(snapshotSummary.suspended_drivers ?? 0) },
+  ];
+  const ownershipChartData = [
+    { label: "Unit Perusahaan", value: Number(snapshotSummary.company_units ?? 0) },
+    { label: "Unit Pribadi/Mitra", value: Number(snapshotSummary.partner_private_units ?? 0) },
+    { label: "Belum Ada Unit", value: Number(snapshotSummary.unassigned_units ?? 0) },
+  ];
 
   function openWaModal(o: OutstandingRow) {
     const phone = String(o.driver_phone ?? "").trim();
@@ -408,55 +426,90 @@ export default function FleetIntelligenceDashboard() {
 
         {/* Charts */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <Card className="bg-slate-800/60 border-slate-700">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-white text-base">Tren Payout Driver</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="h-48 bg-slate-700/40 rounded animate-pulse" />
-              ) : (
-                <ResponsiveContainer width="100%" height={220}>
-                  <LineChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="summary_date" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => String(v).slice(5)} />
-                    <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => `${(v / 1_000_000).toFixed(1)}M`} />
-                    <Tooltip
-                      contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }}
-                      labelStyle={{ color: "#94a3b8" }}
-                      formatter={(v: number) => [fmtIdr(v), "Net Revenue"]}
-                    />
-                    <Line type="monotone" dataKey="net_revenue" stroke="#22d3ee" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="gross_revenue" stroke="#818cf8" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
+          {trend.length > 0 ? (
+            <>
+              <Card className="bg-slate-800/60 border-slate-700">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-white text-base">Tren Payout Driver</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLoading ? (
+                    <div className="h-48 bg-slate-700/40 rounded animate-pulse" />
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={trend}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="summary_date" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => String(v).slice(5)} />
+                        <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => `${(v / 1_000_000).toFixed(1)}M`} />
+                        <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }} labelStyle={{ color: "#94a3b8" }} formatter={(v: number) => [fmtIdr(v), "Net Revenue"]} />
+                        <Line type="monotone" dataKey="net_revenue" stroke="#22d3ee" strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="gross_revenue" stroke="#818cf8" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
 
-          <Card className="bg-slate-800/60 border-slate-700">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-white text-base">Driver Aktif per Hari</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="h-48 bg-slate-700/40 rounded animate-pulse" />
-              ) : (
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="summary_date" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => String(v).slice(5)} />
-                    <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                    <Tooltip
-                      contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }}
-                      labelStyle={{ color: "#94a3b8" }}
-                    />
-                    <Bar dataKey="active_drivers" fill="#34d399" radius={[2, 2, 0, 0]} name="Driver Aktif" />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
+              <Card className="bg-slate-800/60 border-slate-700">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-white text-base">Driver Aktif per Hari</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLoading ? (
+                    <div className="h-48 bg-slate-700/40 rounded animate-pulse" />
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={trend}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="summary_date" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => String(v).slice(5)} />
+                        <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                        <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }} labelStyle={{ color: "#94a3b8" }} />
+                        <Bar dataKey="active_drivers" fill="#34d399" radius={[2, 2, 0, 0]} name="Driver Aktif" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <>
+              <Card className="bg-slate-800/60 border-slate-700">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-white text-base">Status Driver dari CSV Terakhir</CardTitle>
+                  <p className="text-xs text-slate-500">Dashboard menyesuaikan file Drivers yang diupload</p>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={statusChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="label" tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                      <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }} />
+                      <Bar dataKey="value" fill="#34d399" radius={[3, 3, 0, 0]} name="Driver" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-slate-800/60 border-slate-700">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-white text-base">Kepemilikan Unit dari CSV Terakhir</CardTitle>
+                  <p className="text-xs text-slate-500">Rental ≥ Rp300.000 = unit perusahaan; nominal positif di bawahnya = unit pribadi/mitra</p>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={ownershipChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="label" tick={{ fill: "#94a3b8", fontSize: 10 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                      <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8 }} />
+                      <Bar dataKey="value" fill="#818cf8" radius={[3, 3, 0, 0]} name="Unit" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </div>
 
         {/* Outstanding Driver Table */}
