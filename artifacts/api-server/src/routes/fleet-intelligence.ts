@@ -2078,7 +2078,7 @@ async function postFleetCashAccounting(client: any, args: {
   const ref = args.referenceNo?.trim() || `FCP-${args.paymentId}`;
   const description = `Pembayaran driver fleet - ${args.driverName}`;
 
-  const entry = await client.query<{ id:number }>(
+  const entry = await client.query(
     `INSERT INTO public.accounting_entries
       (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,
        created_by_id,company_id,source_module,source_schema,source_table,entry_status)
@@ -2150,7 +2150,7 @@ async function reverseFleetCashAccounting(client: any, args: {
   const ref = `VOID-FCP-${args.paymentId}`;
   const description = `Pembatalan pembayaran driver fleet - ${args.driverName}`;
 
-  const entry = await client.query<{id:number}>(
+  const entry = await client.query(
     `INSERT INTO public.accounting_entries
       (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,
        created_by_id,company_id,source_module,source_schema,source_table,previous_entry_id,entry_status)
