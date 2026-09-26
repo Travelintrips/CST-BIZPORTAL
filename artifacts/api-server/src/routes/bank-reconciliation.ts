@@ -3734,7 +3734,22 @@ const mutationListColumns = `
          from public.accounting_entries candidate_entry
         where candidate_entry.company_id = bm.company_id
           and candidate_entry.status = 'posted'
-          and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+          and (
+            (
+              bm.linked_transaction_type = 'sport_group_payment'
+              and exists (
+                select 1
+                  from public.accounting_entry_lines bank_line
+                 where bank_line.entry_id = candidate_entry.id
+                   and bank_line.debit > 0
+                   and abs(bank_line.debit::numeric - bm.amount::numeric) < 0.01
+              )
+            )
+            or (
+              coalesce(bm.linked_transaction_type, '') <> 'sport_group_payment'
+              and abs(candidate_entry.total_debit::numeric - bm.amount::numeric) < 0.01
+            )
+          )
           and (
             (
               bm.linked_transaction_type = 'sport_group_payment'
