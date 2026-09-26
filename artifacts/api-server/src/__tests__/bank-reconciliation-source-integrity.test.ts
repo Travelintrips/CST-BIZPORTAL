@@ -188,6 +188,18 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("journal.is_reversal");
   });
 
+  it("supports deposit-aware Sport Center group reconciliation without summing mirrored payments", () => {
+    expect(source).toContain('"sport_group_payment"');
+    expect(source).toContain('"sport_center.booking_groups"');
+    expect(source).toContain("sport_center.customer_deposit_allocations");
+    expect(source).toContain("deposit_created");
+    expect(source).toContain("deposit_applied");
+    expect(source).toContain("sport_center_group_booking");
+    expect(source).toContain("Group payment Sport Center belum memiliki jurnal canonical posted");
+    expect(source).toContain("SUM(sp.amount)");
+    expect(source).toContain("select * from singles");
+  });
+
   it("keeps canonical QRIS link-only and does not restore legacy candidate storage", () => {
     const canonicalStart = source.indexOf("async function approveCanonicalSettlementLink");
     const approvalStart = source.indexOf("async function approveBankMutation", canonicalStart);
