@@ -5,6 +5,7 @@ import { pool } from "@workspace/db";
 import { sendAdminLoginOtpEmail } from "../lib/smtp";
 import {
   getProductionUser,
+  initializeProductionSessionSigning,
   isDevelopmentEnvironment,
   setProductionSessionCookie,
   type ProductionSession,
@@ -275,6 +276,8 @@ router.post("/auth/email-login", async (
       return;
     }
 
+    await initializeProductionSessionSigning();
+
     const session = createSession(user);
     setProductionSessionCookie(response, session);
     response.json({
@@ -462,6 +465,7 @@ router.post("/auth/email-otp/verify", async (
       return;
     }
 
+    await initializeProductionSessionSigning();
     setProductionSessionCookie(response, session);
     response.json({ ok: true, user: localUser });
   } catch {
