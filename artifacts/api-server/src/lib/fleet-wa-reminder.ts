@@ -51,6 +51,47 @@ async function getFonnteToken(): Promise<string> {
   }
 }
 
+async function updateWorkerState(companyId: number, patch: {
+  tick?: boolean;
+  attempt?: boolean;
+  success?: boolean;
+  senderDevice?: string | null;
+  deviceStatus?: string | null;
+  result?: unknown;
+  error?: string | null;
+}) {
+  await pool.query(
+    `INSERT INTO public.fleet_wa_worker_state
+      (company_id,last_tick_at,last_attempt_at,last_success_at,sender_device,device_status,last_result,last_error,updated_at)
+     VALUES(
+       $1,
+       CASE WHEN $2 THEN NOW() ELSE NULL END,
+       CASE WHEN $3 THEN NOW() ELSE NULL END,
+       CASE WHEN $4 THEN NOW() ELSE NULL END,
+       $5,$6,$7::jsonb,$8,NOW()
+     )
+     ON CONFLICT(company_id) DO UPDATE SET
+       last_tick_at=CASE WHEN $2 THEN NOW() ELSE fleet_wa_worker_state.last_tick_at END,
+       last_attempt_at=CASE WHEN $3 THEN NOW() ELSE fleet_wa_worker_state.last_attempt_at END,
+       last_success_at=CASE WHEN $4 THEN NOW() ELSE fleet_wa_worker_state.last_success_at END,
+       sender_device=COALESCE($5,fleet_wa_worker_state.sender_device),
+       device_status=COALESCE($6,fleet_wa_worker_state.device_status),
+       last_result=COALESCE($7::jsonb,fleet_wa_worker_state.last_result),
+       last_error=$8,
+       updated_at=NOW()`,
+    [
+      companyId,
+      Boolean(patch.tick),
+      Boolean(patch.attempt),
+      Boolean(patch.success),
+      patch.senderDevice ?? null,
+      patch.deviceStatus ?? null,
+      patch.result == null ? null : JSON.stringify(patch.result),
+      patch.error ?? null,
+    ],
+  ).catch(() => undefined);
+}
+
 async function getFonnteDeviceProfile(token: string): Promise<{ device: string | null; deviceStatus: string | null }> {
   try {
     const response = await fetch("https://api.fonnte.com/device", {
@@ -224,9 +265,6 @@ export async function sendFleetOutstandingReminders(args: {
 }
 
 export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepResult[]> {
-  const token = await getFonnteToken();
-  if (!token) return [];
-
   const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const hourWib = nowWib.getUTCHours();
   const dateWib = nowWib.toISOString().slice(0,10);
@@ -242,14 +280,33 @@ export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepRes
         AND company_id IS NOT NULL`,
   );
 
+  for (const row of settings.rows) {
+    await updateWorkerState(Number(row.company_id), { tick: true });
+  }
+
+  const token = await getFonnteToken();
+  if (!token) {
+    for (const row of settings.rows) {
+      await updateWorkerState(Number(row.company_id), {
+        error: "FONNTE_TOKEN belum dikonfigurasi pada runtime production.",
+      });
+    }
+    return [];
+  }
+
   const output: FleetReminderSweepResult[] = [];
   for (const row of settings.rows) {
+    const companyId = Number(row.company_id);
     const configuredHour = Number(row.fleet_auto_blast_hour ?? 8);
-    if (configuredHour !== hourWib) continue;
     const lastRunDate = row.fleet_auto_blast_last_run
-      ? new Date(row.fleet_auto_blast_last_run).toISOString().slice(0,10)
+      ? new Date(row.fleet_auto_blast_last_run).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" })
       : null;
-    if (lastRunDate === dateWib) continue;
+
+    // Run once per WIB day at or after configured hour. This makes the worker
+    // resilient to Hostinger restarts or deploys that happen after 08:00.
+    if (hourWib < configuredHour || lastRunDate === dateWib) continue;
+
+    await updateWorkerState(companyId, { attempt: true });
 
     const claimed = await pool.query(
       `UPDATE public.accounting_settings
@@ -261,17 +318,40 @@ export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepRes
             OR (fleet_auto_blast_last_run AT TIME ZONE 'Asia/Jakarta')::date < (NOW() AT TIME ZONE 'Asia/Jakarta')::date
           )
         RETURNING company_id`,
-      [row.company_id],
+      [companyId],
     );
     if (!claimed.rowCount) continue;
 
-    const result = await sendFleetOutstandingReminders({
-      companyId: Number(row.company_id),
-      actor: "fleet-auto-reminder",
-      suppressHours: 20,
-      sendType: "auto",
-    });
-    output.push(result);
+    try {
+      const result = await sendFleetOutstandingReminders({
+        companyId,
+        actor: "fleet-auto-reminder",
+        suppressHours: 20,
+        sendType: "auto",
+      });
+      const extended = result as FleetReminderSweepResult & {
+        senderDevice?: string | null;
+        deviceStatus?: string | null;
+      };
+      await updateWorkerState(companyId, {
+        success: result.failed === 0,
+        senderDevice: extended.senderDevice ?? null,
+        deviceStatus: extended.deviceStatus ?? null,
+        result,
+        error: result.failed > 0 ? `${result.failed} pesan gagal dikirim.` : null,
+      });
+      output.push(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await updateWorkerState(companyId, { error: message });
+      // Allow a retry on the next scheduler tick if the entire attempt failed.
+      await pool.query(
+        `UPDATE public.accounting_settings
+            SET fleet_auto_blast_last_run=NULL,updated_at=NOW()
+          WHERE company_id=$1`,
+        [companyId],
+      ).catch(() => undefined);
+    }
   }
   return output;
 }
