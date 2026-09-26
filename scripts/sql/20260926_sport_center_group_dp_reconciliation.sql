@@ -215,7 +215,7 @@ begin
           original.date,
           'EXSO-DP-REV-' || original.id::text,
           'Reversal append-only koreksi group payment Exso untuk jurnal ' || original.entry_number,
-          'posted',
+          'draft',
           'historical_duplicate_reversal',
           original.id,
           original.total_credit,
@@ -250,6 +250,13 @@ begin
         from public.accounting_entry_lines line
         where line.entry_id = v_original_id
         order by line.id;
+
+        update public.accounting_entries
+           set status = 'posted',
+               posted_at = coalesce(posted_at, now()),
+               entry_status = 'POSTED'
+         where id = v_reversal_id
+           and status = 'draft';
       end if;
 
       update public.accounting_entries
@@ -295,7 +302,7 @@ begin
       date '2026-07-24',
       'CART-MRYTANG1-KO22',
       'Canonical group receipt Exso: event 17.050.000 + customer deposit 2.750.000',
-      'posted',
+      'draft',
       'sport_center_group_booking',
       v_source_group_id,
       v_source_mutation_amount,
@@ -339,6 +346,13 @@ begin
       v_corrected_id,v_deposit_id,0,v_deposit_amount,
       'Customer deposit Exso untuk event berikutnya'
     );
+
+    update public.accounting_entries
+       set status = 'posted',
+           posted_at = coalesce(posted_at, now()),
+           entry_status = 'POSTED'
+     where id = v_corrected_id
+       and status = 'draft';
   end if;
 
   -- Corrected canonical journal for 27 Aug:
@@ -374,7 +388,7 @@ begin
       date '2026-08-27',
       'CART-MT9ROLI1-RKLA',
       'Canonical group receipt Exso: bank 18.707.800 + DP lama 2.750.000',
-      'posted',
+      'draft',
       'sport_center_group_booking',
       v_target_group_id,
       v_credit_total,
@@ -411,6 +425,13 @@ begin
     from public.accounting_entry_lines line
     where line.entry_id = 34344 and line.credit > 0
     order by line.id;
+
+    update public.accounting_entries
+       set status = 'posted',
+           posted_at = coalesce(posted_at, now()),
+           entry_status = 'POSTED'
+     where id = v_target_corrected_id
+       and status = 'draft';
   end if;
 
   -- Post-repair invariants.
