@@ -59,6 +59,19 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).not.toContain("insert into public.accounting_entries");
   });
 
+  it("posts Fleet cash payments to Central Finance idempotently", () => {
+    expect(fleetRoute).toContain("fleet_cash_account_id");
+    expect(fleetRoute).toContain("fleet_driver_receivable_account_id");
+    expect(fleetRoute).toContain("source='fleet_cash_payment'");
+    expect(fleetRoute).toContain("source_module");
+    expect(fleetRoute).toContain("fleet_intelligence");
+    expect(fleetRoute).toContain("accounting_entry_lines");
+    expect(fleetRoute).toContain("status='posted'");
+    expect(fleetRoute).toContain("reverseFleetCashAccounting");
+    expect(fleetRoute).toContain("source='reversal'");
+    expect(fleetRoute).not.toContain("accountingPosted:false");
+  });
+
   it("restores the operational Fleet surfaces used by BizPortal pages", () => {
     for (const route of [
       'router.get("/transactions"',
