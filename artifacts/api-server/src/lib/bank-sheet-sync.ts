@@ -476,11 +476,13 @@ async function syncConfig(config: SheetConfig): Promise<{
                 else matched.match_result
               end as match_result,
               coalesce(
+                qris_sheet_classification.coa_code,
                 rule_classification.coa_code,
                 contra.coa_code,
                 canonical_contra.coa_code
               ) as coa_code,
               coalesce(
+                qris_sheet_classification.coa_name,
                 rule_classification.coa_name,
                 contra.coa_name,
                 canonical_contra.coa_name
@@ -503,6 +505,41 @@ async function syncConfig(config: SheetConfig): Promise<{
             end, m.created_at desc nulls last, m.id desc
             limit 1
          ) matched on true
+         -- QRIS Sport Center rows get a concise Sheet-only business label as soon
+         -- as a canonical QRIS settlement candidate exists. This never renames
+         -- the underlying accounting COA; it only changes the label projected
+         -- back to Google Sheet.
+         left join lateral (
+           select
+                  clearing_coa.code as coa_code,
+                  'QR Payement sc'::text as coa_name
+             from public.bank_reconciliation_matches qris_match
+             join sport_center.payment_settlement_batches qris_batch
+               on qris_match.candidate_type = 'qris_settlement'
+              and qris_match.candidate_source = 'sport_center.payment_settlement_batches'
+              and qris_batch.id = qris_match.candidate_id
+              and qris_batch.company_id = bm.company_id
+             join lateral (
+               select coa.code
+                 from public.chart_of_accounts coa
+                where coa.company_id = bm.company_id
+                  and coa.code like '1-1024-%'
+                  and coa.name ilike 'Payment Clearing Sport Center / QRIS%'
+                  and coa.account_category = 'ASSET'
+                  and coa.is_active = true
+                  and coalesce(coa.is_header, false) = false
+                  and coalesce(coa.is_postable, true) = true
+                order by coa.id
+                limit 1
+             ) clearing_coa on true
+            where qris_match.mutation_id = bm.id
+              and lower(coalesce(qris_match.status, '')) in (
+                'candidate', 'approved', 'posted', 'reconciled'
+              )
+            order by qris_match.id desc
+            limit 1
+         ) qris_sheet_classification on true
+
          -- The Sheet COA column is a business classification, not the technical
          -- contra account of a bank-to-bank/source-journal reclassification.
          -- When Rule AI matched the mutation, its validated target COA therefore
