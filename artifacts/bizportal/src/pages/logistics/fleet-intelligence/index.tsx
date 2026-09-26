@@ -285,6 +285,7 @@ export default function FleetIntelligenceDashboard() {
             <p className="text-slate-400 text-sm mt-1">
               Dashboard KPI armada & analitik performa driver
               {" · "}<span className="text-blue-400 font-medium">{periodLabel}</span>
+              {" · "}<span className="text-emerald-400 font-medium">{dataSource === "driver_snapshot" ? "Sumber: CSV Drivers" : "Sumber: Transaksi"}</span>
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
