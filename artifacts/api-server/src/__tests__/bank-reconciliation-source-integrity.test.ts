@@ -196,6 +196,8 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("deposit_applied");
     expect(source).toContain("sport_center_group_booking");
     expect(source).toContain("Group payment Sport Center belum memiliki jurnal canonical posted");
+    expect(source).toContain("bank_line.entry_id = candidate_entry.id");
+    expect(source).toContain("bank_line.debit > 0");
     expect(source).toContain("SUM(sp.amount)");
     expect(source).toContain("select * from singles");
   });
