@@ -432,6 +432,75 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
     const status = typeof req.query.status === "string" && req.query.status.trim()
       ? req.query.status.trim()
       : "open";
+
+    if (status === "open") {
+      const [rows, summary] = await Promise.all([
+        pool.query(
+          `SELECT o.id,
+                  d.id AS driver_id,
+                  d.driver_external_id,
+                  d.full_name AS driver_name,
+                  d.phone AS driver_phone,
+                  d.vehicle_plate,
+                  d.rental_fee_daily,
+                  COALESCE(o.outstanding_amount,0)::numeric AS outstanding_amount,
+                  COALESCE(o.due_days,0)::int AS due_days,
+                  COALESCE(o.snapshot_source,'driver_snapshot') AS snapshot_source,
+                  CASE WHEN o.id IS NULL THEN 'clear' ELSE 'open' END AS status,
+                  d.status AS driver_status,
+                  d.applicator_status,
+                  d.vehicle_ownership,
+                  d.source_last_synced_at AS last_updated_date
+             FROM public.fleet_drivers d
+             LEFT JOIN LATERAL (
+               SELECT fo.*
+                 FROM public.fleet_outstanding fo
+                WHERE fo.company_id=$1
+                  AND fo.driver_id=d.id
+                  AND fo.status='open'
+                ORDER BY fo.updated_at DESC,fo.id DESC
+                LIMIT 1
+             ) o ON TRUE
+            WHERE d.company_id=$1::text
+            ORDER BY
+              CASE
+                WHEN d.status='active' AND d.applicator_status='active' AND COALESCE(d.rental_fee_daily,0)>0 THEN 1
+                WHEN d.applicator_status='need_to_assign' THEN 2
+                WHEN d.applicator_status='resign' THEN 3
+                WHEN d.applicator_status='fired' OR d.status='suspended' THEN 4
+                ELSE 5
+              END,
+              COALESCE(o.outstanding_amount,0) DESC,
+              d.full_name ASC`,
+          [cid],
+        ),
+        pool.query(
+          `SELECT COUNT(*)::int AS driver_count,
+                  COUNT(*) FILTER (WHERE d.status='active')::int AS active_driver_count,
+                  COUNT(*) FILTER (WHERE d.applicator_status='need_to_assign')::int AS need_to_assign_count,
+                  COUNT(*) FILTER (WHERE d.applicator_status='resign')::int AS resign_count,
+                  COUNT(*) FILTER (WHERE d.applicator_status='fired' OR d.status='suspended')::int AS suspended_count,
+                  COUNT(o.id)::int AS count,
+                  COALESCE(SUM(COALESCE(o.outstanding_amount,0)),0)::numeric AS total,
+                  COALESCE(AVG(COALESCE(o.due_days,0)),0)::numeric AS avg_due_days
+             FROM public.fleet_drivers d
+             LEFT JOIN LATERAL (
+               SELECT fo.id,fo.outstanding_amount,fo.due_days
+                 FROM public.fleet_outstanding fo
+                WHERE fo.company_id=$1
+                  AND fo.driver_id=d.id
+                  AND fo.status='open'
+                ORDER BY fo.updated_at DESC,fo.id DESC
+                LIMIT 1
+             ) o ON TRUE
+            WHERE d.company_id=$1::text`,
+          [cid],
+        ),
+      ]);
+      res.json({ outstanding: rows.rows, summary: summary.rows[0] });
+      return;
+    }
+
     const [rows, summary] = await Promise.all([
       pool.query(
         `SELECT o.*,
@@ -439,7 +508,8 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
                 d.applicator_status,
                 d.vehicle_ownership,
                 COALESCE(NULLIF(d.phone,''),o.driver_phone) AS driver_phone,
-                COALESCE(NULLIF(d.vehicle_plate,''),o.vehicle_plate) AS vehicle_plate
+                COALESCE(NULLIF(d.vehicle_plate,''),o.vehicle_plate) AS vehicle_plate,
+                COALESCE(d.rental_fee_daily,o.rental_fee_daily,0) AS rental_fee_daily
            FROM public.fleet_outstanding o
            LEFT JOIN public.fleet_drivers d
              ON d.id=o.driver_id

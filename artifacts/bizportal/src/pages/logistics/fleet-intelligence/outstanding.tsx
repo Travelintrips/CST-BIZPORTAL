@@ -501,7 +501,9 @@ export default function FleetOutstandingPage() {
     });
   }
   function toggleSelectAll() {
-    const visibleIds = sortedList.map((o) => Number(o.id));
+    const visibleIds = sortedList
+      .filter((o) => Number(o.id ?? 0) > 0 && Number(o.outstanding_amount ?? 0) > 0 && String(o.driver_status ?? "") === "active")
+      .map((o) => Number(o.id));
     const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
     if (allSelected) setSelectedIds((prev) => { const next = new Set(prev); visibleIds.forEach((id) => next.delete(id)); return next; });
     else setSelectedIds((prev) => { const next = new Set(prev); visibleIds.forEach((id) => next.add(id)); return next; });
@@ -554,7 +556,9 @@ export default function FleetOutstandingPage() {
   const eligibleActive = list.filter(
     (o) =>
       String(o.driver_status ?? "") === "active" &&
+      Number(o.rental_fee_daily ?? 0) > 0 &&
       parseFloat(String(o.outstanding_amount ?? 0)) > 0 &&
+      Number(o.id ?? 0) > 0 &&
       String(o.driver_phone ?? "").trim(),
   );
   const noPlateCount = list.filter((o) => {
@@ -638,8 +642,8 @@ export default function FleetOutstandingPage() {
         {/* ── Header ─────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-white">Outstanding Balance</h1>
-            <p className="text-slate-400 text-sm mt-1">Saldo hutang / piutang driver yang belum terselesaikan</p>
+            <h1 className="text-2xl font-bold text-white">Driver & Outstanding Fleet</h1>
+            <p className="text-slate-400 text-sm mt-1">Seluruh driver dari CSV terakhir, dikelompokkan berdasarkan status dan nilai outstanding</p>
           </div>
           {activeTab === "list" && (
             <div className="flex items-center gap-2 flex-wrap">
@@ -685,7 +689,7 @@ export default function FleetOutstandingPage() {
         {/* ── Tabs ───────────────────────────────────────────────────── */}
         <div className="flex gap-1 bg-slate-800/60 border border-slate-700 rounded-lg p-1 w-fit">
           {([
-            { key: "list",   label: "Daftar Outstanding",   icon: <Users className="w-4 h-4" /> },
+            { key: "list",   label: "Daftar Driver & Outstanding",   icon: <Users className="w-4 h-4" /> },
             { key: "upload", label: "Ringkasan Outstanding", icon: <Upload className="w-4 h-4" /> },
           ] as const).map((t) => (
             <button
@@ -722,8 +726,8 @@ export default function FleetOutstandingPage() {
                 <CardContent className="p-4 flex items-center gap-3">
                   <AlertTriangle className="w-8 h-8 text-red-400" />
                   <div>
-                    <div className="text-2xl font-bold text-white">{fmtNum(summary.count)}</div>
-                    <div className="text-slate-400 text-sm">Driver dengan Outstanding</div>
+                    <div className="text-2xl font-bold text-white">{fmtNum(summary.driver_count ?? summary.count)}</div>
+                    <div className="text-slate-400 text-sm">{status === "open" ? "Total Driver dari CSV Terakhir" : "Driver dengan Outstanding"}</div>
                   </div>
                 </CardContent>
               </Card>
@@ -798,9 +802,9 @@ export default function FleetOutstandingPage() {
               <CardHeader className="pb-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between flex-wrap">
                   <CardTitle className="text-white text-base">
-                    {status === "open" ? "Outstanding Belum Lunas" : "Outstanding Sudah Lunas"}
+                    {status === "open" ? "Data Driver Fleet berdasarkan Status" : "Outstanding Sudah Lunas"}
                     <span className="ml-2 text-xs text-slate-500 font-normal">
-                      ({sortedList.length} dari {list.length})
+                      ({sortedList.length} dari {list.length} driver)
                     </span>
                   </CardTitle>
                   {/* Search */}
@@ -864,7 +868,7 @@ export default function FleetOutstandingPage() {
                             <input
                               type="checkbox"
                               className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer"
-                              checked={sortedList.length > 0 && sortedList.every((o) => selectedIds.has(Number(o.id)))}
+                              checked={eligibleActive.length > 0 && eligibleActive.every((o) => selectedIds.has(Number(o.id)))}
                               onChange={toggleSelectAll}
                             />
                           </th>
@@ -924,15 +928,21 @@ export default function FleetOutstandingPage() {
                                 const hasPhone    = Boolean(String(o.driver_phone ?? "").trim());
                                 const rentalFee   = parseFloat(String(o.rental_fee_daily ?? 0));
                                 return (
-                                  <tr key={String(o.id)} className={`border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors ${selectedIds.has(Number(o.id)) ? "bg-indigo-900/10" : ""}`}>
+                                  <tr key={`driver-${String(o.driver_id ?? o.id)}`} className={`border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors ${Number(o.id ?? 0) > 0 && selectedIds.has(Number(o.id)) ? "bg-indigo-900/10" : ""}`}>
                                     {status === "open" && (
                                       <td className="px-3 py-3">
                                         <input
                                           type="checkbox"
                                           className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer"
                                           checked={selectedIds.has(Number(o.id))}
-                                          disabled={String(o.driver_status ?? "") !== "active"}
-                                          title={String(o.driver_status ?? "") !== "active" ? "Reminder WA hanya untuk driver aktif" : undefined}
+                                          disabled={String(o.driver_status ?? "") !== "active" || Number(o.id ?? 0) <= 0 || Number(o.outstanding_amount ?? 0) <= 0}
+                                          title={
+                                            Number(o.outstanding_amount ?? 0) <= 0
+                                              ? "Tidak ada outstanding"
+                                              : String(o.driver_status ?? "") !== "active"
+                                                ? "Reminder WA hanya untuk driver aktif"
+                                                : undefined
+                                          }
                                           onChange={() => toggleSelect(Number(o.id))}
                                         />
                                       </td>
@@ -949,7 +959,7 @@ export default function FleetOutstandingPage() {
                                       {rentalFee > 0 ? fmtIdr(rentalFee) : "—"}
                                     </td>
                                     <td className={`px-4 py-3 text-right font-bold tabular-nums ${isHigh ? "text-red-400" : isAbove500k ? "text-amber-400" : "text-slate-300"}`}>
-                                      {fmtIdr(o.outstanding_amount)}
+                                      {Number(o.outstanding_amount ?? 0) > 0 ? fmtIdr(o.outstanding_amount) : "Rp0"}
                                     </td>
                                     <td className="px-4 py-3">
                                       {(() => {
@@ -964,7 +974,7 @@ export default function FleetOutstandingPage() {
                                     {status === "open" && (
                                       <td className="px-4 py-3">
                                         <div className="flex items-center gap-1.5">
-                                          {hasPhone && (
+                                          {hasPhone && Number(o.id ?? 0) > 0 && Number(o.outstanding_amount ?? 0) > 0 && (
                                             <Button size="sm" variant="outline"
                                               className="border-green-600 text-green-400 hover:bg-green-900/30 h-7 text-xs"
                                               disabled={String(o.driver_status ?? "") !== "active"}
@@ -973,11 +983,15 @@ export default function FleetOutstandingPage() {
                                               <MessageCircle className="w-3 h-3 mr-1" /> WA
                                             </Button>
                                           )}
-                                          <Button size="sm" variant="outline"
-                                            className="border-emerald-600 text-emerald-400 hover:bg-emerald-900/30 h-7 text-xs"
-                                            onClick={() => { setResolving(Number(o.id)); setNotes(""); }}>
-                                            <CheckCircle className="w-3 h-3 mr-1" /> Lunas
-                                          </Button>
+                                          {Number(o.id ?? 0) > 0 && Number(o.outstanding_amount ?? 0) > 0 ? (
+                                            <Button size="sm" variant="outline"
+                                              className="border-emerald-600 text-emerald-400 hover:bg-emerald-900/30 h-7 text-xs"
+                                              onClick={() => { setResolving(Number(o.id)); setNotes(""); }}>
+                                              <CheckCircle className="w-3 h-3 mr-1" /> Lunas
+                                            </Button>
+                                          ) : (
+                                            <span className="text-xs text-emerald-400/80">Tidak ada outstanding</span>
+                                          )}
                                         </div>
                                       </td>
                                     )}
