@@ -1810,19 +1810,19 @@ router.get("/executive-summary", async (req: AdminRequest, res) => {
 router.get("/settings", async (req: AdminRequest, res) => {
   try {
     const cid = companyId(req);
-    if (!(await tableExists("accounting_settings"))) {
-      res.json({ ok: true, fleetCashAccountId: null, fleetDriverReceivableAccountId: null });
-      return;
-    }
     const result = await pool.query(
-      "SELECT meta FROM public.accounting_settings WHERE company_id=$1 LIMIT 1",
+      `SELECT fleet_cash_account_id,fleet_driver_receivable_account_id,cash_journal_id,bank_journal_id
+         FROM public.accounting_settings
+        WHERE company_id=$1
+        LIMIT 1`,
       [cid],
     );
-    const meta = ((result.rows[0] as Record<string, unknown> | undefined)?.meta ?? {}) as Record<string, unknown>;
+    const row = result.rows[0] as Record<string, unknown> | undefined;
     res.json({
       ok: true,
-      fleetCashAccountId: Number(meta.fleetCashAccountId) || null,
-      fleetDriverReceivableAccountId: Number(meta.fleetDriverReceivableAccountId) || null,
+      fleetCashAccountId: Number(row?.fleet_cash_account_id) || null,
+      fleetDriverReceivableAccountId: Number(row?.fleet_driver_receivable_account_id) || null,
+      journalId: Number(row?.cash_journal_id ?? row?.bank_journal_id) || null,
     });
   } catch (error) {
     req.log.error({ error }, "Fleet settings failed");
@@ -1833,38 +1833,215 @@ router.get("/settings", async (req: AdminRequest, res) => {
 router.put("/settings", async (req: AdminRequest, res) => {
   try {
     const cid = companyId(req);
-    if (!(await tableExists("accounting_settings"))) {
-      res.status(503).json({ error: "Accounting settings belum tersedia." });
-      return;
+    const cashId = Number(req.body?.fleetCashAccountId) || null;
+    const receivableId = Number(req.body?.fleetDriverReceivableAccountId) || null;
+
+    for (const [label, id] of [["Kas Fleet", cashId], ["Piutang Driver Fleet", receivableId]] as const) {
+      if (!id) continue;
+      const account = await pool.query(
+        `SELECT id,type::text,is_active,is_postable,status
+           FROM public.chart_of_accounts
+          WHERE id=$1 AND company_id=$2
+          LIMIT 1`,
+        [id, cid],
+      );
+      const row = account.rows[0] as Record<string, unknown> | undefined;
+      if (!row || row.is_active === false || row.is_postable === false || String(row.status ?? "ACTIVE") !== "ACTIVE") {
+        res.status(400).json({ error: `${label} tidak valid/aktif/postable untuk company ini.` });
+        return;
+      }
+      if (String(row.type) !== "asset") {
+        res.status(400).json({ error: `${label} harus menggunakan COA tipe asset.` });
+        return;
+      }
     }
-    const existing = await pool.query(
-      "SELECT id,meta FROM public.accounting_settings WHERE company_id=$1 LIMIT 1",
-      [cid],
-    );
-    const row = existing.rows[0] as Record<string, unknown> | undefined;
-    const meta = ((row?.meta ?? {}) as Record<string, unknown>);
-    const next = {
-      ...meta,
-      fleetCashAccountId: Number(req.body?.fleetCashAccountId) || null,
-      fleetDriverReceivableAccountId: Number(req.body?.fleetDriverReceivableAccountId) || null,
-    };
-    if (row?.id) {
+
+    const existing = await pool.query("SELECT id FROM public.accounting_settings WHERE company_id=$1 LIMIT 1", [cid]);
+    if (existing.rows[0]?.id) {
       await pool.query(
-        "UPDATE public.accounting_settings SET meta=$2::jsonb WHERE id=$1",
-        [row.id, JSON.stringify(next)],
+        `UPDATE public.accounting_settings
+            SET fleet_cash_account_id=$2,
+                fleet_driver_receivable_account_id=$3,
+                updated_at=NOW()
+          WHERE id=$1`,
+        [existing.rows[0].id, cashId, receivableId],
       );
     } else {
       await pool.query(
-        "INSERT INTO public.accounting_settings (company_id,meta) VALUES ($1,$2::jsonb)",
-        [cid, JSON.stringify(next)],
+        `INSERT INTO public.accounting_settings(company_id,fleet_cash_account_id,fleet_driver_receivable_account_id)
+         VALUES($1,$2,$3)`,
+        [cid, cashId, receivableId],
       );
     }
-    res.json({ ok: true, fleetCashAccountId: next.fleetCashAccountId, fleetDriverReceivableAccountId: next.fleetDriverReceivableAccountId });
+    res.json({ ok: true, fleetCashAccountId: cashId, fleetDriverReceivableAccountId: receivableId });
   } catch (error) {
     req.log.error({ error }, "Fleet settings update failed");
     res.status(503).json({ error: "Gagal menyimpan Fleet Accounting Settings." });
   }
 });
+
+async function resolveFleetCashPostingSettings(client: any, companyId: number) {
+  const result = await client.query(
+    `SELECT s.fleet_cash_account_id,s.fleet_driver_receivable_account_id,
+            COALESCE(s.cash_journal_id,s.bank_journal_id,
+              (SELECT id FROM public.accounting_journals j WHERE j.company_id=$1 AND COALESCE(j.is_active,true)=true ORDER BY id LIMIT 1)
+            ) AS journal_id
+       FROM public.accounting_settings s
+      WHERE s.company_id=$1
+      LIMIT 1`,
+    [companyId],
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  const cashId = Number(row?.fleet_cash_account_id);
+  const receivableId = Number(row?.fleet_driver_receivable_account_id);
+  const journalId = Number(row?.journal_id);
+  if (!cashId || !receivableId || !journalId) {
+    throw new Error("Fleet Cash Payment COA/journal belum dikonfigurasi.");
+  }
+  const accounts = await client.query(
+    `SELECT id FROM public.chart_of_accounts
+      WHERE company_id=$1 AND id=ANY($2::int[])
+        AND COALESCE(is_active,true)=true AND COALESCE(is_postable,true)=true
+        AND COALESCE(status,'ACTIVE')='ACTIVE'`,
+    [companyId, [cashId, receivableId]],
+  );
+  if (accounts.rowCount !== 2) throw new Error("COA Fleet Cash Payment tidak valid atau tidak postable.");
+  return { cashId, receivableId, journalId };
+}
+
+async function postFleetCashAccounting(client: any, args: {
+  paymentId: number;
+  companyId: number;
+  amount: number;
+  driverName: string;
+  paymentDate: string;
+  referenceNo?: string | null;
+  actor?: string | null;
+}) {
+  const existing = await client.query(
+    `SELECT id,status::text FROM public.accounting_entries
+      WHERE company_id=$1 AND source='fleet_cash_payment' AND source_id=$2
+      LIMIT 1`,
+    [args.companyId, args.paymentId],
+  );
+  if (existing.rows[0]?.id) {
+    return { entryId: Number(existing.rows[0].id), idempotent: true };
+  }
+
+  const settings = await resolveFleetCashPostingSettings(client, args.companyId);
+  const year = String(args.paymentDate || new Date().toISOString()).slice(0,4);
+  const entryNumber = `FLEET-${args.companyId}-${year}-${String(args.paymentId).padStart(8,"0")}`;
+  const ref = args.referenceNo?.trim() || `FCP-${args.paymentId}`;
+  const description = `Pembayaran driver fleet - ${args.driverName}`;
+
+  const entry = await client.query<{ id:number }>(
+    `INSERT INTO public.accounting_entries
+      (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,
+       created_by_id,company_id,source_module,source_schema,source_table,entry_status)
+     VALUES($1,$2,$3::date,$4,$5,'draft','fleet_cash_payment',$6,$7,$7,$8,$9,
+            'fleet_intelligence','public','fleet_cash_payments','DRAFT')
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [entryNumber, settings.journalId, args.paymentDate, ref, description, args.paymentId, args.amount, args.actor ?? null, args.companyId],
+  );
+
+  let entryId = Number(entry.rows[0]?.id);
+  if (!entryId) {
+    const raced = await client.query(
+      `SELECT id FROM public.accounting_entries
+        WHERE company_id=$1 AND source='fleet_cash_payment' AND source_id=$2 LIMIT 1`,
+      [args.companyId,args.paymentId],
+    );
+    entryId = Number(raced.rows[0]?.id);
+    if (!entryId) throw new Error("Gagal membuat jurnal Fleet Cash Payment.");
+    return { entryId, idempotent: true };
+  }
+
+  await client.query(
+    `INSERT INTO public.accounting_entry_lines
+      (entry_id,account_id,description,debit,credit,company_id,source_module,source_table,source_id)
+     VALUES
+      ($1,$2,$3,$4,0,$5,'fleet_intelligence','fleet_cash_payments',$6),
+      ($1,$7,$8,0,$4,$5,'fleet_intelligence','fleet_cash_payments',$6)`,
+    [
+      entryId,
+      settings.cashId,
+      `Kas masuk pembayaran driver - ${args.driverName}`,
+      args.amount,
+      args.companyId,
+      args.paymentId,
+      settings.receivableId,
+      `Pelunasan piutang driver - ${args.driverName}`,
+    ],
+  );
+
+  await client.query(
+    `UPDATE public.accounting_entries
+        SET status='posted',entry_status='POSTED',posted_at=NOW()
+      WHERE id=$1 AND status='draft'`,
+    [entryId],
+  );
+  return { entryId, idempotent: false };
+}
+
+async function reverseFleetCashAccounting(client: any, args: {
+  paymentId: number;
+  originalEntryId: number;
+  companyId: number;
+  amount: number;
+  driverName: string;
+  actor?: string | null;
+}) {
+  const existing = await client.query(
+    `SELECT id FROM public.accounting_entries
+      WHERE company_id=$1 AND source='reversal' AND source_id=$2
+      LIMIT 1`,
+    [args.companyId,args.originalEntryId],
+  );
+  if (existing.rows[0]?.id) return { entryId:Number(existing.rows[0].id),idempotent:true };
+
+  const settings = await resolveFleetCashPostingSettings(client,args.companyId);
+  const year = new Date().getFullYear();
+  const entryNumber = `FLEET-R-${args.companyId}-${year}-${String(args.paymentId).padStart(8,"0")}`;
+  const ref = `VOID-FCP-${args.paymentId}`;
+  const description = `Pembatalan pembayaran driver fleet - ${args.driverName}`;
+
+  const entry = await client.query<{id:number}>(
+    `INSERT INTO public.accounting_entries
+      (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,
+       created_by_id,company_id,source_module,source_schema,source_table,previous_entry_id,entry_status)
+     VALUES($1,$2,CURRENT_DATE,$3,$4,'draft','reversal',$5,$6,$6,$7,$8,
+            'fleet_intelligence','public','fleet_cash_payments',$5,'DRAFT')
+     ON CONFLICT DO NOTHING RETURNING id`,
+    [entryNumber,settings.journalId,ref,description,args.originalEntryId,args.amount,args.actor??null,args.companyId],
+  );
+  let entryId=Number(entry.rows[0]?.id);
+  if(!entryId){
+    const raced=await client.query("SELECT id FROM public.accounting_entries WHERE company_id=$1 AND source='reversal' AND source_id=$2 LIMIT 1",[args.companyId,args.originalEntryId]);
+    entryId=Number(raced.rows[0]?.id);
+    if(!entryId) throw new Error("Gagal membuat jurnal reversal Fleet Cash Payment.");
+    return {entryId,idempotent:true};
+  }
+  await client.query(
+    `INSERT INTO public.accounting_entry_lines
+      (entry_id,account_id,description,debit,credit,company_id,source_module,source_table,source_id)
+     VALUES
+      ($1,$2,$3,$4,0,$5,'fleet_intelligence','fleet_cash_payments',$6),
+      ($1,$7,$8,0,$4,$5,'fleet_intelligence','fleet_cash_payments',$6)`,
+    [
+      entryId,
+      settings.receivableId,
+      `Reversal piutang driver - ${args.driverName}`,
+      args.amount,
+      args.companyId,
+      args.originalEntryId,
+      settings.cashId,
+      `Reversal kas pembayaran driver - ${args.driverName}`,
+    ],
+  );
+  await client.query("UPDATE public.accounting_entries SET status='posted',entry_status='POSTED',posted_at=NOW() WHERE id=$1 AND status='draft'",[entryId]);
+  return {entryId,idempotent:false};
+}
 
 router.get("/cash-payments", async (req: AdminRequest, res) => {
   try {
@@ -1939,6 +2116,7 @@ router.post("/cash-payments", async (req: AdminRequest, res) => {
     const body=req.body??{};
     const driverName=typeof body.driver_name==="string"?body.driver_name.trim():"";
     const amount=Number(body.amount);
+    const paymentDate=typeof body.payment_date==="string"&&/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(body.payment_date)?body.payment_date:new Date().toISOString().slice(0,10);
     if(!driverName||!Number.isFinite(amount)||amount<=0){
       res.status(400).json({error:"Nama driver dan jumlah pembayaran wajib valid."});
       return;
@@ -1949,28 +2127,56 @@ router.post("/cash-payments", async (req: AdminRequest, res) => {
       const found=await client.query(
         `SELECT id FROM public.fleet_outstanding
           WHERE company_id=$1 AND status='open' AND lower(driver_name)=lower($2)
-          ORDER BY id DESC LIMIT 1`,
+          ORDER BY id DESC LIMIT 1 FOR UPDATE`,
         [cid,driverName],
       );
       outstandingId=Number(found.rows[0]?.id)||null;
     }
+    if(outstandingId){
+      const balance=await client.query(
+        "SELECT outstanding_amount FROM public.fleet_outstanding WHERE id=$1 AND company_id=$2 FOR UPDATE",
+        [outstandingId,cid],
+      );
+      const remaining=Number(balance.rows[0]?.outstanding_amount??0);
+      if(!balance.rows[0]) throw new Error("Outstanding driver tidak ditemukan.");
+      if(amount>remaining+0.01) {
+        await client.query("ROLLBACK");
+        res.status(409).json({error:`Pembayaran Rp ${amount.toLocaleString("id-ID")} melebihi outstanding Rp ${remaining.toLocaleString("id-ID")}.`});
+        return;
+      }
+    }
+
     const payment=await client.query(
       `INSERT INTO public.fleet_cash_payments
         (company_id,outstanding_id,driver_name,driver_external_id,driver_phone,vehicle_plate,payment_date,amount,payment_method,reference_no,notes,recorded_by,status)
-       VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::date,CURRENT_DATE),$8,$9,$10,$11,$12,'confirmed')
+       VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8,$9,$10,$11,$12,'confirmed')
        RETURNING *`,
       [
         cid,outstandingId,driverName,
         typeof body.driver_external_id==="string"?body.driver_external_id:null,
         typeof body.driver_phone==="string"?body.driver_phone:null,
         typeof body.vehicle_plate==="string"?body.vehicle_plate:null,
-        typeof body.payment_date==="string"?body.payment_date:null,
+        paymentDate,
         amount,
         typeof body.payment_method==="string"&&body.payment_method?body.payment_method:"cash",
         typeof body.reference_no==="string"?body.reference_no:null,
         typeof body.notes==="string"?body.notes:null,
         req.adminUser?.email??"unknown",
       ],
+    );
+    const paymentRow=payment.rows[0] as Record<string,unknown>;
+    const posting=await postFleetCashAccounting(client,{
+      paymentId:Number(paymentRow.id),
+      companyId:cid,
+      amount,
+      driverName,
+      paymentDate,
+      referenceNo:typeof paymentRow.reference_no==="string"?paymentRow.reference_no:null,
+      actor:req.adminUser?.email??"unknown",
+    });
+    await client.query(
+      "UPDATE public.fleet_cash_payments SET accounting_entry_id=$2,status='posted',updated_at=NOW() WHERE id=$1",
+      [paymentRow.id,posting.entryId],
     );
     if(outstandingId){
       await client.query(
@@ -1984,11 +2190,12 @@ router.post("/cash-payments", async (req: AdminRequest, res) => {
       );
     }
     await client.query("COMMIT");
-    res.status(201).json({ok:true,payment:payment.rows[0],accountingPosted:false});
+    res.status(201).json({ok:true,payment:{...paymentRow,status:"posted",accounting_entry_id:posting.entryId},accountingPosted:true,accountingEntryId:posting.entryId,idempotent:posting.idempotent});
   } catch(error){
     await client.query("ROLLBACK").catch(()=>undefined);
     req.log.error({error},"Fleet cash payment create failed");
-    res.status(503).json({error:"Gagal mencatat pembayaran fleet."});
+    const msg=error instanceof Error?error.message:"Gagal mencatat pembayaran fleet.";
+    res.status(msg.includes("belum dikonfigurasi")?409:503).json({error:msg});
   } finally {
     client.release();
   }
@@ -2012,9 +2219,24 @@ router.patch("/cash-payments/:id/cancel", async (req: AdminRequest, res) => {
     }
     if(row.status==="cancelled"){
       await client.query("ROLLBACK");
-      res.json({ok:true});
+      res.json({ok:true,idempotent:true});
       return;
     }
+
+    const originalEntryId=Number(row.accounting_entry_id);
+    let reversalEntryId:number|null=null;
+    if(originalEntryId){
+      const reversal=await reverseFleetCashAccounting(client,{
+        paymentId:id,
+        originalEntryId,
+        companyId:cid,
+        amount:Number(row.amount)||0,
+        driverName:String(row.driver_name??"Driver"),
+        actor:req.adminUser?.email??"unknown",
+      });
+      reversalEntryId=reversal.entryId;
+    }
+
     await client.query(
       "UPDATE public.fleet_cash_payments SET status='cancelled',updated_at=NOW() WHERE id=$1 AND company_id=$2",
       [id,cid],
@@ -2028,11 +2250,11 @@ router.patch("/cash-payments/:id/cancel", async (req: AdminRequest, res) => {
       );
     }
     await client.query("COMMIT");
-    res.json({ok:true});
+    res.json({ok:true,reversalEntryId});
   }catch(error){
     await client.query("ROLLBACK").catch(()=>undefined);
     req.log.error({error},"Fleet cash payment cancel failed");
-    res.status(503).json({error:"Gagal membatalkan pembayaran."});
+    res.status(503).json({error:error instanceof Error?error.message:"Gagal membatalkan pembayaran."});
   }finally{
     client.release();
   }
