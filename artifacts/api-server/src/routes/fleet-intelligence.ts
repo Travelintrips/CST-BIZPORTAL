@@ -730,6 +730,23 @@ router.post("/outstanding/:id/wa", async (req: AdminRequest, res) => {
   }
 });
 
+router.get("/outstanding/wa-worker-state", async (req: AdminRequest, res) => {
+  try {
+    const cid=companyId(req);
+    const result=await pool.query(
+      `SELECT company_id,last_tick_at,last_attempt_at,last_success_at,sender_device,device_status,last_result,last_error,updated_at
+         FROM public.fleet_wa_worker_state
+        WHERE company_id=$1
+        LIMIT 1`,
+      [cid],
+    );
+    res.json({worker:result.rows[0]??null});
+  } catch(error) {
+    req.log.error({error},"Fleet WA worker state failed");
+    res.status(503).json({error:"Gagal mengambil status worker WA Fleet."});
+  }
+});
+
 router.get("/outstanding/wa-logs", async (req: AdminRequest, res) => {
   try {
     const cid=companyId(req);
