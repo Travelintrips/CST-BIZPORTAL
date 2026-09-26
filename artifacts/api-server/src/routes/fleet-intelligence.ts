@@ -1893,7 +1893,7 @@ router.post("/expenses", async (req: AdminRequest, res) => {
     const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
     const amount=Number(body.amount);
     const date=typeof body.expense_date==="string"?body.expense_date:"";
-    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^d{4}-d{2}-d{2}$/.test(date)){
+    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)){
       res.status(400).json({error:"Tanggal, jenis pengeluaran, dan nominal wajib valid."}); return;
     }
     const result=await pool.query(
@@ -1912,7 +1912,7 @@ router.put("/expenses/:id", async (req: AdminRequest, res) => {
     const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
     const amount=Number(body.amount);
     const date=typeof body.expense_date==="string"?body.expense_date:"";
-    if(!Number.isSafeInteger(id)||id<=0||!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^d{4}-d{2}-d{2}$/.test(date)){
+    if(!Number.isSafeInteger(id)||id<=0||!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!Number.isFinite(amount)||amount<=0||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)){
       res.status(400).json({error:"Data pengeluaran tidak valid."}); return;
     }
     const result=await pool.query(
@@ -1941,7 +1941,7 @@ router.delete("/expenses/:id", async (req: AdminRequest, res) => {
 router.get("/expenses/budgets", async (req: AdminRequest, res) => {
   try{
     const cid=companyId(req);
-    const month=typeof req.query.month==="string"&&/^d{4}-d{2}$/.test(req.query.month)?req.query.month:new Date().toISOString().slice(0,7);
+    const month=typeof req.query.month==="string"&&/^[0-9]{4}-[0-9]{2}$/.test(req.query.month)?req.query.month:new Date().toISOString().slice(0,7);
     const result=await pool.query(
       `WITH types(expense_type) AS (SELECT unnest($3::text[])),
        actual AS (
@@ -1979,7 +1979,7 @@ router.post("/expenses/budgets", async (req: AdminRequest, res) => {
     const type=typeof body.expense_type==="string"?body.expense_type.trim():"";
     const month=typeof body.budget_month==="string"?body.budget_month:"";
     const amount=Number(body.budget_amount);
-    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!/^d{4}-d{2}$/.test(month)||!Number.isFinite(amount)||amount<0){
+    if(!FLEET_EXPENSE_TYPES.includes(type as typeof FLEET_EXPENSE_TYPES[number])||!/^[0-9]{4}-[0-9]{2}$/.test(month)||!Number.isFinite(amount)||amount<0){
       res.status(400).json({error:"Data anggaran tidak valid."});return;
     }
     const result=await pool.query(
@@ -2202,7 +2202,7 @@ router.get("/accounting/journals", async (req: AdminRequest, res) => {
 router.post("/accounting/journals/generate", async (req: AdminRequest, res) => {
   try{
     const cid=companyId(req),body=req.body??{},from=String(body.periodStart??""),to=String(body.periodEnd??""),ppnRate=Number(body.ppnRate??11);
-    if(!/^d{4}-d{2}-d{2}$/.test(from)||!/^d{4}-d{2}-d{2}$/.test(to)||from>to||!Number.isFinite(ppnRate)||ppnRate<0||ppnRate>100){res.status(400).json({error:"Periode/PPN tidak valid."});return;}
+    if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(from)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(to)||from>to||!Number.isFinite(ppnRate)||ppnRate<0||ppnRate>100){res.status(400).json({error:"Periode/PPN tidak valid."});return;}
     const agg=await pool.query(
       `SELECT COALESCE(SUM(gross_revenue),0)::numeric gross,COALESCE(SUM(net_revenue),0)::numeric net,
               COALESCE(SUM(commission),0)::numeric commission,COALESCE(SUM(incentive),0)::numeric incentive,
