@@ -535,31 +535,42 @@ router.post("/outstanding/snapshot/preview", async (req: AdminRequest, res) => {
       res.status(400).json({ error: "Isi CSV tidak tersedia." });
       return;
     }
+
     const rows = parseSnapshotCsv(content);
     const previews: SnapshotRow[] = [];
     let found = 0;
 
-    const hasDrivers = await tableExists("fleet_drivers");
+    // Fetch driver master once. The previous implementation executed one
+    // database query per CSV row (86+ round trips for a normal GoCar export),
+    // which regularly exceeded Hostinger's request window.
+    const driverRows = await pool.query<{
+      id: number;
+      name: string;
+      phone: string | null;
+    }>(
+      `SELECT id,full_name AS name,phone
+         FROM public.fleet_drivers
+        WHERE company_id=$1::text`,
+      [cid],
+    );
+
+    const byPhoneSuffix = new Map<string,{ id:number; name:string }>();
+    const byName = new Map<string,{ id:number; name:string }>();
+    for (const driver of driverRows.rows) {
+      const phoneDigits = String(driver.phone ?? "").replace(/\D/g, "");
+      const suffix = phoneDigits.slice(-9);
+      const item = { id:Number(driver.id), name:String(driver.name ?? "") };
+      if (suffix && !byPhoneSuffix.has(suffix)) byPhoneSuffix.set(suffix,item);
+      const normalizedName = item.name.trim().toLowerCase();
+      if (normalizedName && !byName.has(normalizedName)) byName.set(normalizedName,item);
+    }
+
     for (const row of rows) {
-      let match: { id: number; name: string } | null = null;
-      if (hasDrivers) {
-        const suffix = row.phone_number.replace(/\D/g, "").replace(/^0/, "").slice(-9);
-        const result = suffix
-          ? await pool.query<{ id: number; name: string }>(
-              `SELECT id,full_name AS name FROM public.fleet_drivers
-                WHERE company_id=$1::text
-                  AND regexp_replace(COALESCE(phone,''),'[^0-9]','','g') LIKE '%' || $2
-                ORDER BY id DESC LIMIT 1`,
-              [cid, suffix],
-            )
-          : await pool.query<{ id: number; name: string }>(
-              `SELECT id,full_name AS name FROM public.fleet_drivers
-                WHERE company_id=$1::text AND lower(full_name)=lower($2)
-                ORDER BY id DESC LIMIT 1`,
-              [cid, row.driver_name],
-            );
-        match = result.rows[0] ?? null;
-      }
+      const phoneSuffix = row.phone_number.replace(/\D/g, "").replace(/^0/, "").slice(-9);
+      const normalizedName = row.driver_name.trim().toLowerCase();
+      const match = (phoneSuffix ? byPhoneSuffix.get(phoneSuffix) : undefined)
+        ?? byName.get(normalizedName)
+        ?? null;
 
       if (match) found += 1;
       const classification = classifyDriver(row);
@@ -795,7 +806,7 @@ router.post("/outstanding/snapshot/confirm", async (req: AdminRequest, res) => {
         req.adminUser?.email ?? "unknown",
         inputRows.length,
         driverUpdated + driverInserted,
-        driverInserted,
+        errors,
         JSON.stringify({ driverUpdated, driverInserted, outstandingUpserted, outstandingResolved, errors }),
       ],
     );
