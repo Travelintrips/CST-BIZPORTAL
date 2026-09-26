@@ -267,6 +267,8 @@ async function ensureFleetTables(): Promise<void> {
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS avg_daily_trips NUMERIC(8,2) NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAULT 'standard'`);
     await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS raw_data JSONB`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS source_present_in_latest_snapshot BOOLEAN NOT NULL DEFAULT true`);
+    await pool.query(`ALTER TABLE public.fleet_drivers ADD COLUMN IF NOT EXISTS source_missing_since TIMESTAMPTZ`);
   }
 }
 
@@ -297,8 +299,10 @@ router.get("/dashboard", async (req: AdminRequest, res) => {
       ),
       pool.query(
         `SELECT COUNT(*)::int AS total_drivers,
-                COUNT(*) FILTER (WHERE status='active')::int AS active_drivers,
-                COUNT(*) FILTER (WHERE status='inactive')::int AS inactive_drivers,
+                COUNT(*) FILTER (WHERE COALESCE(source_present_in_latest_snapshot,true)=true)::int AS current_snapshot_drivers,
+                COUNT(*) FILTER (WHERE COALESCE(source_present_in_latest_snapshot,true)=false)::int AS missing_snapshot_drivers,
+                COUNT(*) FILTER (WHERE status='active' AND COALESCE(source_present_in_latest_snapshot,true)=true)::int AS active_drivers,
+                COUNT(*) FILTER (WHERE status='inactive' AND COALESCE(source_present_in_latest_snapshot,true)=true)::int AS inactive_drivers,
                 COUNT(*) FILTER (WHERE status='suspended')::int AS suspended_drivers,
                 COUNT(*) FILTER (WHERE applicator_status='resign')::int AS resign_drivers,
                 COUNT(*) FILTER (WHERE applicator_status='need_to_assign')::int AS need_to_assign_drivers,
@@ -450,6 +454,8 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
                   d.status AS driver_status,
                   d.applicator_status,
                   d.vehicle_ownership,
+                  d.source_present_in_latest_snapshot,
+                  d.source_missing_since,
                   d.source_last_synced_at AS last_updated_date
              FROM public.fleet_drivers d
              LEFT JOIN LATERAL (
@@ -464,6 +470,7 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
             WHERE d.company_id=$1::text
             ORDER BY
               CASE
+                WHEN COALESCE(d.source_present_in_latest_snapshot,true)=false THEN 6
                 WHEN d.status='active' AND d.applicator_status='active' AND COALESCE(d.rental_fee_daily,0)>0 THEN 1
                 WHEN d.applicator_status='need_to_assign' THEN 2
                 WHEN d.applicator_status='resign' THEN 3
@@ -476,10 +483,12 @@ router.get("/outstanding", async (req: AdminRequest, res) => {
         ),
         pool.query(
           `SELECT COUNT(*)::int AS driver_count,
-                  COUNT(*) FILTER (WHERE d.status='active')::int AS active_driver_count,
-                  COUNT(*) FILTER (WHERE d.applicator_status='need_to_assign')::int AS need_to_assign_count,
-                  COUNT(*) FILTER (WHERE d.applicator_status='resign')::int AS resign_count,
-                  COUNT(*) FILTER (WHERE d.applicator_status='fired' OR d.status='suspended')::int AS suspended_count,
+                  COUNT(*) FILTER (WHERE COALESCE(d.source_present_in_latest_snapshot,true)=true)::int AS current_snapshot_count,
+                  COUNT(*) FILTER (WHERE COALESCE(d.source_present_in_latest_snapshot,true)=false)::int AS missing_snapshot_count,
+                  COUNT(*) FILTER (WHERE d.status='active' AND COALESCE(d.source_present_in_latest_snapshot,true)=true)::int AS active_driver_count,
+                  COUNT(*) FILTER (WHERE d.applicator_status='need_to_assign' AND COALESCE(d.source_present_in_latest_snapshot,true)=true)::int AS need_to_assign_count,
+                  COUNT(*) FILTER (WHERE d.applicator_status='resign' AND COALESCE(d.source_present_in_latest_snapshot,true)=true)::int AS resign_count,
+                  COUNT(*) FILTER (WHERE (d.applicator_status='fired' OR d.status='suspended') AND COALESCE(d.source_present_in_latest_snapshot,true)=true)::int AS suspended_count,
                   COUNT(o.id)::int AS count,
                   COALESCE(SUM(COALESCE(o.outstanding_amount,0)),0)::numeric AS total,
                   COALESCE(AVG(COALESCE(o.due_days,0)),0)::numeric AS avg_due_days
