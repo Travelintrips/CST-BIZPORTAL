@@ -176,10 +176,12 @@ function GojekUploadTab() {
   const previewMutation = useMutation({
     mutationFn: async () => {
       if (!file) throw new Error("Pilih file terlebih dahulu");
-      const fd = new FormData();
-      fd.append("file", file);
+      const content = await file.text();
       const res = await fetch("/api/logistics/fleet/reports/preview", {
-        method: "POST", credentials: "include", body: fd,
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, fileName: file.name }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -202,14 +204,19 @@ function GojekUploadTab() {
   const uploadMutation = useMutation({
     mutationFn: async (opts: { skipDuplicateCheck?: boolean } = {}) => {
       if (!file) throw new Error("Pilih file terlebih dahulu");
-      const fd = new FormData();
-      fd.append("file", file);
-      if (partnerId) fd.append("partnerId", partnerId);
-      if (periodStart) fd.append("periodStart", periodStart);
-      if (periodEnd) fd.append("periodEnd", periodEnd);
-      if (opts.skipDuplicateCheck || forceUpload) fd.append("skipDuplicateCheck", "true");
+      const content = await file.text();
       const res = await fetch("/api/logistics/fleet/reports/upload", {
-        method: "POST", credentials: "include", body: fd,
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content,
+          fileName: file.name,
+          partnerId: partnerId ? Number(partnerId) : null,
+          periodStart: periodStart || null,
+          periodEnd: periodEnd || null,
+          skipDuplicateCheck: Boolean(opts.skipDuplicateCheck || forceUpload),
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as Record<string, unknown>;
