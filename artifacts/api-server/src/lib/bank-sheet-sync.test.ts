@@ -114,10 +114,12 @@ beforeEach(() => {
     if (sql.includes("from public.bank_mutations bm")) {
       const mutationKeys = (params?.[1] as string[]) ?? [];
       const canonicalKeys = (params?.[2] as string[]) ?? [];
+      const legacyCanonicalKeys = (params?.[3] as string[]) ?? [];
       return {
         rows: storedMutations.filter((mutation) =>
           (mutation.mutation_key != null && mutationKeys.includes(mutation.mutation_key)) ||
-          (mutation.canonical_key != null && canonicalKeys.includes(mutation.canonical_key)),
+          (mutation.canonical_key != null && canonicalKeys.includes(mutation.canonical_key)) ||
+          (mutation.canonical_key != null && legacyCanonicalKeys.includes(mutation.canonical_key)),
         ),
       };
     }
@@ -175,7 +177,7 @@ describe("Google Sheet bank mutation sync", () => {
       String(sql).includes("from public.bank_mutations bm"),
     )?.[1] as unknown[];
     const firstCanonicalKeys = [...((firstExistingLookup?.[2] as string[]) ?? [])];
-    expect(firstExistingLookup?.[3]).toBe(config.bank_account_id);
+    expect(firstExistingLookup?.[4]).toBe(config.bank_account_id);
 
     const second = await syncOneBankSheetConfig(config.id);
     const existingLookups = mocks.clientQuery.mock.calls.filter(([sql]) =>
@@ -437,6 +439,52 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!E5", values: [[generatedCanonicalKey]] },
       { range: "'Mutasi Bank'!F5", values: [["UNMATCHED"]] },
     ]));
+  });
+
+  it("recognizes legacy canonical keys from before account-aware isolation", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
+      ["2026-09-07", "Legacy row", "0", "100000", "", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const firstUpdates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+    const newCanonicalKey = firstUpdates.find(
+      (update) => update.range === "'Mutasi Bank'!E2",
+    )?.values[0]?.[0];
+    expect(newCanonicalKey).toMatch(/^[a-f0-9]{64}$/);
+
+    // Simulate a row stored by the pre-isolation algorithm: canonical key did
+    // not include bank_account_id. The current sync must still find it within
+    // the same account scope instead of inserting a duplicate.
+    storedMutations = [{
+      id: 50,
+      mutation_key: null,
+      canonical_key: null,
+      status: "unmatched",
+      reconciliation_status: null,
+      journal_entry_id: null,
+      company_id: 42,
+    }];
+
+    const lookupCall = mocks.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("from public.bank_mutations bm"),
+    );
+    const legacyCanonicalKey = String((lookupCall?.[1]?.[3] as string[])?.[0] ?? "");
+    storedMutations[0]!.canonical_key = legacyCanonicalKey;
+
+    mocks.clientQuery.mockClear();
+    mocks.writeSpreadsheetValues.mockClear();
+    const result = await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(result).toMatchObject({ imported: 0, existing: 1, total: 1 });
+    expect(insertCalls).toHaveLength(0);
   });
 
   it("deduplicates equivalent descriptions and amount formats with one canonical mutation", async () => {
