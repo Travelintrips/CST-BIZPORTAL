@@ -80,7 +80,7 @@ end $$;
 create index if not exists bank_mutations_company_account_status_date_idx
   on public.bank_mutations(company_id, bank_account_id, status, transaction_date desc);
 
-do $
+do $$
 begin
   if not exists (
     select 1
@@ -98,12 +98,12 @@ begin
     alter table public.bank_mutations
       validate constraint bank_mutations_sheet_config_id_fkey;
   end if;
-end $;
+end $$;
 
 create or replace function public.enforce_google_sheet_mutation_scope()
 returns trigger
 language plpgsql
-as $
+as $$
 declare
   cfg_company_id integer;
   cfg_bank_account_id integer;
@@ -140,7 +140,7 @@ begin
   end if;
 
   return new;
-end $;
+end $$;
 
 drop trigger if exists trg_enforce_google_sheet_mutation_scope
   on public.bank_mutations;
