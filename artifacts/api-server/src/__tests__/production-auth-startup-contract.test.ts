@@ -22,6 +22,18 @@ describe("production auth startup contract", () => {
     expect(authSource).toContain("initializedProductionSessionSecret");
   });
 
+  it("does not let an optional GCP session-secret lookup block the database-derived fallback", () => {
+    const bundledStart = authSource.indexOf("async function getBundledProductionSessionSecret");
+    const initStart = authSource.indexOf("export async function initializeProductionSessionSigning");
+    const bundledSource = authSource.slice(bundledStart, initStart);
+    expect(bundledSource).toContain("try {");
+    expect(bundledSource).toContain("await readSecret(getDatabaseSecretName(true))");
+    expect(bundledSource).toContain("catch {");
+    expect(bundledSource).toContain("return null;");
+    expect(authSource.indexOf("getBundledProductionSessionSecret()", initStart))
+      .toBeLessThan(authSource.indexOf("getRuntimeDatabaseUrl()", initStart));
+  });
+
   it("does not perform a redundant second database lookup after password verification", () => {
     const routeStart = localAuthSource.indexOf('router.post("/auth/email-login"');
     const routeEnd = localAuthSource.indexOf('router.post("/auth/email-otp/send"', routeStart);
