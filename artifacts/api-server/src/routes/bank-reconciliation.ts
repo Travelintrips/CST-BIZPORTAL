@@ -5461,6 +5461,13 @@ router.delete("/bank-reconciliation/sheet-configs/:id", async (req, res): Promis
     }
     res.json({ ok: true });
   } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "23503") {
+      res.status(409).json({
+        error: "Koneksi sudah memiliki riwayat mutasi. Nonaktifkan koneksi agar histori rekonsiliasi tetap utuh.",
+      });
+      return;
+    }
     req.log.error({ error }, "Failed to delete sheet configuration");
     res.status(503).json({ error: "Konfigurasi Google Sheet gagal dihapus" });
   }
