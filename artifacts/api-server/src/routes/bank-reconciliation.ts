@@ -4952,6 +4952,7 @@ async function ensureCanonicalQrisSettlement(
 
 async function listQrisCanonicalSettlements(
   companyId: number | null,
+  bankAccountId: number | null,
   includeCompleted: boolean,
   limit: number,
 ): Promise<Record<string, unknown>[]> {
@@ -4959,7 +4960,28 @@ async function listQrisCanonicalSettlements(
   const filters = ["ebs.settlement_status in ('posted', 'reconciled')"];
   if (companyId !== null) {
     values.push(companyId);
-    filters.push(`ebs.company_id = $${values.length}`);
+    filters.push(`ebs.company_id = ${values.length}`);
+  }
+  if (bankAccountId !== null) {
+    values.push(bankAccountId);
+    const accountPlaceholder = `${values.length}`;
+    filters.push(`(
+      (bm.bank_account_id is not null and bm.bank_account_id::text = ${accountPlaceholder}::text)
+      or (
+        bm.bank_account_id is null
+        and exists (
+          select 1
+            from public.company_bank_accounts cba
+           where cba.id = ${accountPlaceholder}
+             and cba.company_id = ebs.company_id
+             and coalesce(cba.is_active, true) = true
+             and (
+               nullif(btrim(cba.account_number::text), '') = nullif(btrim(ebs.bank_account_id::text), '')
+               or cba.id::text = nullif(btrim(ebs.bank_account_id::text), '')
+             )
+        )
+      )
+    )`);
   }
   if (!includeCompleted) {
     filters.push("ebs.settlement_status = 'posted'");
@@ -5023,12 +5045,31 @@ router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<voi
       res.status(400).json({ error: "companyId tidak valid", code: "INVALID_COMPANY_ID" });
       return;
     }
+    const rawBankAccountId = queryString(req.query.bank_account_id)
+      ?? queryString(req.query.bankAccountId);
+    const bankAccountId =
+      rawBankAccountId === null || rawBankAccountId === "" || rawBankAccountId === "all"
+        ? null
+        : parsePositiveInt(rawBankAccountId);
+    if (
+      rawBankAccountId !== null
+      && rawBankAccountId !== ""
+      && rawBankAccountId !== "all"
+      && bankAccountId === null
+    ) {
+      res.status(400).json({
+        error: "bank_account_id tidak valid",
+        code: "INVALID_BANK_ACCOUNT_ID",
+      });
+      return;
+    }
+
     const requestedLimit = Number(queryString(req.query.limit) ?? 100);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 100;
     const includeCompleted = String(queryString(req.query.includeCompleted) ?? "").toLowerCase() === "true";
     const [canonicalSettlements, reviewDiagnostics] = await Promise.all([
-      listQrisCanonicalSettlements(companyId, includeCompleted, limit),
-      listQrisReviewDiagnostics({ companyId, limit }),
+      listQrisCanonicalSettlements(companyId, bankAccountId, includeCompleted, limit),
+      listQrisReviewDiagnostics({ companyId, bankAccountId, limit }),
     ]);
     res.json({
       mode: "canonical_qris_settlement",
