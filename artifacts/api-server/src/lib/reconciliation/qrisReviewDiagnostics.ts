@@ -615,12 +615,6 @@ export async function listQrisReviewDiagnostics(options: {
       options.companyId != null
       && Number(diagnostic.company_id) !== Number(options.companyId)
     ) continue;
-    if (
-      options.bankAccountId != null
-      && Number(openMutations.find((mutation) => mutation.id === mutationId)?.bank_account_id)
-        !== Number(options.bankAccountId)
-      && requestedIds.length === 0
-    ) continue;
     const source = String(diagnostic.candidate_source ?? "unknown");
     if (source === HISTORICAL_SOURCE && syntheticMutationIds.has(mutationId)) {
       continue;
