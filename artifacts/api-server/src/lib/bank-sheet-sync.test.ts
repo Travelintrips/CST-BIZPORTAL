@@ -84,6 +84,7 @@ const config = {
   sheet_id: "spreadsheet-1",
   tab_name: "Mutasi Bank",
   label: "Rekening utama",
+  bank_account_id: 77,
   bank_account_number: null,
 };
 
@@ -174,6 +175,7 @@ describe("Google Sheet bank mutation sync", () => {
       String(sql).includes("from public.bank_mutations bm"),
     )?.[1] as unknown[];
     const firstCanonicalKeys = [...((firstExistingLookup?.[2] as string[]) ?? [])];
+    expect(firstExistingLookup?.[3]).toBe(config.bank_account_id);
 
     const second = await syncOneBankSheetConfig(config.id);
     const existingLookups = mocks.clientQuery.mock.calls.filter(([sql]) =>
@@ -187,6 +189,7 @@ describe("Google Sheet bank mutation sync", () => {
     expect(second).toMatchObject({ imported: 0, existing: 2, total: 2 });
     expect(insertCalls).toHaveLength(1);
     expect(String(insertCalls[0]?.[1]?.[0])).toMatch(/^[a-f0-9]{64}$/);
+    expect(insertCalls[0]?.[1]?.[9]).toBe(config.bank_account_id);
     expect(existingLookups).toHaveLength(2);
     expect(existingLookups[1]?.[1]?.[2]).toEqual(firstCanonicalKeys);
 
