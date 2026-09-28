@@ -13,6 +13,7 @@ type SheetConfig = {
   sheet_id: string;
   tab_name: string;
   label: string;
+  bank_account_id: number | null;
   bank_account_number: string | null;
 };
 
@@ -420,9 +421,12 @@ async function syncConfig(config: SheetConfig): Promise<{
       };
     }
 
-    const bankAccount = config.bank_account_number?.trim() || null;
+    if (!Number.isInteger(config.bank_account_id) || Number(config.bank_account_id) <= 0) {
+      throw new Error("Koneksi Google Sheet belum memiliki Akun Rekonsiliasi yang valid.");
+    }
+
     const prepared = parsed.mutations.map((row) => {
-      const generatedKey = canonicalKey(row, config.company_id, null);
+      const generatedKey = canonicalKey(row, config.company_id, config.bank_account_id);
       return {
         row,
         key: row.mutationKey ?? generatedKey,
@@ -664,12 +668,8 @@ async function syncConfig(config: SheetConfig): Promise<{
            bank_account_id, source_classification, status, source, source_account,
            company_id, sheet_config_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, null,
-                 (select id from public.company_bank_accounts
-                   where company_id = $10
-                     and coalesce(is_active, true) = true
-                     and ($11::text is null or account_number = $11)
-                   order by id limit 1),
-                 'actual_bank_mutation', 'unmatched', 'google_sheet', $12, $10, $13)
+                 $10,
+                 'actual_bank_mutation', 'unmatched', 'google_sheet', $11, $12, $13)
          on conflict do nothing
           returning id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id,
                     null::int as match_score, null::text as match_reason,
@@ -685,9 +685,9 @@ async function syncConfig(config: SheetConfig): Promise<{
           item.row.credit,
           item.row.debit,
           normalizeDescription(item.row.description),
-          config.company_id,
-          bankAccount,
+          config.bank_account_id,
           item.row.bank,
+          config.company_id,
           config.id,
         ],
       );
@@ -746,7 +746,7 @@ async function syncConfig(config: SheetConfig): Promise<{
 
 export async function syncOneBankSheetConfig(configId: number) {
   const result = await pool.query<SheetConfig>(
-    `select id, company_id, sheet_id, tab_name, label, bank_account_number
+    `select id, company_id, sheet_id, tab_name, label, bank_account_id, bank_account_number
        from public.bank_sheet_configs
       where id = $1 and is_active = true`,
     [configId],
@@ -763,7 +763,7 @@ export async function syncOneBankSheetConfig(configId: number) {
 
 export async function syncAllBankSheetConfigs(companyId?: number) {
   const result = await pool.query<SheetConfig>(
-    `select id, company_id, sheet_id, tab_name, label, bank_account_number
+    `select id, company_id, sheet_id, tab_name, label, bank_account_id, bank_account_number
        from public.bank_sheet_configs
       where is_active = true
         and ($1::int is null or company_id = $1)
