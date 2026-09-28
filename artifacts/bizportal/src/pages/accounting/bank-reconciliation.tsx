@@ -60,8 +60,12 @@ interface SheetConfig {
   label: string;
   sheet_id: string;
   tab_name: string;
+  bank_account_id: number | null;
   bank_account_number: string | null;
   bank_name: string | null;
+  account_name: string | null;
+  account_coa_code: string | null;
+  account_coa_name: string | null;
   is_active: boolean;
   last_synced_at: string | null;
   last_sync_status: string | null;
@@ -181,6 +185,7 @@ function SheetConfigManager() {
     company_id: "",
     label: "",
     sheet_id: "",
+    bank_account_id: "",
     bank_account_number: "",
     bank_name: "",
     tab_name: "Mutasi_Bank",
@@ -206,6 +211,24 @@ function SheetConfigManager() {
 
   const configs: SheetConfig[] = configsData?.configs ?? [];
   const companies: Company[] = contextCompanies;
+  const selectedFormCompanyId = Number(form.company_id || 0);
+  const { data: sheetAccountData, isLoading: sheetAccountsLoading } = useQuery({
+    queryKey: ["sheet-reconciliation-accounts", selectedFormCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ companyId: String(selectedFormCompanyId) });
+      const response = await fetch(`/api/cash-bank/accounts?${params}`, { credentials: "include" });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json() as Promise<{ data: ReconciliationAccount[] }>;
+    },
+    enabled: showForm && selectedFormCompanyId > 0,
+    staleTime: 60_000,
+  });
+  const sheetReconciliationAccounts = (sheetAccountData?.data ?? []).filter(
+    (account) =>
+      account.is_active !== false
+      && Number.isInteger(Number(account.coa_id))
+      && Boolean(account.coa_name?.trim()),
+  );
 
   useEffect(() => {
     // A test/sync result belongs to the previous company's config and should
@@ -223,6 +246,7 @@ function SheetConfigManager() {
         : "",
       label: "",
       sheet_id: "",
+      bank_account_id: "",
       bank_account_number: "",
       bank_name: "",
       tab_name: "Mutasi_Bank",
@@ -236,6 +260,7 @@ function SheetConfigManager() {
       company_id: cfg.company_id ? String(cfg.company_id) : "",
       label: cfg.label,
       sheet_id: cfg.sheet_id,
+      bank_account_id: cfg.bank_account_id ? String(cfg.bank_account_id) : "",
       bank_account_number: cfg.bank_account_number ?? "",
       bank_name: cfg.bank_name ?? "",
       tab_name: cfg.tab_name,
@@ -244,16 +269,18 @@ function SheetConfigManager() {
   };
 
   const saveConfig = async () => {
-    if (!form.label || !form.sheet_id) {
-      toast({ title: "Label dan Sheet ID wajib diisi", variant: "destructive" });
+    if (!form.company_id || !form.bank_account_id || !form.label || !form.sheet_id) {
+      toast({
+        title: "Perusahaan, Akun Rekonsiliasi, Label, dan Sheet ID wajib diisi",
+        variant: "destructive",
+      });
       return;
     }
     const body = {
-      company_id: form.company_id ? Number(form.company_id) : null,
+      company_id: Number(form.company_id),
+      bank_account_id: Number(form.bank_account_id),
       label: form.label,
       sheet_id: form.sheet_id,
-      bank_account_number: form.bank_account_number.trim() || null,
-      bank_name: form.bank_name.trim() || null,
       tab_name: form.tab_name || "Mutasi_Bank",
     };
     const url  = editTarget
@@ -402,6 +429,12 @@ function SheetConfigManager() {
                   {/* Sheet info */}
                   <div className="text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-0.5">
                     <span>Sheet: <code className="bg-muted px-1 rounded">{cfg.sheet_id.slice(0, 24)}…</code></span>
+                    {cfg.account_name && (
+                      <span>Akun: <code className="bg-muted px-1 rounded">{cfg.account_name}</code></span>
+                    )}
+                    {cfg.account_coa_code && (
+                      <span>COA: <code className="bg-muted px-1 rounded">{cfg.account_coa_code}</code></span>
+                    )}
                     {cfg.bank_name && <span>Bank: <code className="bg-muted px-1 rounded">{cfg.bank_name}</code></span>}
                     {cfg.bank_account_number && <span>No. Rek: <code className="bg-muted px-1 rounded">{cfg.bank_account_number}</code></span>}
                     <span>Tab: <code className="bg-muted px-1 rounded">{cfg.tab_name}</code></span>
@@ -482,7 +515,11 @@ function SheetConfigManager() {
               <label className="text-sm font-medium">Perusahaan</label>
               <Select
                 value={form.company_id || "none"}
-                onValueChange={v => setForm(f => ({ ...f, company_id: v === "none" ? "" : v }))}
+                onValueChange={v => setForm(f => ({
+                  ...f,
+                  company_id: v === "none" ? "" : v,
+                  bank_account_id: "",
+                }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Pilih perusahaan (opsional)" />
@@ -515,24 +552,44 @@ function SheetConfigManager() {
                 Dari URL: docs.google.com/spreadsheets/d/<strong>[ID INI]</strong>/edit
               </p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Nama Bank</label>
-                <Input
-                  placeholder="Contoh: BCA"
-                  value={form.bank_name}
-                  onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Nomor Rekening</label>
-                <Input
-                  inputMode="numeric"
-                  placeholder="Contoh: 1234567890"
-                  value={form.bank_account_number}
-                  onChange={e => setForm(f => ({ ...f, bank_account_number: e.target.value }))}
-                />
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">
+                Akun Rekonsiliasi <span className="text-red-500">*</span>
+              </label>
+              <Select
+                value={form.bank_account_id || "none"}
+                onValueChange={value => setForm(f => ({
+                  ...f,
+                  bank_account_id: value === "none" ? "" : value,
+                }))}
+                disabled={!form.company_id || sheetAccountsLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={
+                    !form.company_id
+                      ? "Pilih perusahaan terlebih dahulu"
+                      : sheetAccountsLoading
+                        ? "Memuat akun..."
+                        : "Pilih akun kas / bank"
+                  } />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Pilih Akun —</SelectItem>
+                  {sheetReconciliationAccounts.map(account => {
+                    const accountNumber = account.account_number?.trim();
+                    const suffix = accountNumber ? ` · ${accountNumber}` : "";
+                    const label = account.coa_name?.trim() || account.name;
+                    return (
+                      <SelectItem key={account.id} value={String(account.id)}>
+                        {label}{suffix}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Setiap koneksi hanya boleh masuk ke satu akun rekonsiliasi. Spreadsheet yang sama boleh dipakai lagi selama tab berbeda.
+              </p>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nama Tab</label>
@@ -8223,10 +8280,11 @@ export default function BankReconciliationPage() {
   );
 
   const { data: summary } = useQuery({
-    queryKey: ["bank-reconciliation-summary", activeCompanyId],
+    queryKey: ["bank-reconciliation-summary", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
+      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
       const r = await fetch(`/api/bank-reconciliation/summary?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
@@ -8236,10 +8294,11 @@ export default function BankReconciliationPage() {
   });
 
   const { data: matchedReadinessData } = useQuery({
-    queryKey: ["bank-reconciliation-ready-approval", activeCompanyId],
+    queryKey: ["bank-reconciliation-ready-approval", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams({ status: "matched", limit: "1000", offset: "0" });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
+      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
       const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
@@ -9023,7 +9082,12 @@ export default function BankReconciliationPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matching_mode: mode }),
+        body: JSON.stringify({
+          matching_mode: mode,
+          bank_account_id: filterBankAccountId !== "all"
+            ? Number(filterBankAccountId)
+            : undefined,
+        }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
