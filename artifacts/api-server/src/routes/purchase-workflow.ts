@@ -180,7 +180,8 @@ async function authenticatePurchaseUser(
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    if (user.role.toLowerCase() !== "admin") {
+    const role = user.role.toLowerCase();
+    if (!["admin", "owner", "super_admin"].includes(role)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
@@ -213,7 +214,7 @@ async function authenticatePurchaseUser(
 
     const email = typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
     const role = typeof userData.role === "string" ? userData.role.trim().toLowerCase() : "";
-    if (email !== session.email || role !== "admin") {
+    if (email !== session.email || !["admin", "owner", "super_admin"].includes(role)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
