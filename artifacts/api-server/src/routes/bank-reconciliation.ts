@@ -5342,6 +5342,26 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
       return;
     }
 
+    const legacyDeactivateOnly =
+      current.bank_account_id == null
+      && input.is_active === false
+      && input.company_id === undefined
+      && input.bank_account_id === undefined
+      && input.label === undefined
+      && input.sheet_id === undefined
+      && input.tab_name === undefined;
+    if (legacyDeactivateOnly) {
+      const result = await pool.query<SheetConfigRow>(
+        `update public.bank_sheet_configs
+            set is_active = false, updated_at = now()
+          where id = $1
+          returning *`,
+        [id],
+      );
+      res.json(result.rows[0]);
+      return;
+    }
+
     const targetCompanyId =
       input.company_id !== undefined ? input.company_id : current.company_id;
     const targetBankAccountId =
@@ -5517,11 +5537,16 @@ router.post("/bank-reconciliation/sheet-sync", async (req, res): Promise<void> =
   try {
     const summaries = await syncAllBankSheetConfigs(companyId ?? undefined);
     const imported = summaries.reduce((sum, item) => sum + Number(item.imported ?? 0), 0);
-    res.json({
-      ok: true,
+    const failedConfigs = summaries.filter((item) => item.ok === false);
+    res.status(failedConfigs.length > 0 ? 207 : 200).json({
+      ok: failedConfigs.length === 0,
+      partial: failedConfigs.length > 0,
       imported,
+      failed_configs: failedConfigs.length,
       configs: summaries,
-      message: `Sync dari Google Sheet selesai: ${imported} mutasi baru`,
+      message: failedConfigs.length > 0
+        ? `Sync parsial: ${imported} mutasi baru, ${failedConfigs.length} koneksi dilewati karena konfigurasi tidak valid`
+        : `Sync dari Google Sheet selesai: ${imported} mutasi baru`,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sheet sync gagal";
