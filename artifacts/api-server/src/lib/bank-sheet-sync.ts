@@ -427,14 +427,17 @@ async function syncConfig(config: SheetConfig): Promise<{
 
     const prepared = parsed.mutations.map((row) => {
       const generatedKey = canonicalKey(row, config.company_id, config.bank_account_id);
+      const legacyCanonicalKey = canonicalKey(row, config.company_id, null);
       return {
         row,
         key: row.mutationKey ?? generatedKey,
         canonical: generatedKey,
+        legacyCanonical: legacyCanonicalKey,
       };
     });
     const mutationKeys = [...new Set(prepared.map((item) => item.key))];
     const canonicalKeys = [...new Set(prepared.map((item) => item.canonical))];
+    const legacyCanonicalKeys = [...new Set(prepared.map((item) => item.legacyCanonical))];
     let imported = 0;
     let existing = 0;
     const lastSync = new Date().toISOString();
@@ -640,9 +643,19 @@ async function syncConfig(config: SheetConfig): Promise<{
          ) canonical_contra on bm.journal_entry_id is null
         where bm.source = 'google_sheet'
           and bm.company_id is not distinct from $1
-          and bm.bank_account_id = $4
-          and (bm.mutation_key = any($2::text[]) or bm.canonical_key = any($3::text[]))`,
-      [config.company_id, mutationKeys, canonicalKeys, config.bank_account_id],
+          and bm.bank_account_id = $5
+          and (
+            bm.mutation_key = any($2::text[])
+            or bm.canonical_key = any($3::text[])
+            or bm.canonical_key = any($4::text[])
+          )`,
+      [
+        config.company_id,
+        mutationKeys,
+        canonicalKeys,
+        legacyCanonicalKeys,
+        config.bank_account_id,
+      ],
     );
     const byMutationKey = new Map<string, ExistingMutation>();
     const byCanonicalKey = new Map<string, ExistingMutation>();
@@ -655,7 +668,10 @@ async function syncConfig(config: SheetConfig): Promise<{
       // Prefer the row's current canonical identity over any stale mutation_key
       // already written back to the Sheet. This prevents one historical key from
       // collapsing two edited/split Sheet rows into the same old mutation.
-      const found = byCanonicalKey.get(item.canonical) ?? byMutationKey.get(item.key);
+      const found =
+        byCanonicalKey.get(item.canonical)
+        ?? byCanonicalKey.get(item.legacyCanonical)
+        ?? byMutationKey.get(item.key);
       if (found) {
         existing += 1;
         mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, item.key));
@@ -773,7 +789,25 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   );
   const summaries: Array<Record<string, unknown>> = [];
   for (const config of result.rows) {
-    summaries.push({ label: config.label, ...(await syncConfig(config)) });
+    try {
+      summaries.push({
+        ok: true,
+        configId: config.id,
+        label: config.label,
+        ...(await syncConfig(config)),
+      });
+    } catch (error) {
+      summaries.push({
+        ok: false,
+        configId: config.id,
+        label: config.label,
+        imported: 0,
+        total: 0,
+        existing: 0,
+        sheetUpdates: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   return summaries;
 }
