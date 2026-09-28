@@ -300,11 +300,21 @@ function SheetConfigManager() {
   };
 
   const toggleActive = async (cfg: SheetConfig) => {
-    await fetch(`/api/bank-reconciliation/sheet-configs/${cfg.id}`, {
+    const response = await fetch(`/api/bank-reconciliation/sheet-configs/${cfg.id}`, {
       method: "PUT", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_active: !cfg.is_active }),
     });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      toast({
+        title: "Status koneksi tidak berubah",
+        description: body.error ?? "Konfigurasi akun rekonsiliasi belum valid.",
+        variant: "destructive",
+      });
+      return;
+    }
+    toast({ title: cfg.is_active ? "Koneksi dinonaktifkan" : "Koneksi diaktifkan" });
     qc.invalidateQueries({ queryKey: ["sheet-configs"] });
   };
 
@@ -421,7 +431,8 @@ function SheetConfigManager() {
                       >
                         {cfg.is_active ? "Aktif" : "Nonaktif"}
                       </Badge>
-                      {cfg.last_sync_status === "ok" && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+                      {cfg.last_sync_status === "success" && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+                      {cfg.last_sync_status === "partial" && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
                       {cfg.last_sync_status === "error" && <AlertTriangle className="w-3.5 h-3.5 text-orange-500" />}
                     </div>
                   </div>
@@ -9388,7 +9399,15 @@ export default function BankReconciliationPage() {
     },
     onSuccess: (d) => {
       setWorkflowStage("matching");
-      toast({ title: d.message ?? "Sync dari Google Sheet selesai" });
+      toast({
+        title: d.partial ? "Sync Google Sheet selesai sebagian" : "Sync Google Sheet selesai",
+        description: d.message ?? (
+          d.partial
+            ? `${d.failed_configs ?? 0} koneksi dilewati; koneksi lain tetap tersinkron.`
+            : undefined
+        ),
+        variant: d.partial ? "destructive" : undefined,
+      });
       invalidate();
     },
     onError: (e: Error) => toast({ title: "Sync gagal", description: e.message, variant: "destructive" }),
