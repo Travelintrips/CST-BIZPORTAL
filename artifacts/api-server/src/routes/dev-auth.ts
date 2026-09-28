@@ -74,8 +74,13 @@ function findSecretString(value: unknown, keys: Set<string>): string | null {
 async function getBundledProductionSessionSecret(): Promise<string | null> {
   if (!process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON?.trim()) return null;
 
-  const secretValue = await readSecret(getDatabaseSecretName(true));
+  // Secret Manager is an optional source for the session secret. A stale or
+  // temporarily unavailable GCP bootstrap must never make BizPortal login
+  // unavailable when the canonical production database connection is healthy.
+  // Returning null here lets initializeProductionSessionSigning() fall back to
+  // the already-resolved runtime database credential in the same attempt.
   try {
+    const secretValue = await readSecret(getDatabaseSecretName(true));
     return findSecretString(
       JSON.parse(secretValue) as unknown,
       new Set(["BIZPORTAL_SESSION_SECRET", "SESSION_SECRET"]),
