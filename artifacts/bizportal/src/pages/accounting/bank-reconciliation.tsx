@@ -10099,33 +10099,65 @@ export default function BankReconciliationPage() {
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
-        {/* One payment-type filter controls both the canonical QRIS history and
-            the bank-mutation list. Canonical safeguards remain separate. */}
+        {/* Primary scope controls. Reconciliation account isolation is visible
+            here so operators do not accidentally match/post another cash/bank account. */}
         <Card>
           <CardContent className="p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-slate-900 dark:text-slate-100">Jenis Pembayaran</p>
+                <p className="text-xs font-medium text-slate-900 dark:text-slate-100">Scope Rekonsiliasi</p>
                 <p className="text-[11px] text-muted-foreground">
-                  Filter berlaku untuk antrean QRIS dan daftar mutasi bank.
+                  Pilih akun kas/bank agar daftar, ringkasan, dan AI Matching tidak bercampur antar akun.
                 </p>
               </div>
-              <Select
-                value={filterPaymentType}
-                onValueChange={value => {
-                  setFilterPaymentType(value as "all" | "bank_transfer" | "qris");
-                  setPage(0);
-                }}
-              >
-                <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Filter jenis pembayaran">
-                  <SelectValue placeholder="Jenis pembayaran" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua</SelectItem>
-                  <SelectItem value="bank_transfer">Transfer Bank</SelectItem>
-                  <SelectItem value="qris">QRIS</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">Akun Rekonsiliasi</Label>
+                  <Select
+                    value={filterBankAccountId}
+                    onValueChange={value => {
+                      setFilterBankAccountId(value);
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[260px] text-xs" aria-label="Filter akun rekonsiliasi">
+                      <SelectValue placeholder="Semua akun" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua akun</SelectItem>
+                      {reconciliationAccounts.map(account => {
+                        const accountNumber = account.account_number?.trim();
+                        const suffix = accountNumber ? ` · ${accountNumber}` : "";
+                        const accountLabel = account.coa_name?.trim() || account.name;
+                        return (
+                          <SelectItem key={account.id} value={String(account.id)}>
+                            {accountLabel}{suffix}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">Jenis Pembayaran</Label>
+                  <Select
+                    value={filterPaymentType}
+                    onValueChange={value => {
+                      setFilterPaymentType(value as "all" | "bank_transfer" | "qris");
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Filter jenis pembayaran">
+                      <SelectValue placeholder="Jenis pembayaran" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua</SelectItem>
+                      <SelectItem value="bank_transfer">Transfer Bank</SelectItem>
+                      <SelectItem value="qris">QRIS</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
