@@ -186,8 +186,6 @@ function SheetConfigManager() {
     label: "",
     sheet_id: "",
     bank_account_id: "",
-    bank_account_number: "",
-    bank_name: "",
     tab_name: "Mutasi_Bank",
   });
 
@@ -247,8 +245,6 @@ function SheetConfigManager() {
       label: "",
       sheet_id: "",
       bank_account_id: "",
-      bank_account_number: "",
-      bank_name: "",
       tab_name: "Mutasi_Bank",
     });
     setShowForm(true);
@@ -261,8 +257,6 @@ function SheetConfigManager() {
       label: cfg.label,
       sheet_id: cfg.sheet_id,
       bank_account_id: cfg.bank_account_id ? String(cfg.bank_account_id) : "",
-      bank_account_number: cfg.bank_account_number ?? "",
-      bank_name: cfg.bank_name ?? "",
       tab_name: cfg.tab_name,
     });
     setShowForm(true);
@@ -532,26 +526,29 @@ function SheetConfigManager() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Perusahaan</label>
+              <label className="text-sm font-medium">
+                Perusahaan <span className="text-red-500">*</span>
+              </label>
               <Select
-                value={form.company_id || "none"}
+                value={form.company_id || undefined}
                 onValueChange={v => setForm(f => ({
                   ...f,
-                  company_id: v === "none" ? "" : v,
+                  company_id: v,
                   bank_account_id: "",
                 }))}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Pilih perusahaan (opsional)" />
+                  <SelectValue placeholder="Pilih perusahaan" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— Semua / Global —</SelectItem>
                   {companies.map(c => (
                     <SelectItem key={c.id} value={String(c.id)}>{c.companyName}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Mutasi dari sheet ini akan ditag dengan perusahaan yang dipilih.</p>
+              <p className="text-xs text-muted-foreground">
+                Setiap koneksi wajib dimiliki satu perusahaan agar mutasi tidak bercampur lintas company.
+              </p>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Label <span className="text-red-500">*</span></label>
@@ -8332,7 +8329,7 @@ export default function BankReconciliationPage() {
     isLoading: qrisAuditLoading,
     refetch: refetchQrisAudit,
   } = useQuery({
-    queryKey: ["qris-candidate-audit", qrisCompanyId],
+    queryKey: ["qris-candidate-audit", qrisCompanyId, filterBankAccountId],
     queryFn: async () => {
        // The API defaults to MATCHED for approval-oriented callers. This
        // review panel must also show REVIEW/UNMATCHED candidates so the
@@ -8343,6 +8340,9 @@ export default function BankReconciliationPage() {
          status: "ALL",
        });
       params.set("includeCompleted", "true");
+      if (filterBankAccountId !== "all") {
+        params.set("bank_account_id", filterBankAccountId);
+      }
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
@@ -10801,38 +10801,6 @@ export default function BankReconciliationPage() {
             <Card>
               <CardContent className="p-3">
                 <div className="flex flex-wrap gap-2 items-end">
-                  <div className="space-y-1">
-                    <Label htmlFor="reconciliation-bank-account" className="text-[11px] text-muted-foreground">
-                      Rekening pencocokan
-                    </Label>
-                    <Select
-                      value={filterBankAccountId}
-                      onValueChange={value => {
-                        setFilterBankAccountId(value);
-                        setPage(0);
-                      }}
-                    >
-                      <SelectTrigger id="reconciliation-bank-account" className="h-8 w-[250px] text-xs">
-                        <SelectValue placeholder="Semua rekening" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Semua rekening</SelectItem>
-                        {reconciliationAccounts.map(account => {
-                          const accountNumber = account.account_number?.trim();
-                          const suffix = accountNumber ? ` · ${accountNumber}` : "";
-                          const accountLabel = account.coa_name?.trim() || account.name;
-                          return (
-                            <SelectItem key={account.id} value={String(account.id)}>
-                              {accountLabel}{suffix}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
-                    {reconciliationAccountsLoading && (
-                      <p className="text-[10px] text-muted-foreground">Memuat daftar rekening...</p>
-                    )}
-                  </div>
                   <Select value={filterProvider} onValueChange={v => { setFilterProvider(v); setPage(0); }}>
                     <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue placeholder="Provider" /></SelectTrigger>
                     <SelectContent>
