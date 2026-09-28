@@ -647,7 +647,10 @@ async function syncConfig(config: SheetConfig): Promise<{
     }
 
     for (const item of prepared) {
-      const found = byMutationKey.get(item.key) ?? byCanonicalKey.get(item.canonical);
+      // Prefer the row's current canonical identity over any stale mutation_key
+      // already written back to the Sheet. This prevents one historical key from
+      // collapsing two edited/split Sheet rows into the same old mutation.
+      const found = byCanonicalKey.get(item.canonical) ?? byMutationKey.get(item.key);
       if (found) {
         existing += 1;
         mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, item.key));
