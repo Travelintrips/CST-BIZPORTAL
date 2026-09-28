@@ -640,8 +640,9 @@ async function syncConfig(config: SheetConfig): Promise<{
          ) canonical_contra on bm.journal_entry_id is null
         where bm.source = 'google_sheet'
           and bm.company_id is not distinct from $1
+          and bm.bank_account_id = $4
           and (bm.mutation_key = any($2::text[]) or bm.canonical_key = any($3::text[]))`,
-      [config.company_id, mutationKeys, canonicalKeys],
+      [config.company_id, mutationKeys, canonicalKeys, config.bank_account_id],
     );
     const byMutationKey = new Map<string, ExistingMutation>();
     const byCanonicalKey = new Map<string, ExistingMutation>();
