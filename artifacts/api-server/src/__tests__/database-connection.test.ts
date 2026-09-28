@@ -5,6 +5,9 @@ import {
   validateDatabaseUrl,
 } from "@workspace/db/gcp-database-secret";
 
+const DEV_REF = "xssrfshdrtdfupgqwfdw";
+const PROD_REF = "nzdweipzckfszczzqtuw";
+
 const originalEnvironment = {
   APP_ENV: process.env.APP_ENV,
   NODE_ENV: process.env.NODE_ENV,
@@ -25,7 +28,7 @@ afterEach(() => {
 });
 
 describe("database URL resolution", () => {
-  it("does not fall back to the generic Replit database URL", () => {
+  it("does not fall back to the generic database URL", () => {
     process.env.APP_ENV = "development";
     process.env.NODE_ENV = "development";
     delete process.env.SUPABASE_DATABASE_URL_DEV;
@@ -37,52 +40,84 @@ describe("database URL resolution", () => {
     expect(getDatabaseUrl()).toBeUndefined();
   });
 
+  it("requires APP_ENV instead of inferring from NODE_ENV", () => {
+    delete process.env.APP_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL =
+      `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`;
+
+    expect(() => getDatabaseUrl()).toThrow(
+      'APP_ENV is required and must be explicitly set to "development" or "production"',
+    );
+  });
+
   it("uses the development Supabase database URL", async () => {
     process.env.APP_ENV = "development";
     process.env.NODE_ENV = "development";
     process.env.SUPABASE_DATABASE_URL_DEV =
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
+      `postgresql://postgres:pw@db.${DEV_REF}.supabase.co:5432/postgres`;
     process.env.SUPABASE_DATABASE_URL =
-      "postgres://prod_user:prod_password@db.example.test:5432/prod";
+      `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`;
 
-    await expect(resolveDatabaseUrl()).resolves.toBe(
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev",
-    );
+    await expect(resolveDatabaseUrl()).resolves.toContain(DEV_REF);
   });
 
-  it("keeps DEV routing when Hostinger runs an optimized production build", async () => {
+  it("keeps DEV routing when the host runs an optimized production build", async () => {
     process.env.APP_ENV = "development";
     process.env.NODE_ENV = "production";
     process.env.SUPABASE_DATABASE_URL_DEV =
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
+      `postgresql://postgres:pw@db.${DEV_REF}.supabase.co:5432/postgres`;
     process.env.SUPABASE_DATABASE_URL =
-      "postgres://prod_user:prod_password@db.example.test:5432/prod";
+      `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`;
 
-    await expect(resolveDatabaseUrl()).resolves.toBe(
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev",
-    );
+    await expect(resolveDatabaseUrl()).resolves.toContain(DEV_REF);
   });
 
   it("uses the production Supabase database URL", async () => {
     process.env.APP_ENV = "production";
     process.env.NODE_ENV = "production";
     process.env.SUPABASE_DATABASE_URL =
-      "postgres://prod_user:prod_password@db.example.test:5432/prod";
+      `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`;
     process.env.SUPABASE_DATABASE_URL_DEV =
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
+      `postgresql://postgres:pw@db.${DEV_REF}.supabase.co:5432/postgres`;
 
-    await expect(resolveDatabaseUrl()).resolves.toBe(
-      "postgres://prod_user:prod_password@db.example.test:5432/prod",
+    await expect(resolveDatabaseUrl()).resolves.toContain(PROD_REF);
+  });
+
+  it("rejects DEV runtime pointed at PROD Supabase", async () => {
+    process.env.APP_ENV = "development";
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL_DEV =
+      `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`;
+
+    await expect(resolveDatabaseUrl()).rejects.toThrow(
+      "points to the opposite environment Supabase project",
     );
+  });
+
+  it("rejects PROD runtime pointed at DEV Supabase", async () => {
+    process.env.APP_ENV = "production";
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL =
+      `postgresql://postgres:pw@db.${DEV_REF}.supabase.co:5432/postgres`;
+
+    await expect(resolveDatabaseUrl()).rejects.toThrow(
+      "points to the opposite environment Supabase project",
+    );
+  });
+
+  it("supports Supabase pooler URLs by checking the username project ref", async () => {
+    process.env.APP_ENV = "development";
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL_DEV =
+      `postgresql://postgres.${DEV_REF}:pw@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres`;
+
+    await expect(resolveDatabaseUrl()).resolves.toContain(DEV_REF);
   });
 
   it("rejects an unsupported APP_ENV instead of guessing a database", () => {
     process.env.APP_ENV = "staging";
     process.env.NODE_ENV = "production";
-    process.env.SUPABASE_DATABASE_URL =
-      "postgres://prod_user:prod_password@db.example.test:5432/prod";
-    process.env.SUPABASE_DATABASE_URL_DEV =
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
 
     expect(() => getDatabaseUrl()).toThrow(
       'Unsupported APP_ENV="staging". Expected "development" or "production".',
@@ -92,16 +127,16 @@ describe("database URL resolution", () => {
   it("extracts the environment-specific key from a GCP secret payload", () => {
     const secret = JSON.stringify({
       SUPABASE_DATABASE_URL_DEV:
-        "postgresql://dev_user:dev_password@db.example.test:5432/dev",
+        `postgresql://postgres:pw@db.${DEV_REF}.supabase.co:5432/postgres`,
       SUPABASE_DATABASE_URL:
-        "postgres://prod_user:prod_password@db.example.test:5432/prod",
+        `postgresql://postgres:pw@db.${PROD_REF}.supabase.co:5432/postgres`,
     });
 
-    expect(extractDatabaseUrl(secret, "SUPABASE_DATABASE_URL_DEV")).toBe(
-      "postgresql://dev_user:dev_password@db.example.test:5432/dev",
+    expect(extractDatabaseUrl(secret, "SUPABASE_DATABASE_URL_DEV")).toContain(
+      DEV_REF,
     );
-    expect(extractDatabaseUrl(secret, "SUPABASE_DATABASE_URL")).toBe(
-      "postgres://prod_user:prod_password@db.example.test:5432/prod",
+    expect(extractDatabaseUrl(secret, "SUPABASE_DATABASE_URL")).toContain(
+      PROD_REF,
     );
   });
 
