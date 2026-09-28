@@ -320,9 +320,18 @@ function SheetConfigManager() {
 
   const deleteConfig = async (cfg: SheetConfig) => {
     if (!confirm(`Hapus config "${cfg.label}"?`)) return;
-    await fetch(`/api/bank-reconciliation/sheet-configs/${cfg.id}`, {
+    const response = await fetch(`/api/bank-reconciliation/sheet-configs/${cfg.id}`, {
       method: "DELETE", credentials: "include",
     });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      toast({
+        title: "Koneksi tidak dihapus",
+        description: body.error ?? "Riwayat mutasi masih menggunakan koneksi ini.",
+        variant: "destructive",
+      });
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["sheet-configs"] });
     toast({ title: "Config dihapus" });
   };
