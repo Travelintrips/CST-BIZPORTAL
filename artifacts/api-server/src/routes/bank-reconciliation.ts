@@ -21,6 +21,7 @@ interface SheetConfigInput {
   company_id?: number | null;
   label?: string;
   sheet_id?: string;
+  bank_account_id?: number | null;
   bank_account_number?: string | null;
   bank_name?: string | null;
   tab_name?: string;
@@ -34,8 +35,12 @@ interface SheetConfigRow {
   label: string;
   sheet_id: string;
   tab_name: string;
+  bank_account_id: number | null;
   bank_account_number: string | null;
   bank_name: string | null;
+  account_name: string | null;
+  account_coa_code: string | null;
+  account_coa_name: string | null;
   is_active: boolean | null;
   last_synced_at: Date | null;
   last_sync_status: string | null;
@@ -1190,6 +1195,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
   const body = (req.body ?? {}) as {
     ids?: unknown;
     matching_mode?: unknown;
+    bank_account_id?: unknown;
     legacy_reference_coa_retry?: unknown;
   };
   const matchingMode = (body.matching_mode ?? "new") as MatchingMode;
@@ -1208,6 +1214,21 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     return;
   }
   const ids = requestedIds.filter((id): id is number => id != null);
+  const requestedBankAccountId =
+    body.bank_account_id === undefined || body.bank_account_id === null
+      || body.bank_account_id === "" || body.bank_account_id === "all"
+      ? null
+      : safeInteger(body.bank_account_id);
+  if (
+    body.bank_account_id !== undefined
+    && body.bank_account_id !== null
+    && body.bank_account_id !== ""
+    && body.bank_account_id !== "all"
+    && requestedBankAccountId === null
+  ) {
+    res.status(400).json({ error: "Akun Rekonsiliasi tidak valid." });
+    return;
+  }
   if (body.legacy_reference_coa_retry === true && ids.length === 0) {
     res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
     return;
@@ -1225,6 +1246,9 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
   }
   if (actor.companyId != null) {
     filters.push(`bm.company_id = ${addValue(actor.companyId)}`);
+  }
+  if (requestedBankAccountId != null) {
+    filters.push(`bm.bank_account_id = ${addValue(requestedBankAccountId)}`);
   }
 
   if (matchingMode === "new") {
@@ -5173,6 +5197,8 @@ function normalizeInput(body: unknown): SheetConfigInput {
       value.company_id === null ? null : parsePositiveInt(value.company_id) ?? undefined,
     label: typeof value.label === "string" ? value.label.trim() : undefined,
     sheet_id: typeof value.sheet_id === "string" ? value.sheet_id.trim() : undefined,
+    bank_account_id:
+      value.bank_account_id === null ? null : parsePositiveInt(value.bank_account_id) ?? undefined,
     bank_account_number:
       value.bank_account_number === null
         ? null
@@ -5198,14 +5224,20 @@ const selectSheetConfigs = `
     config.label,
     config.sheet_id,
     config.tab_name,
+    config.bank_account_id,
     config.bank_account_number,
     config.bank_name,
+    cba.name as account_name,
+    coa.code as account_coa_code,
+    coa.name as account_coa_name,
     config.is_active,
     config.last_synced_at,
     config.last_sync_status,
     config.last_sync_error
   from public.bank_sheet_configs config
   left join public.companies company on company.id = config.company_id
+  left join public.company_bank_accounts cba on cba.id = config.bank_account_id
+  left join public.chart_of_accounts coa on coa.id = cba.coa_id
 `;
 
 router.get("/bank-reconciliation/sheet-configs", async (req, res): Promise<void> => {
@@ -5232,28 +5264,54 @@ router.get("/bank-reconciliation/sheet-configs", async (req, res): Promise<void>
 
 router.post("/bank-reconciliation/sheet-configs", async (req, res): Promise<void> => {
   const input = normalizeInput(req.body);
-  if (!input.label || !input.sheet_id) {
-    res.status(400).json({ error: "Label dan Sheet ID wajib diisi" });
+  if (!input.label || !input.sheet_id || input.company_id == null || input.bank_account_id == null) {
+    res.status(400).json({
+      error: "Perusahaan, Akun Rekonsiliasi, Label, dan Sheet ID wajib diisi",
+    });
     return;
   }
 
   try {
     const result = await pool.query<SheetConfigRow>(
       `insert into public.bank_sheet_configs
-        (company_id, label, sheet_id, bank_account_number, bank_name, tab_name)
-       values ($1, $2, $3, $4, $5, $6)
+        (company_id, label, sheet_id, bank_account_id, bank_account_number, bank_name, tab_name)
+       select $1, $2, $3, cba.id,
+              nullif(trim(coalesce(cba.account_number, '')), ''),
+              nullif(trim(coalesce(cba.bank_name, '')), ''),
+              $5
+         from public.company_bank_accounts cba
+         join public.chart_of_accounts coa
+           on coa.id = cba.coa_id
+          and coalesce(coa.is_active, true) = true
+          and coalesce(coa.is_header, false) = false
+          and coalesce(coa.is_postable, true) = true
+        where cba.id = $4
+          and cba.company_id = $1
+          and coalesce(cba.is_active, true) = true
        returning *`,
       [
-        input.company_id ?? null,
+        input.company_id,
         input.label,
         input.sheet_id,
-        input.bank_account_number ?? null,
-        input.bank_name ?? null,
+        input.bank_account_id,
         input.tab_name || "Mutasi_Bank",
       ],
     );
+    if (result.rowCount === 0) {
+      res.status(400).json({
+        error: "Akun Rekonsiliasi tidak valid, tidak aktif, atau tidak memiliki COA postable pada perusahaan ini",
+      });
+      return;
+    }
     res.status(201).json(result.rows[0]);
   } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "23505") {
+      res.status(409).json({
+        error: "Spreadsheet dan tab tersebut sudah terdaftar untuk perusahaan ini",
+      });
+      return;
+    }
     req.log.error({ error }, "Failed to create sheet configuration");
     res.status(503).json({ error: "Konfigurasi Google Sheet gagal disimpan" });
   }
@@ -5267,39 +5325,99 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
   }
 
   const input = normalizeInput(req.body);
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  const add = (column: string, value: unknown): void => {
-    values.push(value);
-    fields.push(`${column} = $${values.length}`);
-  };
-  if (input.company_id !== undefined) add("company_id", input.company_id);
-  if (input.label !== undefined) add("label", input.label);
-  if (input.sheet_id !== undefined) add("sheet_id", input.sheet_id);
-  if (input.bank_account_number !== undefined) add("bank_account_number", input.bank_account_number);
-  if (input.bank_name !== undefined) add("bank_name", input.bank_name);
-  if (input.tab_name !== undefined) add("tab_name", input.tab_name || "Mutasi_Bank");
-  if (input.is_active !== undefined) add("is_active", input.is_active);
-  if (fields.length === 0) {
-    res.status(400).json({ error: "Tidak ada perubahan yang valid" });
-    return;
-  }
-
-  values.push(id);
   try {
-    const result = await pool.query<SheetConfigRow>(
-      `update public.bank_sheet_configs
-       set ${fields.join(", ")}, updated_at = now()
-       where id = $${values.length}
-       returning *`,
-      values,
+    const currentResult = await pool.query<{
+      company_id: number | null;
+      bank_account_id: number | null;
+    }>(
+      `select company_id, bank_account_id
+         from public.bank_sheet_configs
+        where id = $1
+        limit 1`,
+      [id],
     );
-    if (result.rowCount === 0) {
+    const current = currentResult.rows[0];
+    if (!current) {
       res.status(404).json({ error: "Konfigurasi tidak ditemukan" });
       return;
     }
+
+    const targetCompanyId =
+      input.company_id !== undefined ? input.company_id : current.company_id;
+    const targetBankAccountId =
+      input.bank_account_id !== undefined ? input.bank_account_id : current.bank_account_id;
+    if (targetCompanyId == null || targetBankAccountId == null) {
+      res.status(400).json({
+        error: "Perusahaan dan Akun Rekonsiliasi wajib dipilih",
+      });
+      return;
+    }
+
+    const accountResult = await pool.query<{
+      id: number;
+      bank_name: string | null;
+      account_number: string | null;
+    }>(
+      `select cba.id, cba.bank_name, cba.account_number
+         from public.company_bank_accounts cba
+         join public.chart_of_accounts coa
+           on coa.id = cba.coa_id
+          and coalesce(coa.is_active, true) = true
+          and coalesce(coa.is_header, false) = false
+          and coalesce(coa.is_postable, true) = true
+        where cba.id = $1
+          and cba.company_id = $2
+          and coalesce(cba.is_active, true) = true
+        limit 1`,
+      [targetBankAccountId, targetCompanyId],
+    );
+    const account = accountResult.rows[0];
+    if (!account) {
+      res.status(400).json({
+        error: "Akun Rekonsiliasi tidak valid, tidak aktif, atau tidak memiliki COA postable pada perusahaan ini",
+      });
+      return;
+    }
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    const add = (column: string, value: unknown): void => {
+      values.push(value);
+      fields.push(`${column} = $${values.length}`);
+    };
+
+    if (input.company_id !== undefined || input.bank_account_id !== undefined) {
+      add("company_id", targetCompanyId);
+      add("bank_account_id", targetBankAccountId);
+      add("bank_account_number", account.account_number?.trim() || null);
+      add("bank_name", account.bank_name?.trim() || null);
+    }
+    if (input.label !== undefined) add("label", input.label);
+    if (input.sheet_id !== undefined) add("sheet_id", input.sheet_id);
+    if (input.tab_name !== undefined) add("tab_name", input.tab_name || "Mutasi_Bank");
+    if (input.is_active !== undefined) add("is_active", input.is_active);
+    if (fields.length === 0) {
+      res.status(400).json({ error: "Tidak ada perubahan yang valid" });
+      return;
+    }
+
+    values.push(id);
+    const result = await pool.query<SheetConfigRow>(
+      `update public.bank_sheet_configs
+          set ${fields.join(", ")}, updated_at = now()
+        where id = $${values.length}
+        returning *`,
+      values,
+    );
     res.json(result.rows[0]);
   } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "23505") {
+      res.status(409).json({
+        error: "Spreadsheet dan tab tersebut sudah terdaftar untuk perusahaan ini",
+      });
+      return;
+    }
     req.log.error({ error }, "Failed to update sheet configuration");
     res.status(503).json({ error: "Konfigurasi Google Sheet gagal diperbarui" });
   }
