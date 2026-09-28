@@ -33,8 +33,24 @@ describe("QRIS historical review diagnostics", () => {
     expect(diagnosticSource).toContain('const HISTORICAL_SOURCE = "historical_qris_review_snapshot"');
     expect(diagnosticSource).toContain('const LIVE_SOURCE = "live_qris_review_snapshot"');
     expect(diagnosticSource).toContain("diagnostic_amount_difference");
-    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, limit })");
+    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, bankAccountId, limit })");
     expect(routeSource).toContain("candidates: reviewDiagnostics");
+  });
+
+  it("scopes canonical and diagnostic QRIS reads to the selected reconciliation account", () => {
+    expect(routeSource).toContain("bank_account_id tidak valid");
+    expect(routeSource).toContain(
+      "listQrisCanonicalSettlements(companyId, bankAccountId, includeCompleted, limit)",
+    );
+    expect(routeSource).toContain(
+      "listQrisReviewDiagnostics({ companyId, bankAccountId, limit })",
+    );
+    expect(diagnosticSource).toContain("bankAccountId?: number | null");
+    expect(diagnosticSource).toContain("bm.bank_account_id::text = $2::text");
+    expect(diagnosticSource).toContain("cba.id = $4");
+    expect(diagnosticSource).toContain(
+      "nullif(btrim(cba.account_number::text), '') = nullif(btrim(sp.bank_account_id::text), '')",
+    );
   });
 
   it("synthesizes a read-only live candidate when an open QRIS mutation has no saved review", () => {
