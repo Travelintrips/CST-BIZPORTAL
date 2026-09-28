@@ -14,6 +14,7 @@ type QrisDiagnosticRow = Record<string, unknown> & {
 type QrisMutationRow = {
   id: number;
   company_id: number | null;
+  bank_account_id: string | null;
   transaction_date: string;
   amount: string | number;
   status: string | null;
@@ -167,6 +168,7 @@ function enrichDiagnosticCandidate(candidate: QrisDiagnosticRow): Record<string,
 
 async function loadHistoricalDiagnostics(options: {
   companyId?: number | null;
+  bankAccountId?: number | null;
   mutationIds?: number[];
   limit?: number;
 }): Promise<Record<string, unknown>[]> {
@@ -177,7 +179,11 @@ async function loadHistoricalDiagnostics(options: {
 
   if (options.companyId != null) {
     values.push(options.companyId);
-    filters.push(`qris.company_id = $${values.length}`);
+    filters.push(`qris.company_id = ${values.length}`);
+  }
+  if (options.bankAccountId != null) {
+    values.push(options.bankAccountId);
+    filters.push(`bm.bank_account_id::text = ${values.length}::text`);
   }
   if (options.mutationIds?.length) {
     values.push(options.mutationIds);
@@ -221,17 +227,22 @@ async function loadRequestedMutationScope(
   return result.rows;
 }
 
-async function loadOpenQrisMutations(companyIds: number[]): Promise<QrisMutationRow[]> {
+async function loadOpenQrisMutations(
+  companyIds: number[],
+  bankAccountId?: number | null,
+): Promise<QrisMutationRow[]> {
   if (companyIds.length === 0) return [];
   const result = await pool.query<QrisMutationRow>(
     `select
        bm.id,
        bm.company_id,
+       bm.bank_account_id::text as bank_account_id,
        bm.transaction_date::date::text as transaction_date,
        bm.amount,
        bm.status
      from public.bank_mutations bm
      where bm.company_id = any($1::int[])
+       and ($2::int is null or bm.bank_account_id::text = $2::text)
        and upper(coalesce(bm.direction, '')) = 'IN'
        and lower(coalesce(bm.status::text, '')) not in ('approved', 'posted', 'void', 'rejected')
        and not exists (
@@ -247,7 +258,7 @@ async function loadOpenQrisMutations(companyIds: number[]): Promise<QrisMutation
          or upper(coalesce(bm.description, '')) like '%QRIS%'
        )
      order by bm.transaction_date, bm.id`,
-    [companyIds],
+    [companyIds, bankAccountId ?? null],
   );
   return result.rows;
 }
@@ -256,6 +267,7 @@ async function loadLiveQrisPayments(
   companyIds: number[],
   fromDate: string,
   toDate: string,
+  bankAccountId?: number | null,
 ): Promise<QrisPaymentRow[]> {
   if (companyIds.length === 0) return [];
   const result = await pool.query<QrisPaymentRow>(
@@ -307,6 +319,20 @@ async function loadLiveQrisPayments(
         limit 1
      ) config on true
      where sp.company_id = any($1::int[])
+       and (
+         $4::int is null
+         or exists (
+           select 1
+             from public.company_bank_accounts cba
+            where cba.id = $4
+              and cba.company_id = sp.company_id
+              and coalesce(cba.is_active, true) = true
+              and (
+                nullif(btrim(cba.account_number::text), '') = nullif(btrim(sp.bank_account_id::text), '')
+                or cba.id::text = nullif(btrim(sp.bank_account_id::text), '')
+              )
+         )
+       )
        and lower(coalesce(sp.status::text, '')) = 'confirmed'
        and lower(coalesce(sp.payment_method, '')) = 'qris'
        and lower(coalesce(sp.settlement_status::text, 'unsettled')) = 'unsettled'
@@ -321,7 +347,7 @@ async function loadLiveQrisPayments(
             and lower(coalesce(psb.status::text, '')) in ('draft', 'calculated', 'posted', 'reconciled')
        )
      order by sp.expected_settlement_date, sp.id`,
-    [companyIds, fromDate, toDate],
+    [companyIds, fromDate, toDate, bankAccountId ?? null],
   );
   return result.rows;
 }
@@ -435,6 +461,7 @@ function currentPaymentIds(candidate: Record<string, unknown>): number[] {
 async function synthesizeLiveReviewDiagnostics(
   openMutations: QrisMutationRow[],
   historicalDiagnostics: Record<string, unknown>[],
+  bankAccountId?: number | null,
 ): Promise<Record<string, unknown>[]> {
   if (openMutations.length === 0) return [];
 
@@ -450,7 +477,12 @@ async function synthesizeLiveReviewDiagnostics(
 
   const fromDate = addCalendarDays(dates.sort()[0]!, -1);
   const toDate = dates.sort().at(-1)!;
-  const payments = await loadLiveQrisPayments(companyIds, fromDate, toDate);
+  const payments = await loadLiveQrisPayments(
+    companyIds,
+    fromDate,
+    toDate,
+    bankAccountId,
+  );
   const historicalByMutation = new Map<number, Record<string, unknown>[]>();
   for (const diagnostic of historicalDiagnostics) {
     const mutationId = Number(diagnostic.mutation_id);
@@ -522,6 +554,7 @@ async function synthesizeLiveReviewDiagnostics(
 
 export async function listQrisReviewDiagnostics(options: {
   companyId?: number | null;
+  bankAccountId?: number | null;
   mutationIds?: number[];
   limit?: number;
 } = {}): Promise<Record<string, unknown>[]> {
@@ -542,10 +575,14 @@ export async function listQrisReviewDiagnostics(options: {
     )];
 
   const effectiveCompanyIds = companyIds.length > 0 ? companyIds : [1];
-  const openMutations = await loadOpenQrisMutations(effectiveCompanyIds);
+  const openMutations = await loadOpenQrisMutations(
+    effectiveCompanyIds,
+    options.bankAccountId,
+  );
   const openMutationIds = openMutations.map((mutation) => mutation.id);
   const historicalForOpen = openMutationIds.length > 0
     ? await loadHistoricalDiagnostics({
+      bankAccountId: options.bankAccountId,
       mutationIds: openMutationIds,
       limit: 500,
     })
@@ -553,10 +590,12 @@ export async function listQrisReviewDiagnostics(options: {
   const synthetic = await synthesizeLiveReviewDiagnostics(
     openMutations,
     historicalForOpen,
+    options.bankAccountId,
   );
 
   const requestedHistorical = await loadHistoricalDiagnostics({
     companyId: options.companyId,
+    bankAccountId: options.bankAccountId,
     mutationIds: requestedIds.length > 0 ? requestedIds : undefined,
     limit: Math.min(Math.max(options.limit ?? 500, 1), 500),
   });
@@ -575,6 +614,12 @@ export async function listQrisReviewDiagnostics(options: {
     if (
       options.companyId != null
       && Number(diagnostic.company_id) !== Number(options.companyId)
+    ) continue;
+    if (
+      options.bankAccountId != null
+      && Number(openMutations.find((mutation) => mutation.id === mutationId)?.bank_account_id)
+        !== Number(options.bankAccountId)
+      && requestedIds.length === 0
     ) continue;
     const source = String(diagnostic.candidate_source ?? "unknown");
     if (source === HISTORICAL_SOURCE && syntheticMutationIds.has(mutationId)) {
