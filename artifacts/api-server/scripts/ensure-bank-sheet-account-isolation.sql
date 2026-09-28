@@ -40,4 +40,44 @@ create unique index if not exists bank_sheet_configs_company_sheet_tab_unique
   on public.bank_sheet_configs(company_id, sheet_id, tab_name)
   where company_id is not null;
 
+create unique index if not exists company_bank_accounts_company_id_id_unique
+  on public.company_bank_accounts(company_id, id);
+
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'bank_sheet_configs_company_account_fkey'
+       and conrelid = 'public.bank_sheet_configs'::regclass
+  ) then
+    alter table public.bank_sheet_configs
+      add constraint bank_sheet_configs_company_account_fkey
+      foreign key (company_id, bank_account_id)
+      references public.company_bank_accounts(company_id, id)
+      on update cascade
+      on delete restrict;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'bank_sheet_configs_active_requires_scope_ck'
+       and conrelid = 'public.bank_sheet_configs'::regclass
+  ) then
+    alter table public.bank_sheet_configs
+      add constraint bank_sheet_configs_active_requires_scope_ck
+      check (
+        is_active is not true
+        or (company_id is not null and bank_account_id is not null)
+      );
+  end if;
+end $$;
+
+create index if not exists bank_mutations_company_account_status_date_idx
+  on public.bank_mutations(company_id, bank_account_id, status, transaction_date desc);
+
 commit;
