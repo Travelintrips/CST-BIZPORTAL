@@ -31,7 +31,8 @@ describe("database URL resolution", () => {
     delete process.env.SUPABASE_DATABASE_URL_DEV;
     delete process.env.SUPABASE_DATABASE_URL;
     delete process.env.SUPABASE_PG_URL;
-    process.env.DATABASE_URL = "postgresql://replit-user:password@replit.example.test:5432/replit";
+    process.env.DATABASE_URL =
+      "postgresql://replit-user:password@replit.example.test:5432/replit";
 
     expect(getDatabaseUrl()).toBeUndefined();
   });
@@ -41,7 +42,21 @@ describe("database URL resolution", () => {
     process.env.NODE_ENV = "development";
     process.env.SUPABASE_DATABASE_URL_DEV =
       "postgresql://dev_user:dev_password@db.example.test:5432/dev";
-    delete process.env.SUPABASE_DATABASE_URL;
+    process.env.SUPABASE_DATABASE_URL =
+      "postgres://prod_user:prod_password@db.example.test:5432/prod";
+
+    await expect(resolveDatabaseUrl()).resolves.toBe(
+      "postgresql://dev_user:dev_password@db.example.test:5432/dev",
+    );
+  });
+
+  it("keeps DEV routing when Hostinger runs an optimized production build", async () => {
+    process.env.APP_ENV = "development";
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL_DEV =
+      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
+    process.env.SUPABASE_DATABASE_URL =
+      "postgres://prod_user:prod_password@db.example.test:5432/prod";
 
     await expect(resolveDatabaseUrl()).resolves.toBe(
       "postgresql://dev_user:dev_password@db.example.test:5432/dev",
@@ -53,10 +68,24 @@ describe("database URL resolution", () => {
     process.env.NODE_ENV = "production";
     process.env.SUPABASE_DATABASE_URL =
       "postgres://prod_user:prod_password@db.example.test:5432/prod";
-    delete process.env.SUPABASE_DATABASE_URL_DEV;
+    process.env.SUPABASE_DATABASE_URL_DEV =
+      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
 
     await expect(resolveDatabaseUrl()).resolves.toBe(
       "postgres://prod_user:prod_password@db.example.test:5432/prod",
+    );
+  });
+
+  it("rejects an unsupported APP_ENV instead of guessing a database", () => {
+    process.env.APP_ENV = "staging";
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_DATABASE_URL =
+      "postgres://prod_user:prod_password@db.example.test:5432/prod";
+    process.env.SUPABASE_DATABASE_URL_DEV =
+      "postgresql://dev_user:dev_password@db.example.test:5432/dev";
+
+    expect(() => getDatabaseUrl()).toThrow(
+      'Unsupported APP_ENV="staging". Expected "development" or "production".',
     );
   });
 
