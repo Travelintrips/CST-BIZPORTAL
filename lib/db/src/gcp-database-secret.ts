@@ -51,7 +51,10 @@ function getCredentials(): ServiceAccountCredentials {
   return credentials;
 }
 
-async function getAccessToken(credentials: ServiceAccountCredentials): Promise<string> {
+async function getAccessToken(
+  credentials: ServiceAccountCredentials,
+  signal?: AbortSignal,
+): Promise<string> {
   const tokenUri = credentials.token_uri ?? "https://oauth2.googleapis.com/token";
   const now = Math.floor(Date.now() / 1000);
   const header = encodeBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
@@ -73,6 +76,7 @@ async function getAccessToken(credentials: ServiceAccountCredentials): Promise<s
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion,
     }),
+    signal,
   });
   if (!response.ok) {
     throw new Error(`GCP OAuth token request failed (${response.status})`);
@@ -85,9 +89,12 @@ async function getAccessToken(credentials: ServiceAccountCredentials): Promise<s
   return data.access_token;
 }
 
-export async function readSecret(secretName: string): Promise<string> {
+export async function readSecret(
+  secretName: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
   const credentials = getCredentials();
-  const accessToken = await getAccessToken(credentials);
+  const accessToken = await getAccessToken(credentials, options.signal);
   const resource = [
     "https://secretmanager.googleapis.com/v1",
     `projects/${encodeURIComponent(credentials.project_id!)}`,
@@ -97,6 +104,7 @@ export async function readSecret(secretName: string): Promise<string> {
 
   const response = await fetch(resource, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: options.signal,
   });
   if (!response.ok) {
     throw new Error(`GCP Secret Manager read failed for ${secretName} (${response.status})`);
