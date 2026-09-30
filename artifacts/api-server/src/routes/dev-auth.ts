@@ -45,6 +45,7 @@ export function isDevelopmentEnvironment(): boolean {
 
 let initializedProductionSessionSecret: string | null = null;
 let productionSessionInitialization: Promise<void> | null = null;
+const OPTIONAL_GCP_SESSION_SECRET_TIMEOUT_MS = 4_000;
 
 function deriveProductionSessionSecret(databaseCredential: string): string {
   return crypto
@@ -79,14 +80,25 @@ async function getBundledProductionSessionSecret(): Promise<string | null> {
   // unavailable when the canonical production database connection is healthy.
   // Returning null here lets initializeProductionSessionSigning() fall back to
   // the already-resolved runtime database credential in the same attempt.
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    OPTIONAL_GCP_SESSION_SECRET_TIMEOUT_MS,
+  );
+  timeout.unref();
+
   try {
-    const secretValue = await readSecret(getDatabaseSecretName(true));
+    const secretValue = await readSecret(getDatabaseSecretName(true), {
+      signal: controller.signal,
+    });
     return findSecretString(
       JSON.parse(secretValue) as unknown,
       new Set(["BIZPORTAL_SESSION_SECRET", "SESSION_SECRET"]),
     );
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
