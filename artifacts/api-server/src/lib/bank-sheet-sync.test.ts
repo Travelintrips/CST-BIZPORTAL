@@ -240,6 +240,38 @@ describe("Google Sheet bank mutation sync", () => {
     ]));
   });
 
+  it("never treats Keterangan COA as the writable COA metadata column", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan COA", "Debit", "Kredit", "mutation_key", "status_recon"],
+      ["2026-06-22", "Dana Masuk dari Angelia Nirwana | BCA Digital", "2000000", "0", "existing-key", ""],
+    ]);
+
+    storedMutations.push({
+      id: 88,
+      mutation_key: "existing-key",
+      canonical_key: null,
+      status: "unmatched",
+      reconciliation_status: null,
+      journal_entry_id: null,
+      company_id: 42,
+    });
+
+    await syncOneBankSheetConfig(config.id);
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+
+    expect(updates).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ range: "'Mutasi Bank'!B2" }),
+    ]));
+    expect(updates).toEqual(expect.arrayContaining([
+      { range: "'Mutasi Bank'!G1", values: [["coa"]] },
+      { range: "'Mutasi Bank'!G2", values: [[""]] },
+    ]));
+  });
+
   it("creates mutation_key and status columns before writing row metadata", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit"],
