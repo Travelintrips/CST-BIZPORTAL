@@ -8319,7 +8319,7 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
-    enabled: accountScopeReady,
+    enabled: companyScopeReady && qrisCompanyId != null && filterBankAccountId !== "",
     // Keep the primary mutation list in sync with approvals performed by
     // another tab/admin. The QRIS audit query polls separately, but this list
     // used to stay stale until a hard reload.
