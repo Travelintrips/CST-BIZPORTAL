@@ -133,34 +133,79 @@ const MONTHS: Record<string, number> = {
   sep: 9, okt: 10, nov: 11, des: 12,
 };
 
-function parseDate(raw: string): string | null {
+type SlashDateOrder = "MDY" | "DMY";
+
+function formatCalendarDate(year: number, month: number, day: number): string | null {
+  if (
+    !Number.isInteger(year)
+    || !Number.isInteger(month)
+    || !Number.isInteger(day)
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > 31
+  ) {
+    return null;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function inferSlashDateOrder(rows: string[][], dateColumn: number, start: number): SlashDateOrder {
+  let sawDmyEvidence = false;
+  let sawMdyEvidence = false;
+  for (const row of rows.slice(start)) {
+    const match = String(row?.[dateColumn] ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!match) continue;
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    if (first > 12 && second >= 1 && second <= 12) sawDmyEvidence = true;
+    if (second > 12 && first >= 1 && first <= 12) sawMdyEvidence = true;
+  }
+  if (sawDmyEvidence && !sawMdyEvidence) return "DMY";
+  return "MDY";
+}
+
+function parseDate(raw: string, slashOrder: SlashDateOrder = "MDY"): string | null {
   const value = raw.trim();
   if (!value) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
 
-  const mdy = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdy) {
-    const [, month, day, year] = mdy;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
-    if (!Number.isNaN(date.getTime())) {
-      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    }
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    return formatCalendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  }
+
+  const slash = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const first = Number(slash[1]);
+    const second = Number(slash[2]);
+    const year = Number(slash[3]);
+    const order =
+      first > 12 && second <= 12 ? "DMY"
+      : second > 12 && first <= 12 ? "MDY"
+      : slashOrder;
+    const month = order === "DMY" ? second : first;
+    const day = order === "DMY" ? first : second;
+    return formatCalendarDate(year, month, day);
   }
 
   const dmy = value.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (dmy) {
-    const [, day, month, year] = dmy;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
-    if (!Number.isNaN(date.getTime())) {
-      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    }
+    return formatCalendarDate(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
   }
 
   const textDate = value.match(/^(\d{1,2})[\s-]+([a-zA-Z]+)[\s-]+(\d{4})$/);
   if (textDate) {
     const [, day, monthName, year] = textDate;
     const month = MONTHS[monthName.toLowerCase()];
-    if (month) return `${year}-${String(month).padStart(2, "0")}-${day.padStart(2, "0")}`;
+    if (month) return formatCalendarDate(Number(year), month, Number(day));
   }
 
   const serial = Number(value);
@@ -276,10 +321,11 @@ function parseRows(rows: string[][]): {
     }
   }
 
+  const slashDateOrder = inferSlashDateOrder(rows, dateColumn, start);
   const result: ParsedMutation[] = [];
   for (const [offset, row] of rows.slice(start).entries()) {
     if (!row?.some((cell) => String(cell ?? "").trim())) continue;
-    const date = parseDate(String(row[dateColumn] ?? ""));
+    const date = parseDate(String(row[dateColumn] ?? ""), slashDateOrder);
     const debit = parseAmount(String(row[debitColumn] ?? ""));
     const credit = parseAmount(String(row[creditColumn] ?? ""));
     const amount = credit || debit;

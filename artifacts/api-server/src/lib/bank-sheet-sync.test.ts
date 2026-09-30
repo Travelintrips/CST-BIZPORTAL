@@ -156,6 +156,39 @@ beforeEach(() => {
 });
 
 describe("Google Sheet bank mutation sync", () => {
+  it("infers Indonesian DD/MM/YYYY dates when the sheet contains day-first evidence", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit"],
+      ["13/07/2026", "Kas keluar", "100000", "0"],
+      ["07/08/2026", "Kas keluar berikutnya", "200000", "0"],
+    ]);
+
+    const result = await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(result).toMatchObject({ imported: 2, total: 2 });
+    expect(insertCalls[0]?.[1]?.[2]).toBe("2026-07-13");
+    expect(insertCalls[1]?.[1]?.[2]).toBe("2026-08-07");
+  });
+
+  it("keeps US MM/DD/YYYY dates when month-first evidence exists", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit"],
+      ["06/17/2026", "Bank masuk", "0", "100000"],
+      ["07/08/2026", "Bank masuk berikutnya", "0", "200000"],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(insertCalls[0]?.[1]?.[2]).toBe("2026-06-17");
+    expect(insertCalls[1]?.[1]?.[2]).toBe("2026-07-08");
+  });
+
   it("reads sheet mutation_key values, falls back to a canonical key, and is idempotent", async () => {
     storedMutations.push({
       id: 1,
