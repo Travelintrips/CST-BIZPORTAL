@@ -5230,6 +5230,14 @@ router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
   }
 });
 
+function isBlockedProductionSheetConfig(tabName: string, isActive: boolean): boolean {
+  return (
+    isActive
+    && process.env.APP_ENV?.trim().toLowerCase() === "production"
+    && tabName.trim().toLowerCase() === "mutasidev"
+  );
+}
+
 function normalizeInput(body: unknown): SheetConfigInput {
   if (!body || typeof body !== "object") return {};
   const value = body as Record<string, unknown>;
@@ -5312,6 +5320,14 @@ router.post("/bank-reconciliation/sheet-configs", async (req, res): Promise<void
     return;
   }
 
+  const createTabName = input.tab_name || "Mutasi_Bank";
+  if (isBlockedProductionSheetConfig(createTabName, true)) {
+    res.status(400).json({
+      error: "Tab mutasidev khusus DEV dan tidak boleh diaktifkan pada production.",
+    });
+    return;
+  }
+
   try {
     const result = await pool.query<SheetConfigRow>(
       `insert into public.bank_sheet_configs
@@ -5347,6 +5363,13 @@ router.post("/bank-reconciliation/sheet-configs", async (req, res): Promise<void
     res.status(201).json(result.rows[0]);
   } catch (error) {
     const code = (error as { code?: string }).code;
+    const constraint = (error as { constraint?: string }).constraint;
+    if (code === "23505" && constraint === "bank_sheet_configs_one_active_per_account") {
+      res.status(409).json({
+        error: "Akun Rekonsiliasi ini sudah memiliki satu koneksi Google Sheet aktif. Tambahkan Akun Rekonsiliasi baru untuk mengaktifkan tab lain.",
+      });
+      return;
+    }
     if (code === "23505") {
       res.status(409).json({
         error: "Spreadsheet dan tab tersebut sudah terdaftar untuk perusahaan ini",
@@ -5370,8 +5393,10 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
     const currentResult = await pool.query<{
       company_id: number | null;
       bank_account_id: number | null;
+      tab_name: string;
+      is_active: boolean;
     }>(
-      `select company_id, bank_account_id
+      `select company_id, bank_account_id, tab_name, is_active
          from public.bank_sheet_configs
         where id = $1
         limit 1`,
@@ -5410,6 +5435,17 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
     if (targetCompanyId == null || targetBankAccountId == null) {
       res.status(400).json({
         error: "Perusahaan dan Akun Rekonsiliasi wajib dipilih",
+      });
+      return;
+    }
+
+    const targetTabName =
+      input.tab_name !== undefined ? (input.tab_name || "Mutasi_Bank") : current.tab_name;
+    const targetIsActive =
+      input.is_active !== undefined ? input.is_active : current.is_active;
+    if (isBlockedProductionSheetConfig(targetTabName, targetIsActive)) {
+      res.status(400).json({
+        error: "Tab mutasidev khusus DEV dan tidak boleh diaktifkan pada production.",
       });
       return;
     }
@@ -5473,6 +5509,13 @@ router.put("/bank-reconciliation/sheet-configs/:id", async (req, res): Promise<v
     res.json(result.rows[0]);
   } catch (error) {
     const code = (error as { code?: string }).code;
+    const constraint = (error as { constraint?: string }).constraint;
+    if (code === "23505" && constraint === "bank_sheet_configs_one_active_per_account") {
+      res.status(409).json({
+        error: "Akun Rekonsiliasi ini sudah memiliki satu koneksi Google Sheet aktif. Tambahkan Akun Rekonsiliasi baru untuk mengaktifkan tab lain.",
+      });
+      return;
+    }
     if (code === "23505") {
       res.status(409).json({
         error: "Spreadsheet dan tab tersebut sudah terdaftar untuk perusahaan ini",
