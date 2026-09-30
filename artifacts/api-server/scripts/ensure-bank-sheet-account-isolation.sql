@@ -40,6 +40,12 @@ create unique index if not exists bank_sheet_configs_company_sheet_tab_unique
   on public.bank_sheet_configs(company_id, sheet_id, tab_name)
   where company_id is not null;
 
+create unique index if not exists bank_sheet_configs_one_active_per_account
+  on public.bank_sheet_configs(company_id, bank_account_id)
+  where is_active = true
+    and company_id is not null
+    and bank_account_id is not null;
+
 create unique index if not exists company_bank_accounts_company_id_id_unique
   on public.company_bank_accounts(company_id, id);
 
