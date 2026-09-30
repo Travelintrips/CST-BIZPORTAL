@@ -33,6 +33,15 @@ describe("Google Sheet reconciliation account isolation", () => {
     expect(isolationSql).toContain(
       "bank_sheet_configs_active_requires_scope_ck",
     );
+    expect(isolationSql).toContain(
+      "bank_sheet_configs_one_active_per_account",
+    );
+    expect(routeSource).toContain(
+      "Tambahkan Akun Rekonsiliasi baru untuk mengaktifkan tab lain.",
+    );
+    expect(syncSource).toContain(
+      "Tab mutasidev adalah sumber DEV dan tidak boleh dibaca dari production.",
+    );
     expect(routeSource).toContain(
       "Perusahaan, Akun Rekonsiliasi, Label, dan Sheet ID wajib diisi",
     );
