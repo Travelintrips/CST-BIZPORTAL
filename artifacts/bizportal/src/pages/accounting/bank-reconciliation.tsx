@@ -8221,7 +8221,7 @@ export default function BankReconciliationPage() {
   const [filterDir,      setFilterDir]      = useState("all");
   const [filterProvider, setFilterProvider] = useState("all");
   const [filterPaymentType, setFilterPaymentType] = useState<"all" | SportPaymentType>("all");
-  const [filterBankAccountId, setFilterBankAccountId] = useState("all");
+  const [filterBankAccountId, setFilterBankAccountId] = useState("");
   const [filterFrom,     setFilterFrom]     = useState("");
   const [filterTo,       setFilterTo]       = useState("");
   const [filterSearch,   setFilterSearch]   = useState(
@@ -8311,7 +8311,7 @@ export default function BankReconciliationPage() {
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
       if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
-      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
+      params.set("bank_account_id", filterBankAccountId);
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
       if (filterSearch) params.set("search", filterSearch);
@@ -8319,7 +8319,7 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
-    enabled: companyScopeReady,
+    enabled: accountScopeReady,
     // Keep the primary mutation list in sync with approvals performed by
     // another tab/admin. The QRIS audit query polls separately, but this list
     // used to stay stale until a hard reload.
@@ -8344,18 +8344,49 @@ export default function BankReconciliationPage() {
       && Number.isInteger(Number(account.coa_id))
       && Boolean(account.coa_name?.trim()),
   );
+  const selectedReconciliationAccount = reconciliationAccounts.find(
+    (account) => String(account.id) === filterBankAccountId,
+  );
+  const accountScopeReady =
+    companyScopeReady
+    && qrisCompanyId != null
+    && filterBankAccountId !== ""
+    && selectedReconciliationAccount != null;
+
+  useEffect(() => {
+    setFilterBankAccountId("");
+    setPage(0);
+  }, [qrisCompanyId]);
+
+  useEffect(() => {
+    if (qrisCompanyId == null || reconciliationAccountsLoading) return;
+    const currentStillValid = reconciliationAccounts.some(
+      (account) => String(account.id) === filterBankAccountId,
+    );
+    if (!currentStillValid) {
+      setFilterBankAccountId(
+        reconciliationAccounts[0] ? String(reconciliationAccounts[0].id) : "",
+      );
+      setPage(0);
+    }
+  }, [
+    qrisCompanyId,
+    reconciliationAccountsLoading,
+    reconciliationAccounts,
+    filterBankAccountId,
+  ]);
 
   const { data: summary } = useQuery({
     queryKey: ["bank-reconciliation-summary", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
+      params.set("bank_account_id", filterBankAccountId);
       const r = await fetch(`/api/bank-reconciliation/summary?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
     },
-    enabled: companyScopeReady,
+    enabled: accountScopeReady,
     refetchInterval: 30_000,
   });
 
@@ -8364,12 +8395,12 @@ export default function BankReconciliationPage() {
     queryFn: async () => {
       const params = new URLSearchParams({ status: "matched", limit: "1000", offset: "0" });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
+      params.set("bank_account_id", filterBankAccountId);
       const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
-    enabled: companyScopeReady,
+    enabled: accountScopeReady,
     refetchInterval: 30_000,
   });
 
@@ -8389,9 +8420,7 @@ export default function BankReconciliationPage() {
          status: "ALL",
        });
       params.set("includeCompleted", "true");
-      if (filterBankAccountId !== "all") {
-        params.set("bank_account_id", filterBankAccountId);
-      }
+      params.set("bank_account_id", filterBankAccountId);
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
@@ -8401,7 +8430,7 @@ export default function BankReconciliationPage() {
         candidates: QrisCandidateAudit[];
       }>;
     },
-    enabled: qrisCompanyId != null,
+    enabled: accountScopeReady,
     refetchInterval: 30_000,
   });
 
@@ -9147,15 +9176,16 @@ export default function BankReconciliationPage() {
 
   const matchMut = useMutation({
     mutationFn: async (mode: "new" | "retry_unmatched" | "rematch_non_final" = "new") => {
+      if (!accountScopeReady) {
+        throw new Error("Pilih Akun Rekonsiliasi terlebih dahulu.");
+      }
       const r = await fetch("/api/bank-reconciliation/run-matching", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           matching_mode: mode,
-          bank_account_id: filterBankAccountId !== "all"
-            ? Number(filterBankAccountId)
-            : undefined,
+          bank_account_id: Number(filterBankAccountId),
         }),
       });
       if (!r.ok) throw new Error(await r.text());
@@ -9447,8 +9477,14 @@ export default function BankReconciliationPage() {
 
   const sheetSyncMut = useMutation({
     mutationFn: async () => {
-      const query = qrisCompanyId != null ? `?company_id=${qrisCompanyId}` : "";
-      const r = await fetch(`/api/bank-reconciliation/sheet-sync${query}`, {
+      if (!accountScopeReady || qrisCompanyId == null) {
+        throw new Error("Pilih Akun Rekonsiliasi terlebih dahulu.");
+      }
+      const params = new URLSearchParams({
+        company_id: String(qrisCompanyId),
+        bank_account_id: filterBankAccountId,
+      });
+      const r = await fetch(`/api/bank-reconciliation/sheet-sync?${params}`, {
         method: "POST",
         credentials: "include",
       });
@@ -9965,7 +10001,6 @@ export default function BankReconciliationPage() {
 
   const resetFilters = () => {
     setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
-    setFilterBankAccountId("all");
     setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setPage(0);
   };
 
@@ -10184,24 +10219,36 @@ export default function BankReconciliationPage() {
               <div>
                 <p className="text-xs font-medium text-slate-900 dark:text-slate-100">Scope Rekonsiliasi</p>
                 <p className="text-[11px] text-muted-foreground">
-                  Pilih akun kas/bank agar daftar, ringkasan, dan AI Matching tidak bercampur antar akun.
+                  Satu akun kas/bank aktif per tampilan. Daftar, ringkasan, kandidat, AI Matching, posting, dan riwayat tidak digabung antar akun.
                 </p>
               </div>
               <div className="flex flex-wrap items-end gap-2">
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground">Akun Rekonsiliasi</Label>
                   <Select
-                    value={filterBankAccountId}
+                    value={filterBankAccountId || undefined}
                     onValueChange={value => {
                       setFilterBankAccountId(value);
+                      setFilterStatus("all");
                       setPage(0);
+                      setSelectedQrisCandidateIds([]);
+                      setSelectedQrisPaymentIds({});
+                      setSelectedCandidateByMutation({});
+                      setSelectedCandidateId(null);
+                      setDetailMutation(null);
                     }}
+                    disabled={qrisCompanyId == null || reconciliationAccountsLoading}
                   >
                     <SelectTrigger className="h-8 w-[260px] text-xs" aria-label="Filter akun rekonsiliasi">
-                      <SelectValue placeholder="Semua akun" />
+                      <SelectValue placeholder={
+                        qrisCompanyId == null
+                          ? "Pilih perusahaan terlebih dahulu"
+                          : reconciliationAccountsLoading
+                            ? "Memuat akun..."
+                            : "Pilih akun rekonsiliasi"
+                      } />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">Semua akun</SelectItem>
                       {reconciliationAccounts.map(account => {
                         const accountNumber = account.account_number?.trim();
                         const suffix = accountNumber ? ` · ${accountNumber}` : "";
@@ -11044,12 +11091,12 @@ export default function BankReconciliationPage() {
                 <div className="text-center">
                   <p className="font-medium">Tidak ada data ditemukan</p>
                   <p className="text-sm">
-                    {filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterBankAccountId !== "all" || filterSearch
+                    {filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch
                       ? "Coba ubah filter atau reset pencarian"
                       : "Import mutasi bank atau sync Google Sheet untuk memulai"}
                   </p>
                 </div>
-                {(filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterBankAccountId !== "all" || filterSearch) && (
+                {(filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch) && (
                   <Button variant="outline" size="sm" onClick={resetFilters}>Reset Filter</Button>
                 )}
               </CardContent>
