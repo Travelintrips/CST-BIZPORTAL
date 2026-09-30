@@ -7810,7 +7810,7 @@ function SheetConfigCollapsed() {
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
   const [testing, setTesting] = useState<Record<number, boolean>>({});
   const [syncing, setSyncing] = useState<Record<number, boolean>>({});
-  const [form, setForm] = useState({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
+  const [form, setForm] = useState({ company_id: "", label: "", sheet_id: "", bank_account_id: "", tab_name: "Mutasi_Bank" });
 
   const sheetCompanyId =
     !isConsolidated &&
@@ -7846,6 +7846,24 @@ function SheetConfigCollapsed() {
   const companies: Company[]    = contextCompanies.length > 0
     ? contextCompanies
     : (Array.isArray(companiesData) ? companiesData : (companiesData?.companies ?? []));
+  const selectedFormCompanyId = Number(form.company_id || 0);
+  const { data: sheetAccountData, isLoading: sheetAccountsLoading } = useQuery({
+    queryKey: ["sheet-reconciliation-accounts-collapsed", selectedFormCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ companyId: String(selectedFormCompanyId) });
+      const response = await fetch(`/api/cash-bank/accounts?${params}`, { credentials: "include" });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json() as Promise<{ data: ReconciliationAccount[] }>;
+    },
+    enabled: showForm && selectedFormCompanyId > 0,
+    staleTime: 60_000,
+  });
+  const sheetReconciliationAccounts = (sheetAccountData?.data ?? []).filter(
+    (account) =>
+      account.is_active !== false
+      && Number.isInteger(Number(account.coa_id))
+      && Boolean(account.coa_name?.trim()),
+  );
   const activeConfigs            = configs.filter(c => c.is_active);
   const lastSyncOk               = activeConfigs.every(c => c.last_sync_status === "ok" || !c.last_sync_status);
 
@@ -7892,8 +7910,7 @@ function SheetConfigCollapsed() {
       company_id: sheetCompanyId != null ? String(sheetCompanyId) : "",
       label: "",
       sheet_id: "",
-      bank_account_number: "",
-      bank_name: "",
+      bank_account_id: "",
       tab_name: "Mutasi_Bank",
     });
     setShowForm(true);
@@ -7904,20 +7921,21 @@ function SheetConfigCollapsed() {
       company_id: cfg.company_id ? String(cfg.company_id) : "",
       label: cfg.label,
       sheet_id: cfg.sheet_id,
-      bank_account_number: cfg.bank_account_number ?? "",
-      bank_name: cfg.bank_name ?? "",
+      bank_account_id: cfg.bank_account_id ? String(cfg.bank_account_id) : "",
       tab_name: cfg.tab_name,
     });
     setShowForm(true);
   };
   const saveConfig = async () => {
-    if (!form.label || !form.sheet_id) { toast({ title: "Label dan Sheet ID wajib diisi", variant: "destructive" }); return; }
+    if (!form.company_id || !form.bank_account_id || !form.label || !form.sheet_id) {
+      toast({ title: "Perusahaan, Akun Rekonsiliasi, Label, dan Sheet ID wajib diisi", variant: "destructive" });
+      return;
+    }
     const body = {
-      company_id: form.company_id ? Number(form.company_id) : null,
+      company_id: Number(form.company_id),
+      bank_account_id: Number(form.bank_account_id),
       label: form.label,
       sheet_id: form.sheet_id,
-      bank_account_number: form.bank_account_number.trim() || null,
-      bank_name: form.bank_name.trim() || null,
       tab_name: form.tab_name || "Mutasi_Bank",
     };
     const url  = editTarget ? `/api/bank-reconciliation/sheet-configs/${editTarget.id}` : "/api/bank-reconciliation/sheet-configs";
@@ -8030,10 +8048,12 @@ function SheetConfigCollapsed() {
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Perusahaan</label>
-              <Select value={form.company_id || "none"} onValueChange={v => setForm(f => ({ ...f, company_id: v === "none" ? "" : v }))}>
-                <SelectTrigger><SelectValue placeholder="Pilih perusahaan (opsional)" /></SelectTrigger>
+              <Select
+                value={form.company_id || undefined}
+                onValueChange={v => setForm(f => ({ ...f, company_id: v, bank_account_id: "" }))}
+              >
+                <SelectTrigger><SelectValue placeholder="Pilih perusahaan" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— Semua / Global —</SelectItem>
                   {companies.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.companyName}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -8047,15 +8067,44 @@ function SheetConfigCollapsed() {
               <Input placeholder="1VcbUujz6WHRgj5Fa1QkWja..." value={form.sheet_id} onChange={e => setForm(f => ({ ...f, sheet_id: e.target.value }))} />
               <p className="text-xs text-muted-foreground">Dari URL: docs.google.com/spreadsheets/d/<strong>[ID INI]</strong>/edit</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Nama Bank</label>
-                <Input placeholder="Contoh: BCA" value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Nomor Rekening</label>
-                <Input inputMode="numeric" placeholder="Contoh: 1234567890" value={form.bank_account_number} onChange={e => setForm(f => ({ ...f, bank_account_number: e.target.value }))} />
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">
+                Akun Rekonsiliasi <span className="text-red-500">*</span>
+              </label>
+              <Select
+                value={form.bank_account_id || "none"}
+                onValueChange={value => setForm(f => ({
+                  ...f,
+                  bank_account_id: value === "none" ? "" : value,
+                }))}
+                disabled={!form.company_id || sheetAccountsLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={
+                    !form.company_id
+                      ? "Pilih perusahaan terlebih dahulu"
+                      : sheetAccountsLoading
+                        ? "Memuat akun..."
+                        : "Pilih akun kas / bank"
+                  } />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Pilih Akun —</SelectItem>
+                  {sheetReconciliationAccounts.map(account => {
+                    const accountNumber = account.account_number?.trim();
+                    const suffix = accountNumber ? ` · ${accountNumber}` : "";
+                    const label = account.coa_name?.trim() || account.name;
+                    return (
+                      <SelectItem key={account.id} value={String(account.id)}>
+                        {label}{suffix}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Pilih akun kas/bank yang sudah terdaftar. Nama bank dan nomor rekening mengikuti master akun, bukan diketik manual.
+              </p>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nama Tab</label>
