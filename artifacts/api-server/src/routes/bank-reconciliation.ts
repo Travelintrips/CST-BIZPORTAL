@@ -1229,6 +1229,12 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     res.status(400).json({ error: "Akun Rekonsiliasi tidak valid." });
     return;
   }
+  if (ids.length === 0 && requestedBankAccountId === null) {
+    res.status(400).json({
+      error: "Akun Rekonsiliasi wajib dipilih untuk batch AI Matching.",
+    });
+    return;
+  }
   if (body.legacy_reference_coa_retry === true && ids.length === 0) {
     res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
     return;
@@ -5617,16 +5623,31 @@ router.post("/bank-reconciliation/sheet-configs/:id/sync", async (req, res): Pro
 
 router.post("/bank-reconciliation/sheet-sync", async (req, res): Promise<void> => {
   const rawCompanyId = req.query.company_id;
+  const rawBankAccountId = req.query.bank_account_id;
   const companyId =
     rawCompanyId === undefined || rawCompanyId === "" || rawCompanyId === "all"
       ? undefined
       : parsePositiveInt(rawCompanyId);
+  const bankAccountId =
+    rawBankAccountId === undefined || rawBankAccountId === "" || rawBankAccountId === "all"
+      ? undefined
+      : parsePositiveInt(rawBankAccountId);
   if (rawCompanyId !== undefined && companyId === null) {
     res.status(400).json({ error: "company_id tidak valid" });
     return;
   }
+  if (rawBankAccountId !== undefined && bankAccountId === null) {
+    res.status(400).json({ error: "bank_account_id tidak valid" });
+    return;
+  }
+  if (companyId == null || bankAccountId == null) {
+    res.status(400).json({
+      error: "Perusahaan dan Akun Rekonsiliasi wajib dipilih untuk sync.",
+    });
+    return;
+  }
   try {
-    const summaries = await syncAllBankSheetConfigs(companyId ?? undefined);
+    const summaries = await syncAllBankSheetConfigs(companyId, bankAccountId);
     const imported = summaries.reduce((sum, item) => sum + Number(item.imported ?? 0), 0);
     const failedConfigs = summaries.filter((item) => item.ok === false);
     res.status(failedConfigs.length > 0 ? 207 : 200).json({
