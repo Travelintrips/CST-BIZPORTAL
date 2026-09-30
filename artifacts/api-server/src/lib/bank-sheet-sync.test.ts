@@ -86,12 +86,14 @@ const config = {
   label: "Rekening utama",
   bank_account_id: 77,
   bank_account_number: null,
+  account_type: "bank",
 };
 
 let storedMutations: StoredMutation[];
 let nextMutationId: number;
 
 beforeEach(() => {
+  config.account_type = "bank";
   storedMutations = [];
   nextMutationId = 100;
   mocks.poolQuery.mockReset();
@@ -156,6 +158,56 @@ beforeEach(() => {
 });
 
 describe("Google Sheet bank mutation sync", () => {
+  it("keeps bank-statement Debit/Kredit semantics for bank accounts", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit"],
+      ["2026-10-08", "Transfer ke vendor", "600000", "0"],
+      ["2026-10-09", "Dana masuk customer", "0", "450000"],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(insertCalls[0]?.[1]?.[5]).toBe("OUT");
+    expect(insertCalls[1]?.[1]?.[5]).toBe("IN");
+  });
+
+  it("uses accounting Debit/Kredit semantics for cash ledger accounts", async () => {
+    config.account_type = "cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit"],
+      ["2026-10-08", "Dana Masuk dari Angelia Nirwana", "600000", "0"],
+      ["2026-10-09", "Transfer ke Felicia Justiani", "0", "450000"],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(insertCalls[0]?.[1]?.[5]).toBe("IN");
+    expect(insertCalls[1]?.[1]?.[5]).toBe("OUT");
+  });
+
+  it("honors explicit Masuk/Keluar headers even for cash accounts", async () => {
+    config.account_type = "cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Keluar", "Masuk"],
+      ["2026-10-08", "Transfer ke vendor", "200000", "0"],
+      ["2026-10-09", "Dana masuk customer", "0", "300000"],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(insertCalls[0]?.[1]?.[5]).toBe("OUT");
+    expect(insertCalls[1]?.[1]?.[5]).toBe("IN");
+  });
+
   it("infers Indonesian DD/MM/YYYY dates when the sheet contains day-first evidence", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit"],

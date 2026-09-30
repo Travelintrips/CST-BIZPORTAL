@@ -15,6 +15,7 @@ type SheetConfig = {
   label: string;
   bank_account_id: number | null;
   bank_account_number: string | null;
+  account_type: string | null;
 };
 
 function assertProductionSheetSourceAllowed(config: Pick<SheetConfig, "tab_name">): void {
@@ -255,7 +256,54 @@ function statusLabel(mutation: {
   return "UNMATCHED";
 }
 
-function parseRows(rows: string[][]): {
+function headerFlowDirection(header: string): "IN" | "OUT" | null {
+  const normalized = header.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  if (
+    normalized.includes("masuk")
+    || normalized === "in"
+    || normalized.includes("incoming")
+  ) return "IN";
+  if (
+    normalized.includes("keluar")
+    || normalized === "out"
+    || normalized.includes("outgoing")
+  ) return "OUT";
+  return null;
+}
+
+function mutationDirection(
+  debit: number,
+  credit: number,
+  debitHeader: string,
+  creditHeader: string,
+  accountType: string | null,
+): "IN" | "OUT" {
+  const debitFlow = headerFlowDirection(debitHeader);
+  const creditFlow = headerFlowDirection(creditHeader);
+  const isCashLedger = accountType?.trim().toLowerCase() === "cash";
+
+  if (debit > 0 && credit <= 0) {
+    if (debitFlow) return debitFlow;
+    // Cash ledgers use accounting semantics: debit increases cash.
+    // Bank statements use statement semantics: debit is money out.
+    return isCashLedger ? "IN" : "OUT";
+  }
+  if (credit > 0 && debit <= 0) {
+    if (creditFlow) return creditFlow;
+    // Cash ledgers use accounting semantics: credit decreases cash.
+    // Bank statements use statement semantics: credit is money in.
+    return isCashLedger ? "OUT" : "IN";
+  }
+
+  // Ambiguous rows with both sides populated keep the explicit flow header
+  // if one exists; otherwise preserve the historical bank-statement fallback.
+  if (credit > 0 && creditFlow) return creditFlow;
+  if (debit > 0 && debitFlow) return debitFlow;
+  return isCashLedger ? (debit > 0 ? "IN" : "OUT") : (debit > 0 ? "OUT" : "IN");
+}
+
+function parseRows(rows: string[][], accountType: string | null = null): {
   mutations: ParsedMutation[];
   headers: string[];
   keyColumn: number;
@@ -346,7 +394,13 @@ function parseRows(rows: string[][]): {
       debit,
       credit,
       amount,
-      direction: debit > 0 && credit <= 0 ? "OUT" : "IN",
+      direction: mutationDirection(
+        debit,
+        credit,
+        debitColumn >= 0 ? String(headers[debitColumn] ?? "") : "",
+        creditColumn >= 0 ? String(headers[creditColumn] ?? "") : "",
+        accountType,
+      ),
       bank: bankColumn >= 0 ? String(row[bankColumn] ?? "").trim() || null : null,
       mutationKey:
         keyColumn >= 0 ? normalizeMutationKey(String(row[keyColumn] ?? "")) : null,
@@ -474,7 +528,7 @@ async function syncConfig(config: SheetConfig): Promise<{
   const client = await pool.connect();
   try {
     const rows = await readSpreadsheetValues(config.sheet_id, config.tab_name);
-    const parsed = parseRows(rows);
+    const parsed = parseRows(rows, config.account_type);
     if (parsed.mutations.length === 0) {
       await markConfigSync(config.id, "success");
       return {
@@ -827,9 +881,12 @@ async function syncConfig(config: SheetConfig): Promise<{
 
 export async function syncOneBankSheetConfig(configId: number) {
   const result = await pool.query<SheetConfig>(
-    `select id, company_id, sheet_id, tab_name, label, bank_account_id, bank_account_number
-       from public.bank_sheet_configs
-      where id = $1 and is_active = true`,
+    `select config.id, config.company_id, config.sheet_id, config.tab_name, config.label,
+            config.bank_account_id, config.bank_account_number,
+            cba.account_type
+       from public.bank_sheet_configs config
+       left join public.company_bank_accounts cba on cba.id = config.bank_account_id
+      where config.id = $1 and config.is_active = true`,
     [configId],
   );
   const config = result.rows[0];
@@ -844,11 +901,14 @@ export async function syncOneBankSheetConfig(configId: number) {
 
 export async function syncAllBankSheetConfigs(companyId?: number) {
   const result = await pool.query<SheetConfig>(
-    `select id, company_id, sheet_id, tab_name, label, bank_account_id, bank_account_number
-       from public.bank_sheet_configs
-      where is_active = true
-        and ($1::int is null or company_id = $1)
-      order by id`,
+    `select config.id, config.company_id, config.sheet_id, config.tab_name, config.label,
+            config.bank_account_id, config.bank_account_number,
+            cba.account_type
+       from public.bank_sheet_configs config
+       left join public.company_bank_accounts cba on cba.id = config.bank_account_id
+      where config.is_active = true
+        and ($1::int is null or config.company_id = $1)
+      order by config.id`,
     [companyId ?? null],
   );
   const summaries: Array<Record<string, unknown>> = [];
