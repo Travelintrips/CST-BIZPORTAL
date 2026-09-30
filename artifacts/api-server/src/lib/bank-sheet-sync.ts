@@ -17,6 +17,14 @@ type SheetConfig = {
   bank_account_number: string | null;
 };
 
+function assertProductionSheetSourceAllowed(config: Pick<SheetConfig, "tab_name">): void {
+  const appEnv = process.env.APP_ENV?.trim().toLowerCase();
+  const tabName = config.tab_name.trim().toLowerCase();
+  if (appEnv === "production" && tabName === "mutasidev") {
+    throw new Error("Tab mutasidev adalah sumber DEV dan tidak boleh dibaca dari production.");
+  }
+}
+
 type ParsedMutation = {
   rowNumber: number;
   transactionDate: string;
@@ -407,6 +415,7 @@ async function syncConfig(config: SheetConfig): Promise<{
   existing: number;
   sheetUpdates: number;
 }> {
+  assertProductionSheetSourceAllowed(config);
   const client = await pool.connect();
   try {
     const rows = await readSpreadsheetValues(config.sheet_id, config.tab_name);
