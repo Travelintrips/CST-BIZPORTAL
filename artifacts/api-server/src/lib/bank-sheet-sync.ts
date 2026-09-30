@@ -42,6 +42,7 @@ type ParsedMutation = {
 type ExistingMutation = {
   id: number;
   mutation_key: string | null;
+  description: string | null;
   canonical_key: string | null;
   status: string | null;
   reconciliation_status: string | null;
@@ -57,6 +58,7 @@ type ExistingMutation = {
 type SheetMutationMetadata = {
   key: string;
   status: string;
+  description: string | null;
   coaCode: string | null;
   coaName: string | null;
   matchScore: number | null;
@@ -308,6 +310,7 @@ function parseRows(rows: string[][], accountType: string | null = null): {
   headers: string[];
   keyColumn: number;
   statusColumn: number;
+  descriptionColumn: number;
   coaCodeColumn: number;
   coaNameColumn: number;
   matchScoreColumn: number;
@@ -321,6 +324,7 @@ function parseRows(rows: string[][], accountType: string | null = null): {
       headers: rows[0] ?? [],
       keyColumn: -1,
       statusColumn: -1,
+      descriptionColumn: -1,
       coaCodeColumn: -1,
       coaNameColumn: -1,
       matchScoreColumn: -1,
@@ -413,6 +417,7 @@ function parseRows(rows: string[][], accountType: string | null = null): {
     headers,
     keyColumn,
     statusColumn,
+    descriptionColumn,
     coaCodeColumn,
     coaNameColumn,
     matchScoreColumn,
@@ -484,6 +489,20 @@ function addSheetStatusUpdates(
       updates.push({
         range: spreadsheetCellRange(config.tab_name, statusColumn, row.rowNumber),
         values: [[status.status]],
+      });
+    }
+    if (
+      parsed.descriptionColumn >= 0
+      && !row.description.trim()
+      && status.description?.trim()
+    ) {
+      updates.push({
+        range: spreadsheetCellRange(
+          config.tab_name,
+          parsed.descriptionColumn,
+          row.rowNumber,
+        ),
+        values: [[status.description]],
       });
     }
     const valuesByColumn = [
@@ -567,6 +586,7 @@ async function syncConfig(config: SheetConfig): Promise<{
     ): SheetMutationMetadata => ({
       key: mutation.mutation_key ?? fallbackKey,
       status: statusLabel(mutation as ExistingMutation),
+      description: mutation.description ?? null,
       coaCode: mutation.coa_code ?? null,
       coaName: mutation.coa_name ?? null,
       matchScore: mutation.match_score == null ? null : Number(mutation.match_score),
@@ -579,7 +599,7 @@ async function syncConfig(config: SheetConfig): Promise<{
       `google-sheet-sync:${config.id}`,
     ]);
     const existingResult = await client.query<ExistingMutation>(
-      `select bm.id, bm.mutation_key, bm.canonical_key, bm.status,
+      `select bm.id, bm.mutation_key, bm.canonical_key, bm.description, bm.status,
               bm.reconciliation_status, bm.journal_entry_id,
               matched.match_score,
               matched.match_reason,
@@ -806,7 +826,7 @@ async function syncConfig(config: SheetConfig): Promise<{
                  $10,
                  'actual_bank_mutation', 'unmatched', 'google_sheet', $11, $12, $13)
          on conflict do nothing
-          returning id, mutation_key, canonical_key, status, reconciliation_status, journal_entry_id,
+          returning id, mutation_key, canonical_key, description, status, reconciliation_status, journal_entry_id,
                     null::int as match_score, null::text as match_reason,
                     null::text as match_status, null::text as match_result,
                     null::text as coa_code, null::text as coa_name`,
@@ -837,6 +857,7 @@ async function syncConfig(config: SheetConfig): Promise<{
         mutationStatuses.set(item.row.rowNumber, {
           key: item.key,
           status: "UNMATCHED",
+          description: null,
           coaCode: null,
           coaName: null,
           matchScore: null,

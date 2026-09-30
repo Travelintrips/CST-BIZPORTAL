@@ -66,6 +66,7 @@ type StoredMutation = {
   id: number;
   mutation_key: string | null;
   canonical_key: string | null;
+  description?: string | null;
   status: string | null;
   reconciliation_status: string | null;
   journal_entry_id: number | null;
@@ -289,6 +290,38 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!F2", values: [["MATCHED"]] },
       { range: "'Mutasi Bank'!E3", values: [[expect.stringMatching(/^[a-f0-9]{64}$/)]] },
       { range: "'Mutasi Bank'!F3", values: [["UNMATCHED"]] },
+    ]));
+  });
+
+  it("restores a blank Keterangan COA cell from the canonical database description", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan COA", "Debit", "Kredit", "mutation_key", "status_recon"],
+      ["2026-06-22", "", "2000000", "0", "existing-key", ""],
+    ]);
+
+    storedMutations.push({
+      id: 87,
+      mutation_key: "existing-key",
+      canonical_key: null,
+      description: "Dana Masuk dari Angelia Nirwana | BCA Digital",
+      status: "unmatched",
+      reconciliation_status: null,
+      journal_entry_id: null,
+      company_id: 42,
+    });
+
+    await syncOneBankSheetConfig(config.id);
+
+    const updates = mocks.writeSpreadsheetValues.mock.calls[0]?.[1] as Array<{
+      range: string;
+      values: string[][];
+    }>;
+
+    expect(updates).toEqual(expect.arrayContaining([
+      {
+        range: "'Mutasi Bank'!B2",
+        values: [["Dana Masuk dari Angelia Nirwana | BCA Digital"]],
+      },
     ]));
   });
 
