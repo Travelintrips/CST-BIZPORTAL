@@ -833,14 +833,15 @@ export async function syncOneBankSheetConfig(configId: number) {
   };
 }
 
-export async function syncAllBankSheetConfigs(companyId?: number) {
+export async function syncAllBankSheetConfigs(companyId?: number, bankAccountId?: number) {
   const result = await pool.query<SheetConfig>(
     `select id, company_id, sheet_id, tab_name, label, bank_account_id, bank_account_number
        from public.bank_sheet_configs
       where is_active = true
         and ($1::int is null or company_id = $1)
+        and ($2::int is null or bank_account_id = $2)
       order by id`,
-    [companyId ?? null],
+    [companyId ?? null, bankAccountId ?? null],
   );
   const summaries: Array<Record<string, unknown>> = [];
   for (const config of result.rows) {
