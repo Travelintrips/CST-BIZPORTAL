@@ -14,6 +14,10 @@ const isolationSql = readFileSync(
   resolve(process.cwd(), "scripts/ensure-bank-sheet-account-isolation.sql"),
   "utf8",
 );
+const uiSource = readFileSync(
+  resolve(process.cwd(), "../bizportal/src/pages/accounting/bank-reconciliation.tsx"),
+  "utf8",
+);
 
 describe("Google Sheet reconciliation account isolation", () => {
   it("allows the same spreadsheet to be reused only through a different tab", () => {
@@ -61,10 +65,28 @@ describe("Google Sheet reconciliation account isolation", () => {
     );
   });
 
-  it("supports filtering and matching by reconciliation account", () => {
+  it("requires one reconciliation account for dashboard and batch actions", () => {
     expect(routeSource).toContain("req.query.bank_account_id");
     expect(routeSource).toContain("bm.bank_account_id::text");
     expect(routeSource).toContain("bank_account_id?: unknown");
     expect(routeSource).toContain("bm.bank_account_id =");
+    expect(routeSource).toContain(
+      "Akun Rekonsiliasi wajib dipilih untuk batch AI Matching.",
+    );
+    expect(routeSource).toContain(
+      "Perusahaan dan Akun Rekonsiliasi wajib dipilih untuk sync.",
+    );
+    expect(syncSource).toContain(
+      "and ($2::int is null or bank_account_id = $2)",
+    );
+    expect(uiSource).toContain(
+      'const [filterBankAccountId, setFilterBankAccountId] = useState("");',
+    );
+    expect(uiSource).toContain(
+      'params.set("bank_account_id", filterBankAccountId);',
+    );
+    expect(uiSource).not.toContain(
+      '<SelectItem value="all">Semua akun</SelectItem>',
+    );
   });
 });
