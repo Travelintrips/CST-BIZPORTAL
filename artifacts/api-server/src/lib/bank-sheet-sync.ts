@@ -232,6 +232,15 @@ function findColumn(headers: string[], candidates: string[]): number {
   return -1;
 }
 
+function findMetadataColumn(headers: string[], candidates: string[]): number {
+  const normalized = headers.map((header) => header.trim().toLowerCase());
+  for (const candidate of candidates) {
+    const exact = normalized.findIndex((header) => header === candidate);
+    if (exact >= 0) return exact;
+  }
+  return -1;
+}
+
 function statusLabel(mutation: {
   status: string | null;
   reconciliation_status: string | null;
@@ -280,25 +289,25 @@ function parseRows(rows: string[][]): {
   let creditColumn = findColumn(headers, ["kredit", "credit", "masuk", "cr", "jumlah masuk"]);
   let debitColumn = findColumn(headers, ["debit", "debet", "keluar", "db", "out", "jumlah keluar"]);
   const bankColumn = findColumn(headers, ["bank", "rekening", "akun"]);
-  let keyColumn = findColumn(headers, [
+  let keyColumn = findMetadataColumn(headers, [
     "mutation_key",
     "mutation key",
     "mutation id",
     "id mutasi",
     "kunci mutasi",
   ]);
-  let statusColumn = findColumn(headers, [
+  let statusColumn = findMetadataColumn(headers, [
     "status_recon",
     "status recon",
     "status rekonsiliasi",
     "reconciliation status",
     "status",
   ]);
-  let coaCodeColumn = findColumn(headers, ["coa_code", "kode coa", "coa"]);
-  let coaNameColumn = findColumn(headers, ["nama_coa", "nama coa", "coa name"]);
-  let matchScoreColumn = findColumn(headers, ["match_score", "match score", "confidence score"]);
-  let matchResultColumn = findColumn(headers, ["match_result", "match result", "hasil match"]);
-  let lastSyncColumn = findColumn(headers, ["last_sync", "last sync", "last synced", "sync terakhir"]);
+  let coaCodeColumn = findMetadataColumn(headers, ["coa_code", "kode coa", "coa"]);
+  let coaNameColumn = findMetadataColumn(headers, ["nama_coa", "nama coa", "coa name"]);
+  let matchScoreColumn = findMetadataColumn(headers, ["match_score", "match score", "confidence score"]);
+  let matchResultColumn = findMetadataColumn(headers, ["match_result", "match result", "hasil match"]);
+  let lastSyncColumn = findMetadataColumn(headers, ["last_sync", "last sync", "last synced", "sync terakhir"]);
   let start = 1;
   let headerRow = 1;
 
