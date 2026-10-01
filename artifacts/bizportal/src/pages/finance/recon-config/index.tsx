@@ -1234,7 +1234,7 @@ function AiRulesTab() {
     if (!row.is_active) return;
     if (!confirm(`Nonaktifkan rule "${row.name}"?`)) return;
     const response = await fetch(
-      `${API}/recon-classification/ai-rules/${row.id}?company_id=${activeCompanyId}`,
+      `${API}/recon-classification/ai-rules/${row.id}?company_id=${activeCompanyId}&bank_account_id=${reconAccountFilter}`,
       { method: "DELETE", credentials: "include" },
     );
     if (!response.ok) {
@@ -1249,7 +1249,7 @@ function AiRulesTab() {
     if (row.is_active) return;
     if (!confirm(`Aktifkan kembali rule "${row.name}"?`)) return;
     const response = await fetch(
-      `${API}/recon-classification/ai-rules/${row.id}/activate?company_id=${activeCompanyId}`,
+      `${API}/recon-classification/ai-rules/${row.id}/activate?company_id=${activeCompanyId}&bank_account_id=${reconAccountFilter}`,
       { method: "POST", credentials: "include" },
     );
     if (!response.ok) {
