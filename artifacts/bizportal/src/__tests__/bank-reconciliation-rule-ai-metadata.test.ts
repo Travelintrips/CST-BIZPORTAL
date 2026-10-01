@@ -24,6 +24,7 @@ const mutation = {
   direction: "OUT" as const,
   provider_order_id: "INV-LISTRIK-2026-08",
   company_id: 12,
+  bank_account_id: 7,
 };
 
 describe("COA picker Rule AI metadata", () => {
@@ -51,6 +52,7 @@ describe("COA picker Rule AI metadata", () => {
       priority: 240,
       action_coa_code: "5-1010",
       company_id: 12,
+      bank_account_id: 7,
     });
   });
 
