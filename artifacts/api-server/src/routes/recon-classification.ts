@@ -8,6 +8,28 @@ const companyId = (req:any) => {
 };
 const mapRule=(r:any)=>({...r,confidence:Number(r.confidence_score??0)/100,conditions:r.conditions_json??[],action_coa_code:r.target_coa_code,action_coa_name:r.target_coa_name??null,source:"public.recon_rules"});
 
+router.get("/recon-classification/coa-options",async(req,res)=>{
+  const cid=companyId(req); if(!cid){res.status(400).json({error:"company_id wajib"});return;}
+  const q=await pool.query(
+    `select distinct on (c.code)
+       c.id,
+       c.company_id as "companyId",
+       c.code,
+       c.name,
+       c.type::text as type,
+       c.normal_balance as "normalBalance",
+       c.parent_id as "parentId",
+       coalesce(c.is_active,true) as "isActive",
+       coalesce(c.is_postable,not coalesce(c.is_header,false)) as "isPostable",
+       coalesce(c.is_header,false) as "isHeader"
+     from public.chart_of_accounts c
+     where c.company_id=$1 or c.company_id is null
+     order by c.code,(c.company_id=$1) desc,c.id desc`,
+    [cid],
+  );
+  res.json({data:q.rows});
+});
+
 router.get("/recon-classification/ai-rules",async(req,res)=>{
   const cid=companyId(req); if(!cid){res.status(400).json({error:"company_id wajib"});return;}
   const q=await pool.query(`select r.*,c.name target_coa_name from public.recon_rules r left join public.chart_of_accounts c on c.code=r.target_coa_code and (c.company_id=r.company_id or c.company_id is null) where r.company_id=$1 order by r.is_active desc,r.priority desc,r.id`,[cid]);
