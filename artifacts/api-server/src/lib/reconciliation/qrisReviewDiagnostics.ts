@@ -435,9 +435,7 @@ function synthesizeDiagnostic(
     diagnostic_date_match:
       selected.length > 0
       && settlementDate != null
-      && expectedDates.every((date) =>
-        date === settlementDate || date === addCalendarDays(settlementDate, -1)
-      ),
+      && expectedDates.every((date) => date === settlementDate),
     diagnostic_amount_difference: difference,
     diagnostic_bank_date: settlementDate,
     candidate_source: LIVE_SOURCE,
@@ -475,7 +473,7 @@ async function synthesizeLiveReviewDiagnostics(
   )];
   if (dates.length === 0 || companyIds.length === 0) return [];
 
-  const fromDate = addCalendarDays(dates.sort()[0]!, -1);
+  const fromDate = dates.sort()[0]!;
   const toDate = dates.sort().at(-1)!;
   const payments = await loadLiveQrisPayments(
     companyIds,
@@ -512,7 +510,7 @@ async function synthesizeLiveReviewDiagnostics(
         && bankAmount != null
         && Math.abs(bankAmount - storedNet) < 1;
     });
-    if (exactHistorical) {
+    if (exactHistorical && exactHistorical.diagnostic_date_match === true) {
       for (const paymentId of currentPaymentIds(exactHistorical)) {
         reservedPaymentIds.add(paymentId);
       }
@@ -521,29 +519,16 @@ async function synthesizeLiveReviewDiagnostics(
 
     const mutationDate = dateOnly(mutation.transaction_date);
     if (!mutationDate || mutation.company_id == null) continue;
-    const previousDate = addCalendarDays(mutationDate, -1);
     const available = payments.filter((payment) =>
       payment.company_id === mutation.company_id
       && !reservedPaymentIds.has(payment.id)
-      && (
-        dateOnly(payment.expected_settlement_date) === mutationDate
-        || dateOnly(payment.expected_settlement_date) === previousDate
-      )
-    );
-    const sameDate = available.filter(
-      (payment) => dateOnly(payment.expected_settlement_date) === mutationDate,
+      && dateOnly(payment.expected_settlement_date) === mutationDate
     );
     const bankAmount = safeNumber(mutation.amount) ?? 0;
 
-    const exactSameDate = findExactPaymentSubset(sameDate, bankAmount);
-    const exactExpanded = exactSameDate ?? findExactPaymentSubset(available, bankAmount);
-    const selected = exactExpanded
-      ?? (sameDate.length > 0
-        ? sameDate
-        : available.filter(
-          (payment) => dateOnly(payment.expected_settlement_date) === previousDate,
-        ));
-    const exact = exactExpanded != null;
+    const exactSameDate = findExactPaymentSubset(available, bankAmount);
+    const selected = exactSameDate ?? available;
+    const exact = exactSameDate != null;
 
     for (const payment of selected) reservedPaymentIds.add(payment.id);
     synthesized.push(synthesizeDiagnostic(mutation, selected, exact));
