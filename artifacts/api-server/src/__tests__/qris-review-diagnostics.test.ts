@@ -53,6 +53,24 @@ describe("QRIS historical review diagnostics", () => {
     );
   });
 
+  it("keeps live QRIS candidates on the exact bank settlement date", () => {
+    expect(diagnosticSource).toContain(
+      "dateOnly(payment.expected_settlement_date) === mutationDate",
+    );
+    expect(diagnosticSource).toContain(
+      "expectedDates.every((date) => date === settlementDate)",
+    );
+    expect(diagnosticSource).toContain(
+      "exactHistorical && exactHistorical.diagnostic_date_match === true",
+    );
+    expect(diagnosticSource).not.toContain(
+      "dateOnly(payment.expected_settlement_date) === previousDate",
+    );
+    expect(diagnosticSource).not.toContain(
+      "date === settlementDate || date === addCalendarDays(settlementDate, -1)",
+    );
+  });
+
   it("synthesizes a read-only live candidate when an open QRIS mutation has no saved review", () => {
     expect(diagnosticSource).toContain("loadOpenQrisMutations");
     expect(diagnosticSource).toContain("loadLiveQrisPayments");
