@@ -103,9 +103,35 @@ async function fixRelativeMediaUrls(): Promise<void> {
   }
 }
 
+async function parkStaleClaims(now: Date): Promise<void> {
+  try {
+    const result = await db
+      .update(notificationLogsTable)
+      .set({
+        status: "skipped",
+        nextRetryAt: null,
+        errorMsg: "[ambiguous-provider-result] stale send claim expired; auto retry blocked",
+      })
+      .where(and(
+        eq(notificationLogsTable.channel, "wa"),
+        eq(notificationLogsTable.status, "queued"),
+        lte(notificationLogsTable.nextRetryAt, now),
+        isNull(notificationLogsTable.waMessageId),
+      ))
+      .returning({ id: notificationLogsTable.id });
+
+    if (result.length) {
+      logger.error({ count: result.length }, "[waRetryWorker] stale WA claims parked as skipped");
+    }
+  } catch (err) {
+    logger.error({ err }, "[waRetryWorker] stale claim recovery failed");
+  }
+}
+
 async function runRetryTick(): Promise<void> {
   try {
     const now = new Date();
+    await parkStaleClaims(now);
 
     const rows = await db
       .select({
