@@ -18,6 +18,105 @@ function computeDedupKey(
     .digest("hex");
 }
 
+function fallbackRefId(message: string): string {
+  return createHash("sha256").update(message).digest("hex");
+}
+
+export interface WaSendClaimInput {
+  recipient: string;
+  message: string;
+  context?: string;
+  refType?: string;
+  refId?: string;
+  mediaUrl?: string;
+}
+
+export interface WaSendClaimResult {
+  claimed: boolean;
+  logId?: number;
+}
+
+/**
+ * Reserve one logical WA delivery before calling the provider.
+ *
+ * The UNIQUE dedup_key constraint makes this an atomic claim across processes.
+ * When refId is absent, a hash of the message body becomes the logical ref,
+ * so identical content to the same recipient is also protected.
+ */
+export async function claimWaSend(input: WaSendClaimInput): Promise<WaSendClaimResult> {
+  const context = input.context ?? "general";
+  const refId = input.refId ?? fallbackRefId(input.message);
+  const dedupKey = computeDedupKey("wa", input.recipient, context, refId);
+  const leaseUntil = new Date(Date.now() + 5 * 60 * 1000);
+
+  try {
+    const since = new Date(Date.now() - DEDUP_WINDOW_MS);
+    const recent = await db
+      .select({ id: notificationLogsTable.id })
+      .from(notificationLogsTable)
+      .where(and(
+        eq(notificationLogsTable.channel, "wa"),
+        eq(notificationLogsTable.recipient, input.recipient),
+        eq(notificationLogsTable.context, context),
+        eq(notificationLogsTable.refId, refId),
+        gte(notificationLogsTable.createdAt, since),
+        sql`${notificationLogsTable.status} in ('queued','sent','failed','skipped')`,
+      ))
+      .limit(1);
+    if (recent.length) return { claimed: false };
+
+    const rows = await db
+      .insert(notificationLogsTable)
+      .values({
+        channel: "wa",
+        recipient: input.recipient,
+        message: input.message.slice(0, 2000),
+        status: "queued",
+        context,
+        refType: input.refType ?? null,
+        refId,
+        mediaUrl: input.mediaUrl ?? null,
+        dedupKey,
+        nextRetryAt: leaseUntil,
+      })
+      .onConflictDoNothing({ target: notificationLogsTable.dedupKey })
+      .returning({ id: notificationLogsTable.id });
+
+    if (!rows.length) return { claimed: false };
+    return { claimed: true, logId: rows[0]!.id };
+  } catch (err) {
+    logger.error({ err, context, refId, recipient: input.recipient }, "claimWaSend failed — blocking WA send");
+    return { claimed: false };
+  }
+}
+
+export async function finalizeWaSendClaim(
+  logId: number,
+  result: {
+    status: "sent" | "failed" | "skipped";
+    errorMsg?: string | null;
+    waMessageId?: string;
+    retryCount?: number;
+    nextRetryAt?: Date | null;
+  },
+): Promise<void> {
+  try {
+    await db
+      .update(notificationLogsTable)
+      .set({
+        status: result.status,
+        errorMsg: result.errorMsg ?? null,
+        retryCount: result.retryCount,
+        nextRetryAt: result.nextRetryAt,
+        waMessageId: result.waMessageId ?? null,
+        waDeliveryStatus: result.waMessageId ? "sent" : null,
+      })
+      .where(eq(notificationLogsTable.id, logId));
+  } catch (err) {
+    logger.error({ err, logId, status: result.status }, "finalizeWaSendClaim failed");
+  }
+}
+
 export interface LogNotifOptions {
   channel: "wa" | "email";
   recipient: string;
@@ -88,7 +187,7 @@ export async function wasRecentlyNotified(
       .limit(1);
     return rows.length > 0;
   } catch (err) {
-    logger.warn({ err, context, refId }, "wasRecentlyNotified DB check failed — allowing send");
-    return false;
+    logger.warn({ err, context, refId }, "wasRecentlyNotified DB check failed — blocking send");
+    return true;
   }
 }

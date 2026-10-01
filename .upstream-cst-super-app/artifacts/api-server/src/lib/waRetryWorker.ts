@@ -41,7 +41,7 @@ async function fonnteRawSend(
   target: string,
   message: string,
   mediaUrl?: string | null,
-): Promise<{ ok: boolean; errorMsg: string; waMessageId?: string }> {
+): Promise<{ ok: boolean; errorMsg: string; waMessageId?: string; ambiguous?: boolean }> {
   const FONNTE_TOKEN = await getAppConfig("FONNTE_TOKEN");
   if (!FONNTE_TOKEN) {
     return { ok: false, errorMsg: "FONNTE_TOKEN not configured" };
@@ -67,7 +67,7 @@ async function fonnteRawSend(
     }
     return { ok: true, errorMsg: "", waMessageId: extractMessageId(body) };
   } catch (err) {
-    return { ok: false, errorMsg: String(err) };
+    return { ok: false, errorMsg: String(err), ambiguous: true };
   }
 }
 
@@ -103,9 +103,35 @@ async function fixRelativeMediaUrls(): Promise<void> {
   }
 }
 
+async function parkStaleClaims(now: Date): Promise<void> {
+  try {
+    const result = await db
+      .update(notificationLogsTable)
+      .set({
+        status: "skipped",
+        nextRetryAt: null,
+        errorMsg: "[ambiguous-provider-result] stale send claim expired; auto retry blocked",
+      })
+      .where(and(
+        eq(notificationLogsTable.channel, "wa"),
+        eq(notificationLogsTable.status, "queued"),
+        lte(notificationLogsTable.nextRetryAt, now),
+        isNull(notificationLogsTable.waMessageId),
+      ))
+      .returning({ id: notificationLogsTable.id });
+
+    if (result.length) {
+      logger.error({ count: result.length }, "[waRetryWorker] stale WA claims parked as skipped");
+    }
+  } catch (err) {
+    logger.error({ err }, "[waRetryWorker] stale claim recovery failed");
+  }
+}
+
 async function runRetryTick(): Promise<void> {
   try {
     const now = new Date();
+    await parkStaleClaims(now);
 
     const rows = await db
       .select({
@@ -136,8 +162,29 @@ async function runRetryTick(): Promise<void> {
     logger.info({ count: rows.length }, "[waRetryWorker] processing failed WA entries");
 
     for (const row of rows) {
+      // Atomic compare-and-set claim. Multiple worker instances may select the
+      // same failed row, but only one can transition it away from 'failed'.
+      const claimed = await db
+        .update(notificationLogsTable)
+        .set({
+          status: "queued",
+          nextRetryAt: new Date(Date.now() + INTERVAL_MS),
+          errorMsg: `[retry-claim] worker claimed attempt ${(row.retryCount ?? 0) + 1}`,
+        })
+        .where(and(
+          eq(notificationLogsTable.id, row.id),
+          eq(notificationLogsTable.status, "failed"),
+          eq(notificationLogsTable.retryCount, row.retryCount ?? 0),
+        ))
+        .returning({ id: notificationLogsTable.id });
+
+      if (!claimed.length) {
+        logger.debug({ id: row.id }, "[waRetryWorker] row already claimed by another worker");
+        continue;
+      }
+
       const absoluteMediaUrl = toAbsoluteMediaUrl(row.mediaUrl);
-      const { ok, errorMsg, waMessageId } = await fonnteRawSend(row.recipient, row.message, absoluteMediaUrl);
+      const { ok, errorMsg, waMessageId, ambiguous } = await fonnteRawSend(row.recipient, row.message, absoluteMediaUrl);
       const newRetryCount = (row.retryCount ?? 0) + 1;
 
       if (ok) {
@@ -151,7 +198,10 @@ async function runRetryTick(): Promise<void> {
             waMessageId:      waMessageId ?? null,
             waDeliveryStatus: waMessageId ? "sent" : null,
           })
-          .where(eq(notificationLogsTable.id, row.id));
+          .where(and(
+            eq(notificationLogsTable.id, row.id),
+            eq(notificationLogsTable.status, "queued"),
+          ));
 
         logger.info(
           {
@@ -165,6 +215,26 @@ async function runRetryTick(): Promise<void> {
           },
           "[waRetryWorker] retry sukses",
         );
+      } else if (ambiguous) {
+        // A transport timeout/exception can happen after the provider accepted
+        // the message. Never auto-resend an unknown result: park it for review.
+        await db
+          .update(notificationLogsTable)
+          .set({
+            status: "skipped",
+            retryCount: newRetryCount,
+            nextRetryAt: null,
+            errorMsg: `[ambiguous-provider-result retry ${newRetryCount}] ${errorMsg}`,
+          })
+          .where(and(
+            eq(notificationLogsTable.id, row.id),
+            eq(notificationLogsTable.status, "queued"),
+          ));
+
+        logger.error(
+          { id: row.id, recipient: row.recipient, retryCount: newRetryCount, errorMsg },
+          "[waRetryWorker] ambiguous provider result — auto retry blocked",
+        );
       } else {
         const backoffMs = BACKOFF_BASE * Math.pow(2, newRetryCount - 1);
         const nextRetry = newRetryCount < MAX_RETRIES ? new Date(Date.now() + backoffMs) : null;
@@ -172,11 +242,15 @@ async function runRetryTick(): Promise<void> {
         await db
           .update(notificationLogsTable)
           .set({
+            status: "failed",
             retryCount:  newRetryCount,
             nextRetryAt: nextRetry,
             errorMsg:    `[retry ${newRetryCount}] ${errorMsg}`,
           })
-          .where(eq(notificationLogsTable.id, row.id));
+          .where(and(
+            eq(notificationLogsTable.id, row.id),
+            eq(notificationLogsTable.status, "queued"),
+          ));
 
         logger.warn(
           { id: row.id, recipient: row.recipient, retryCount: newRetryCount, nextRetry, errorMsg, hasMedia: !!row.mediaUrl },
