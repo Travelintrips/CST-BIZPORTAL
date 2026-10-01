@@ -60,7 +60,7 @@ export async function claimWaSend(input: WaSendClaimInput): Promise<WaSendClaimR
         eq(notificationLogsTable.context, context),
         eq(notificationLogsTable.refId, refId),
         gte(notificationLogsTable.createdAt, since),
-        sql`${notificationLogsTable.status} in ('queued','sent','skipped')`,
+        sql`${notificationLogsTable.status} in ('queued','sent','failed','skipped')`,
       ))
       .limit(1);
     if (recent.length) return { claimed: false };
