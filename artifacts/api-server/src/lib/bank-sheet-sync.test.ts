@@ -127,6 +127,36 @@ beforeEach(() => {
       };
     }
 
+    if (
+      sql.includes("update public.bank_mutations bm")
+      && sql.includes("set canonical_key = $2")
+    ) {
+      const [id, canonicalKey, transactionDate, description] = params ?? [];
+      const mutation = storedMutations.find((item) => item.id === Number(id));
+      if (!mutation) return { rows: [] };
+      mutation.canonical_key = String(canonicalKey);
+      mutation.description = String(description);
+      expect(transactionDate).toEqual(expect.any(String));
+      return {
+        rows: [{
+          ...mutation,
+          match_score: null,
+          match_reason: null,
+          match_status: null,
+          match_result: null,
+          coa_code: null,
+          coa_name: null,
+        }],
+      };
+    }
+
+    if (
+      sql.includes("update public.bank_reconciliation_matches")
+      && sql.includes("status = 'superseded'")
+    ) {
+      return { rows: [] };
+    }
+
     if (sql.includes("insert into public.bank_mutations")) {
       const [mutationKey, canonicalKey, transactionDate, description, amount, direction] = params ?? [];
       const alreadyStored = storedMutations.some(
@@ -139,6 +169,7 @@ beforeEach(() => {
         id: nextMutationId++,
         mutation_key: String(mutationKey),
         canonical_key: String(canonicalKey),
+        description: String(description),
         status: "unmatched",
         reconciliation_status: null,
         journal_entry_id: null,
@@ -291,6 +322,70 @@ describe("Google Sheet bank mutation sync", () => {
       { range: "'Mutasi Bank'!E3", values: [[expect.stringMatching(/^[a-f0-9]{64}$/)]] },
       { range: "'Mutasi Bank'!F3", values: [["UNMATCHED"]] },
     ]));
+  });
+
+  it("refreshes an unmatched mutation when the same Sheet row date is edited", async () => {
+    storedMutations.push({
+      id: 55,
+      mutation_key: "stable-sheet-key",
+      canonical_key: "old-canonical",
+      description: "Transfer ke vendor",
+      status: "unmatched",
+      reconciliation_status: "unmatched",
+      journal_entry_id: null,
+      company_id: 42,
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
+      ["2026-08-12", "Transfer ke vendor", "100000", "0", "stable-sheet-key", ""],
+    ]);
+
+    const first = await syncOneBankSheetConfig(config.id);
+    const refreshCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("update public.bank_mutations bm")
+      && String(sql).includes("set canonical_key = $2"),
+    );
+    const supersedeCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("update public.bank_reconciliation_matches")
+      && String(sql).includes("status = 'superseded'"),
+    );
+
+    expect(first).toMatchObject({ imported: 0, existing: 1, total: 1 });
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0]?.[1]?.[2]).toBe("2026-08-12");
+    expect(supersedeCalls).toHaveLength(1);
+
+    await syncOneBankSheetConfig(config.id);
+    const refreshCallsAfterSecondSync = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("update public.bank_mutations bm")
+      && String(sql).includes("set canonical_key = $2"),
+    );
+    expect(refreshCallsAfterSecondSync).toHaveLength(1);
+  });
+
+  it("does not rewrite a posted mutation when the Sheet row is edited", async () => {
+    storedMutations.push({
+      id: 56,
+      mutation_key: "posted-sheet-key",
+      canonical_key: "posted-old-canonical",
+      description: "Already posted",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: 9001,
+      company_id: 42,
+      match_status: "posted",
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status"],
+      ["2026-08-13", "Already posted", "200000", "0", "posted-sheet-key", ""],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const refreshCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("update public.bank_mutations bm")
+      && String(sql).includes("set canonical_key = $2"),
+    );
+    expect(refreshCalls).toHaveLength(0);
   });
 
   it("restores a blank Keterangan COA cell from the canonical database description", async () => {
