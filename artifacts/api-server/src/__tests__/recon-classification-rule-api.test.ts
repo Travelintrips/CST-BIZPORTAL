@@ -40,6 +40,15 @@ describe("Rule AI config API", () => {
     expect(api).toContain("and bank_account_id=$23");
   });
 
+  it("derives a non-null operational target type from the selected action flow", () => {
+    expect(api).toContain("const targetTypeForInput");
+    expect(api).toContain('case "INTERNAL_TRANSFER"');
+    expect(api).toContain('case "INCOME_ALLOCATION"');
+    expect(api).toContain('case "ROUTINE_EXPENSE_ALLOCATION"');
+    expect(api).toContain("targetTypeForInput(b)");
+    expect(api).toContain("action_flow: r.action_flow ?? actionFlowForTargetType(r.target_type)");
+  });
+
   it("supports CRUD on canonical rules", () => {
     for (const x of [
       'router.get("/recon-classification/ai-rules"',
