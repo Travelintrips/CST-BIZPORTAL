@@ -60,7 +60,7 @@ jobs:
           NODE_ENV: production
           APP_ENV: production
           PORT: "3000"
-          SUPABASE_DATABASE_URL: ""
+          SUPABASE_DATABASE_URL: postgresql://ci:ci@127.0.0.1:65432/ci
           SUPABASE_DATABASE_URL_DEV: ""
           SUPABASE_PG_URL: ""
           GCP_SECRET_MANAGER_BOOTSTRAP_JSON: ""
