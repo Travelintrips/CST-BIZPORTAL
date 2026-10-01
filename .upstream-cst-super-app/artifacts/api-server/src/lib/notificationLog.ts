@@ -50,6 +50,21 @@ export async function claimWaSend(input: WaSendClaimInput): Promise<WaSendClaimR
   const leaseUntil = new Date(Date.now() + 5 * 60 * 1000);
 
   try {
+    const since = new Date(Date.now() - DEDUP_WINDOW_MS);
+    const recent = await db
+      .select({ id: notificationLogsTable.id })
+      .from(notificationLogsTable)
+      .where(and(
+        eq(notificationLogsTable.channel, "wa"),
+        eq(notificationLogsTable.recipient, input.recipient),
+        eq(notificationLogsTable.context, context),
+        eq(notificationLogsTable.refId, refId),
+        gte(notificationLogsTable.createdAt, since),
+        sql`${notificationLogsTable.status} in ('queued','sent','skipped')`,
+      ))
+      .limit(1);
+    if (recent.length) return { claimed: false };
+
     const rows = await db
       .insert(notificationLogsTable)
       .values({
