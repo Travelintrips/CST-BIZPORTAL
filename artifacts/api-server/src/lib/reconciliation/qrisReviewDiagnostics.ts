@@ -179,11 +179,11 @@ async function loadHistoricalDiagnostics(options: {
 
   if (options.companyId != null) {
     values.push(options.companyId);
-    filters.push(`qris.company_id = ${values.length}`);
+    filters.push(`qris.company_id = $${values.length}`);
   }
   if (options.bankAccountId != null) {
     values.push(options.bankAccountId);
-    filters.push(`bm.bank_account_id::text = ${values.length}::text`);
+    filters.push(`bm.bank_account_id::text = $${values.length}::text`);
   }
   if (options.mutationIds?.length) {
     values.push(options.mutationIds);
