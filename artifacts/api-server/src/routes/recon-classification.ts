@@ -14,10 +14,43 @@ const companyId = (req: any) =>
 const reconciliationAccountId = (req: any) =>
   parsePositiveInt(req.query.bank_account_id ?? req.body?.bank_account_id);
 
+const actionFlowForTargetType = (targetType: unknown): string | null => {
+  switch (String(targetType ?? "").trim().toLowerCase()) {
+    case "internal_transfer":
+    case "intercompany_transfer":
+      return "INTERNAL_TRANSFER";
+    case "income":
+      return "INCOME_ALLOCATION";
+    case "expense":
+      return "ROUTINE_EXPENSE_ALLOCATION";
+    default:
+      return null;
+  }
+};
+
+const targetTypeForInput = (body: any): string => {
+  const explicit = String(body?.target_type ?? "").trim().toLowerCase();
+  if (explicit) return explicit;
+
+  switch (String(body?.action_flow ?? "").trim().toUpperCase()) {
+    case "INTERNAL_TRANSFER":
+      return "internal_transfer";
+    case "INCOME_ALLOCATION":
+      return "income";
+    case "ROUTINE_EXPENSE_ALLOCATION":
+      return "expense";
+    default:
+      return String(body?.direction ?? "").trim().toUpperCase() === "IN"
+        ? "income"
+        : "expense";
+  }
+};
+
 const mapRule = (r: any) => ({
   ...r,
   confidence: Number(r.confidence_score ?? 0) / 100,
   conditions: r.conditions_json ?? [],
+  action_flow: r.action_flow ?? actionFlowForTargetType(r.target_type),
   action_coa_code: r.target_coa_code,
   action_coa_name: r.target_coa_name ?? null,
   source: "public.recon_rules",
@@ -137,7 +170,7 @@ router.post("/recon-classification/ai-rules", async (req, res) => {
       b.condition_field ?? "description",
       b.condition_operator ?? "contains",
       b.condition_value ?? "",
-      b.target_type ?? null,
+      targetTypeForInput(b),
       b.target_id ?? null,
       b.action_coa_code ?? b.target_coa_code ?? null,
       conf,
@@ -230,7 +263,7 @@ router.patch("/recon-classification/ai-rules/:id", async (req, res) => {
       b.condition_field,
       b.condition_operator,
       b.condition_value,
-      b.target_type ?? null,
+      targetTypeForInput(b),
       b.target_id ?? null,
       b.action_coa_code ?? b.target_coa_code ?? null,
       conf,
