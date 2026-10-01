@@ -51,7 +51,7 @@ describe("Google Sheet reconciliation account isolation", () => {
     expect(syncSource).toContain(
       "canonicalKey(row, config.company_id, config.bank_account_id)",
     );
-    expect(syncSource).toContain("bm.bank_account_id = $4");
+    expect(syncSource).toContain("bm.bank_account_id = $5");
     expect(syncSource).toContain("config.bank_account_id");
     expect(isolationSql).toContain(
       "trg_enforce_google_sheet_mutation_scope",
