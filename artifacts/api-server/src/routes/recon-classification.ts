@@ -256,16 +256,20 @@ router.patch("/recon-classification/ai-rules/:id", async (req, res) => {
 router.post("/recon-classification/ai-rules/:id/activate", async (req, res) => {
   const cid = companyId(req);
   const id = parsePositiveInt(req.params.id);
-  if (!cid || !id) {
-    res.status(400).json({ error: "ID/company tidak valid" });
+  const bankAccountId = reconciliationAccountId(req);
+  if (!cid || !id || !bankAccountId) {
+    res.status(400).json({ error: "ID, company_id, dan bank_account_id Akun Rekonsiliasi wajib" });
     return;
   }
   const q = await pool.query(
-    "update public.recon_rules set is_active=true,updated_at=now() where id=$1 and company_id=$2 returning id,is_active",
-    [id, cid],
+    `update public.recon_rules
+        set is_active=true,updated_at=now()
+      where id=$1 and company_id=$2 and bank_account_id=$3
+      returning id,is_active`,
+    [id, cid, bankAccountId],
   );
   if (!q.rowCount) {
-    res.status(404).json({ error: "Rule tidak ditemukan" });
+    res.status(404).json({ error: "Rule tidak ditemukan pada Akun Rekonsiliasi ini" });
     return;
   }
   res.json({ ok: true, data: q.rows[0] });
@@ -274,16 +278,20 @@ router.post("/recon-classification/ai-rules/:id/activate", async (req, res) => {
 router.delete("/recon-classification/ai-rules/:id", async (req, res) => {
   const cid = companyId(req);
   const id = parsePositiveInt(req.params.id);
-  if (!cid || !id) {
-    res.status(400).json({ error: "ID/company tidak valid" });
+  const bankAccountId = reconciliationAccountId(req);
+  if (!cid || !id || !bankAccountId) {
+    res.status(400).json({ error: "ID, company_id, dan bank_account_id Akun Rekonsiliasi wajib" });
     return;
   }
   const q = await pool.query(
-    "update public.recon_rules set is_active=false,updated_at=now() where id=$1 and company_id=$2 returning id",
-    [id, cid],
+    `update public.recon_rules
+        set is_active=false,updated_at=now()
+      where id=$1 and company_id=$2 and bank_account_id=$3
+      returning id`,
+    [id, cid, bankAccountId],
   );
   if (!q.rowCount) {
-    res.status(404).json({ error: "Rule tidak ditemukan" });
+    res.status(404).json({ error: "Rule tidak ditemukan pada Akun Rekonsiliasi ini" });
     return;
   }
   res.json({ ok: true });
