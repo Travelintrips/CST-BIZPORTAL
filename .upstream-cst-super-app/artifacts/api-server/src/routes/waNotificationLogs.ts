@@ -114,41 +114,83 @@ waNotificationLogsRouter.post("/:id/retry", async (req: Request, res: Response) 
 
     if (!row) return res.status(404).json({ error: "Log tidak ditemukan" });
     if (row.status !== "failed") return res.status(400).json({ error: "Hanya log dengan status 'failed' yang bisa di-retry" });
-
+    if ((row.retryCount ?? 0) >= MAX_RETRIES) return res.status(400).json({ error: "Sudah mencapai batas maksimum retry" });
     if (!FONNTE_TOKEN) return res.status(503).json({ error: "FONNTE_TOKEN belum dikonfigurasi" });
+
+    const claim = await db
+      .update(notificationLogsTable)
+      .set({
+        status: "queued",
+        nextRetryAt: new Date(Date.now() + 5 * 60 * 1000),
+        errorMsg: `[manual-retry-claim] attempt ${(row.retryCount ?? 0) + 1}`,
+      })
+      .where(and(
+        eq(notificationLogsTable.id, id),
+        eq(notificationLogsTable.status, "failed"),
+        eq(notificationLogsTable.retryCount, row.retryCount ?? 0),
+      ))
+      .returning({ id: notificationLogsTable.id });
+
+    if (!claim.length) {
+      return res.status(409).json({ error: "Retry sedang diproses oleh worker/request lain" });
+    }
 
     const params: Record<string, string> = { target: row.recipient, message: row.message };
     if (row.mediaUrl?.trim()) params.url = row.mediaUrl.trim();
 
-    const fres = await fetch(FONNTE_URL, {
-      method: "POST",
-      headers: { Authorization: FONNTE_TOKEN, "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params).toString(),
-    });
-    const body = await fres.json() as Record<string, unknown>;
+    try {
+      const fres = await fetch(FONNTE_URL, {
+        method: "POST",
+        headers: { Authorization: FONNTE_TOKEN, "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(params).toString(),
+      });
+      const body = await fres.json() as Record<string, unknown>;
 
-    const ok = fres.ok && body.status !== false && body.status !== "false";
-    const newRetryCount = (row.retryCount ?? 0) + 1;
+      const ok = fres.ok && body.status !== false && body.status !== "false";
+      const newRetryCount = (row.retryCount ?? 0) + 1;
 
-    if (ok) {
-      const waMessageId = (() => {
-        const raw = body.id ?? body.message_id ?? body.messageId;
-        if (!raw) return undefined;
-        if (Array.isArray(raw)) return raw[0] ? String(raw[0]) : undefined;
-        return String(raw);
-      })();
-      await db.update(notificationLogsTable)
-        .set({ status: "sent", retryCount: newRetryCount, nextRetryAt: null, errorMsg: null, waMessageId: waMessageId ?? null })
-        .where(eq(notificationLogsTable.id, id));
-      logger.info({ id, recipient: row.recipient, retryCount: newRetryCount }, "[wa-logs] manual retry sukses");
-      return res.json({ ok: true, message: "WA berhasil dikirim ulang" });
-    } else {
+      if (ok) {
+        const waMessageId = (() => {
+          const raw = body.id ?? body.message_id ?? body.messageId;
+          if (!raw) return undefined;
+          if (Array.isArray(raw)) return raw[0] ? String(raw[0]) : undefined;
+          return String(raw);
+        })();
+        await db.update(notificationLogsTable)
+          .set({
+            status: "sent",
+            retryCount: newRetryCount,
+            nextRetryAt: null,
+            errorMsg: null,
+            waMessageId: waMessageId ?? null,
+            waDeliveryStatus: waMessageId ? "sent" : null,
+          })
+          .where(and(eq(notificationLogsTable.id, id), eq(notificationLogsTable.status, "queued")));
+        logger.info({ id, recipient: row.recipient, retryCount: newRetryCount }, "[wa-logs] manual retry sukses");
+        return res.json({ ok: true, message: "WA berhasil dikirim ulang" });
+      }
+
       const errorMsg = `[manual-retry ${newRetryCount}] ${String(body.reason ?? body.message ?? `HTTP ${fres.status}`)}`;
+      const nextRetryAt = newRetryCount < MAX_RETRIES
+        ? new Date(Date.now() + 5 * 60 * 1000 * Math.pow(2, newRetryCount - 1))
+        : null;
       await db.update(notificationLogsTable)
-        .set({ retryCount: newRetryCount, errorMsg })
-        .where(eq(notificationLogsTable.id, id));
+        .set({ status: "failed", retryCount: newRetryCount, nextRetryAt, errorMsg })
+        .where(and(eq(notificationLogsTable.id, id), eq(notificationLogsTable.status, "queued")));
       logger.warn({ id, recipient: row.recipient, errorMsg }, "[wa-logs] manual retry gagal");
       return res.status(502).json({ ok: false, error: errorMsg });
+    } catch (providerErr) {
+      const newRetryCount = (row.retryCount ?? 0) + 1;
+      await db.update(notificationLogsTable)
+        .set({
+          status: "skipped",
+          retryCount: newRetryCount,
+          nextRetryAt: null,
+          errorMsg: `[ambiguous-provider-result manual-retry ${newRetryCount}] ${String(providerErr)}`,
+        })
+        .where(and(eq(notificationLogsTable.id, id), eq(notificationLogsTable.status, "queued")));
+      logger.error({ providerErr, id }, "[wa-logs] ambiguous provider result — auto retry blocked");
+      return res.status(502).json({ ok: false, error: "Hasil provider tidak pasti; pengiriman ulang otomatis diblokir untuk mencegah duplikasi" });
     }
   } catch (err) {
     logger.error({ err, id }, "wa-notification-logs retry error");
