@@ -435,13 +435,17 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
           <Button size="sm" variant="outline" onClick={load} className="border-slate-600 text-slate-300">
             <RefreshCw size={14} className="mr-1" /> Refresh
           </Button>
-          <Button size="sm" onClick={openAdd} className="bg-orange-500 hover:bg-orange-600 text-white">
+          <Button size="sm" onClick={openAdd} disabled={!reconAccountFilter} className="bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50">
             <Plus size={14} className="mr-1" /> Tambah
           </Button>
         </div>
       </div>
 
-      {loading ? (
+      {!loadingReconAccounts && reconAccounts.length === 0 ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-4 text-sm text-amber-200">
+          Belum ada Akun Rekonsiliasi aktif. Tambahkan koneksi rekening/kas terlebih dahulu sebelum membuat Rule AI.
+        </div>
+      ) : loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
         <div className="overflow-x-auto">
@@ -796,8 +800,12 @@ function AiRulesTab() {
   const [previewing, setPreviewing] = useState(false);
   const [ruleSearch, setRuleSearch] = useState("");
   const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
-  const [reconAccountFilter, setReconAccountFilter] = useState("all");
-  const [reconAccounts, setReconAccounts] = useState<Array<{ bankAccountId: number; label: string }>>([]);
+  const [reconAccountFilter, setReconAccountFilter] = useState("");
+  const [reconAccounts, setReconAccounts] = useState<Array<{
+    bankAccountId: number;
+    label: string;
+    isBank: boolean;
+  }>>([]);
   const [loadingReconAccounts, setLoadingReconAccounts] = useState(false);
   const [showInactiveRules, setShowInactiveRules] = useState(false);
 
@@ -898,14 +906,25 @@ function AiRulesTab() {
   }, [activeCompanyId]);
 
   const load = useCallback(async () => {
+    if (!activeCompanyId || !reconAccountFilter) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const params = new URLSearchParams(activeCompanyId ? { company_id: String(activeCompanyId) } : {});
+      const params = new URLSearchParams({
+        company_id: String(activeCompanyId),
+        bank_account_id: reconAccountFilter,
+      });
       const r = await fetch(`${API}/recon-classification/ai-rules?${params}`, { credentials: "include" });
       const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? "Gagal mengambil Rule AI");
       setRows(j.data ?? []);
+    } catch {
+      setRows([]);
     } finally { setLoading(false); }
-  }, [activeCompanyId]);
+  }, [activeCompanyId, reconAccountFilter]);
 
   const loadReconAccounts = useCallback(async () => {
     setLoadingReconAccounts(true);
@@ -915,7 +934,7 @@ function AiRulesTab() {
       if (!r.ok) throw new Error("Gagal mengambil akun rekonsiliasi");
       const j = await r.json();
       const configs = Array.isArray(j?.configs) ? j.configs : [];
-      const accounts = new Map<number, { bankAccountId: number; label: string }>();
+      const accounts = new Map<number, { bankAccountId: number; label: string; isBank: boolean }>();
 
       configs
         .filter((config: any) => config?.is_active !== false)
@@ -934,13 +953,20 @@ function AiRulesTab() {
             accounts.set(bankAccountId, {
               bankAccountId,
               label: label || `Akun Rekonsiliasi #${bankAccountId}`,
+              isBank: Boolean(config?.bank_name || config?.bank_account_number),
             });
           }
         });
 
-      setReconAccounts(
-        Array.from(accounts.values()).sort((a, b) => a.label.localeCompare(b.label, "id")),
-      );
+      const ordered = Array.from(accounts.values()).sort((a, b) => {
+        if (a.isBank !== b.isBank) return a.isBank ? -1 : 1;
+        return a.label.localeCompare(b.label, "id");
+      });
+      setReconAccounts(ordered);
+      setReconAccountFilter((current) => {
+        if (ordered.some((account) => String(account.bankAccountId) === current)) return current;
+        return ordered[0] ? String(ordered[0].bankAccountId) : "";
+      });
     } catch {
       setReconAccounts([]);
     } finally {
@@ -951,16 +977,22 @@ function AiRulesTab() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadCoaOptions(); }, [loadCoaOptions]);
   useEffect(() => {
-    setReconAccountFilter("all");
+    setReconAccountFilter("");
+    setRows([]);
     loadReconAccounts();
   }, [loadReconAccounts]);
 
   const openAdd = () => {
     setEditRow(null);
+    if (!reconAccountFilter) {
+      alert("Pilih Akun Rekonsiliasi terlebih dahulu.");
+      return;
+    }
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
       confidence: 0.8, priority: 50, source: "manual",
+      bank_account_id: Number(reconAccountFilter),
       candidate_requirement: "not_required",
       requires_document_upload: false, tax_type: "none" });
     setCreatingCoa(false);
@@ -1143,6 +1175,11 @@ function AiRulesTab() {
   };
 
   const save = async () => {
+    const scopedBankAccountId = Number(editRow?.bank_account_id ?? reconAccountFilter);
+    if (!Number.isSafeInteger(scopedBankAccountId) || scopedBankAccountId <= 0) {
+      alert("Akun Rekonsiliasi wajib dipilih.");
+      return;
+    }
     const expectedType = expectedActionCoaType(form.action_flow);
     const selectedCoa = coaAccounts.find((account) => account.code === form.action_coa_code);
     if (expectedType && (!selectedCoa || selectedCoa.type?.toLowerCase() !== expectedType)) {
@@ -1166,7 +1203,8 @@ function AiRulesTab() {
            reference_amount: form.reference_amount === "" || form.reference_amount == null
              ? null
              : Number(form.reference_amount),
-          company_id: activeCompanyId ?? null }),
+          company_id: activeCompanyId ?? null,
+          bank_account_id: scopedBankAccountId }),
       });
       if (!r.ok) { const e = await r.json(); alert(e.error ?? "Gagal."); return; }
       setShowModal(false);
@@ -1181,6 +1219,7 @@ function AiRulesTab() {
       const r = await fetch(`${API}/recon-classification/ai-rules/preview`, { method: "POST",
         credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: previewText, company_id: activeCompanyId ?? null,
+           bank_account_id: reconAccountFilter ? Number(reconAccountFilter) : null,
            amount: previewAmount === "" ? 0 : Number(previewAmount),
           conditions: form.conditions, logic: form.logic, specificity: form.specificity,
            action_flow: form.action_flow, action_coa_code: form.action_coa_code,
@@ -1253,14 +1292,6 @@ function AiRulesTab() {
   const filteredRows = rows.filter((row) => {
     if (!showInactiveRules && row.is_active === false) return false;
 
-    const rowBankAccountId = Number(row.bank_account_id);
-    const hasScopedBankAccount = Number.isSafeInteger(rowBankAccountId) && rowBankAccountId > 0;
-    const matchesReconAccount =
-      reconAccountFilter === "all"
-      || (reconAccountFilter === "global" && !hasScopedBankAccount)
-      || (hasScopedBankAccount && rowBankAccountId === Number(reconAccountFilter));
-    if (!matchesReconAccount) return false;
-
     const matchesDirection = coaDirectionFilter === "all" || coaDirection(row) === coaDirectionFilter;
     if (!matchesDirection) return false;
     if (!normalizedRuleSearch) return true;
@@ -1283,6 +1314,13 @@ function AiRulesTab() {
 
   return (
     <div className="space-y-4">
+      {reconAccountFilter && (
+        <div className="rounded-md border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm text-slate-300">
+          Rule AI akun ini berdiri sendiri: <span className="font-semibold text-white">
+            {reconAccounts.find((account) => String(account.bankAccountId) === reconAccountFilter)?.label ?? "Akun Rekonsiliasi"}
+          </span>
+        </div>
+      )}
       {highlightedRule && (
         <div className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-200">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
@@ -1316,36 +1354,28 @@ function AiRulesTab() {
               <SelectItem value="out">COA Keluar</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={reconAccountFilter} onValueChange={setReconAccountFilter} disabled={loadingReconAccounts}>
+          <Select value={reconAccountFilter} onValueChange={setReconAccountFilter} disabled={loadingReconAccounts || reconAccounts.length === 0}>
             <SelectTrigger
-              className="bg-slate-800 border-slate-600 text-white w-[210px]"
-              aria-label="Filter akun rekonsiliasi"
+              className="bg-slate-800 border-slate-600 text-white w-[230px]"
+              aria-label="Pilih akun rekonsiliasi Rule AI"
             >
-              <SelectValue placeholder={loadingReconAccounts ? "Memuat akun..." : "Akun Rekonsiliasi"} />
+              <SelectValue placeholder={loadingReconAccounts ? "Memuat akun..." : "Pilih Akun Rekonsiliasi"} />
             </SelectTrigger>
             <SelectContent className="bg-slate-800 border-slate-600 text-white">
-              <SelectItem value="all">Semua Akun Rekonsiliasi</SelectItem>
               {reconAccounts.map((account) => (
                 <SelectItem key={account.bankAccountId} value={String(account.bankAccountId)}>
                   {account.label}
                 </SelectItem>
               ))}
-              {rows.some((row) => {
-                const bankAccountId = Number(row.bank_account_id);
-                return !Number.isSafeInteger(bankAccountId) || bankAccountId <= 0;
-              }) && (
-                <SelectItem value="global">Global / Belum ditetapkan</SelectItem>
-              )}
             </SelectContent>
           </Select>
-          {(ruleSearch || coaDirectionFilter !== "all" || reconAccountFilter !== "all") && (
+          {(ruleSearch || coaDirectionFilter !== "all") && (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => {
                 setRuleSearch("");
                 setCoaDirectionFilter("all");
-                setReconAccountFilter("all");
               }}
               className="text-slate-400 hover:text-white"
             >
