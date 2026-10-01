@@ -1,12 +1,11 @@
 import { logger } from "./logger.js";
-import { claimWaSend, finalizeWaSendClaim, logNotification, wasRecentlyNotified } from "./notificationLog.js";
+import { claimWaSend, finalizeWaSendClaim, logNotification } from "./notificationLog.js";
 import { getFonnteToken } from "./appSecrets.js";
 import { isSafeDevTestMode } from "./safeDev.js";
 import { isValidIndonesianPhone } from "./phoneUtils.js";
 
 const FONNTE_URL = "https://api.fonnte.com/send";
 
-const DEDUP_WINDOW_MS = parseInt(process.env.WA_DEDUP_WINDOW_MS ?? "1800000", 10);
 
 /** E2E test mode — jangan kirim WA sungguhan, cukup catat ke notification_logs sebagai 'simulated'. */
 function isE2ETestMode(): boolean {
