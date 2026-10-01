@@ -22,7 +22,7 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain("d.applicator_status");
     expect(fleetRoute).toContain('router.post("/outstanding/repair"');
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/preview"');
-    expect(fleetRoute).toContain("full_name=$3");
+    expect(fleetRoute).toContain("full_name=COALESCE(NULLIF($3,''),full_name)");
     expect(fleetRoute).toContain("company_id=$2::text");
     expect(fleetRoute).toContain('router.post("/outstanding/snapshot/confirm"');
   });
@@ -35,7 +35,7 @@ describe("standalone fleet intelligence contract", () => {
     expect(fleetRoute).toContain("full_name");
     expect(fleetRoute).toContain("license_number");
     expect(fleetRoute).toContain("full_name AS name");
-    expect(fleetRoute).toContain("Synced from GoCar Drivers export; ownership=");
+    expect(fleetRoute).toContain("fleet_import_driver_snapshot");
     expect(fleetRoute).toContain("public.fleet_vehicles");
   });
 

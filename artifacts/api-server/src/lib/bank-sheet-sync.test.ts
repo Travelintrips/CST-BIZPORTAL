@@ -550,8 +550,8 @@ describe("Google Sheet bank mutation sync", () => {
     expect(sql).toContain("'QR Payement sc'::text as coa_name");
     expect(sql).toContain("qris_match.candidate_type = 'qris_settlement'");
     expect(sql).toContain("'candidate', 'approved', 'posted', 'reconciled'");
-    expect(sql.indexOf("qris_sheet_classification.coa_code")).toBeLessThan(
-      sql.indexOf("rule_classification.coa_code"),
+    expect(sql).toMatch(
+      /coalesce\(\s*qris_sheet_classification\.coa_code,\s*rule_classification\.coa_code,/,
     );
     expect(sql).toContain("line.account_code = '1199'");
     expect(sql).toContain("canonical_clearing.code");
