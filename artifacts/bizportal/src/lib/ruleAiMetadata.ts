@@ -22,6 +22,7 @@ interface RuleAiMutation {
   direction: "IN" | "OUT";
   provider_order_id?: string | null;
   company_id?: number | null;
+  bank_account_id?: number | null;
 }
 
 interface RuleAiCoa {
@@ -138,5 +139,6 @@ export function buildManualRuleAiPayload(
     candidate_requirement: metadata.candidateRequirement === "required" ? "required" : "not_required",
     source: "manual" as const,
     company_id: companyId,
+    bank_account_id: mutation.bank_account_id ?? null,
   };
 }
