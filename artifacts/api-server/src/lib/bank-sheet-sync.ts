@@ -804,13 +804,98 @@ async function syncConfig(config: SheetConfig): Promise<{
 
     for (const item of prepared) {
       // Prefer the row's current canonical identity over any stale mutation_key
-      // already written back to the Sheet. This prevents one historical key from
-      // collapsing two edited/split Sheet rows into the same old mutation.
-      const found =
+      // already written back to the Sheet. When only the stable mutation_key
+      // matches, the Sheet row may have been edited after its first import.
+      const foundByCanonical =
         byCanonicalKey.get(item.canonical)
-        ?? byCanonicalKey.get(item.legacyCanonical)
-        ?? byMutationKey.get(item.key);
+        ?? byCanonicalKey.get(item.legacyCanonical);
+      const foundByMutationKey = byMutationKey.get(item.key);
+      const found = foundByCanonical ?? foundByMutationKey;
       if (found) {
+        const mutationStatus = String(found.status ?? "").trim().toLowerCase();
+        const reconciliationStatus = String(found.reconciliation_status ?? "").trim().toLowerCase();
+        const matchStatus = String(found.match_status ?? "").trim().toLowerCase();
+        const canRefreshFromSheet =
+          !foundByCanonical
+          && foundByMutationKey?.id === found.id
+          && found.journal_entry_id == null
+          && ["", "new", "unmatched"].includes(mutationStatus)
+          && ["", "new", "unmatched"].includes(reconciliationStatus)
+          && !["approved", "posted", "reconciled"].includes(matchStatus);
+
+        if (canRefreshFromSheet) {
+          const refreshed = await client.query<ExistingMutation>(
+            `update public.bank_mutations bm
+                set canonical_key = $2,
+                    transaction_date = $3,
+                    description = $4,
+                    amount = $5,
+                    direction = $6,
+                    credit_amount = $7,
+                    debit_amount = $8,
+                    normalized_description = $9,
+                    source_account = $10,
+                    updated_at = now()
+              where bm.id = $1
+                and bm.journal_entry_id is null
+                and lower(coalesce(bm.status::text, 'unmatched')) in ('new', 'unmatched')
+                and lower(coalesce(bm.reconciliation_status::text, 'unmatched')) in ('new', 'unmatched')
+                and not exists (
+                  select 1
+                    from public.bank_reconciliation_matches final_match
+                   where final_match.mutation_id = bm.id
+                     and lower(coalesce(final_match.status::text, '')) in ('approved', 'posted', 'reconciled')
+                )
+              returning bm.id, bm.mutation_key, bm.canonical_key, bm.description,
+                        bm.status, bm.reconciliation_status, bm.journal_entry_id,
+                        null::int as match_score, null::text as match_reason,
+                        null::text as match_status, null::text as match_result,
+                        null::text as coa_code, null::text as coa_name`,
+            [
+              found.id,
+              item.canonical,
+              item.row.transactionDate,
+              item.row.description,
+              item.row.amount,
+              item.row.direction,
+              item.row.credit,
+              item.row.debit,
+              normalizeDescription(item.row.description),
+              item.row.bank,
+            ],
+          );
+          const refreshedMutation = refreshed.rows[0];
+          if (refreshedMutation) {
+            // Any provisional match was calculated from the old date/amount/
+            // description. Preserve it for audit, but remove it from the active
+            // candidate set so matching is recalculated against the edited row.
+            await client.query(
+              `update public.bank_reconciliation_matches
+                  set status = 'superseded'
+                where mutation_id = $1
+                  and lower(coalesce(status::text, '')) not in (
+                    'approved', 'posted', 'reconciled', 'superseded'
+                  )`,
+              [found.id],
+            );
+
+            if (
+              found.canonical_key
+              && byCanonicalKey.get(found.canonical_key)?.id === found.id
+            ) {
+              byCanonicalKey.delete(found.canonical_key);
+            }
+            byCanonicalKey.set(item.canonical, refreshedMutation);
+            byMutationKey.set(item.key, refreshedMutation);
+            existing += 1;
+            mutationStatuses.set(
+              item.row.rowNumber,
+              toSheetMetadata(refreshedMutation, item.key),
+            );
+            continue;
+          }
+        }
+
         existing += 1;
         mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, item.key));
         continue;
