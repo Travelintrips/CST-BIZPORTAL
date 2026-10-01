@@ -435,17 +435,13 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
           <Button size="sm" variant="outline" onClick={load} className="border-slate-600 text-slate-300">
             <RefreshCw size={14} className="mr-1" /> Refresh
           </Button>
-          <Button size="sm" onClick={openAdd} disabled={!reconAccountFilter} className="bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50">
+          <Button size="sm" onClick={openAdd} className="bg-orange-500 hover:bg-orange-600 text-white">
             <Plus size={14} className="mr-1" /> Tambah
           </Button>
         </div>
       </div>
 
-      {!loadingReconAccounts && reconAccounts.length === 0 ? (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-4 text-sm text-amber-200">
-          Belum ada Akun Rekonsiliasi aktif. Tambahkan koneksi rekening/kas terlebih dahulu sebelum membuat Rule AI.
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
         <div className="overflow-x-auto">
@@ -1395,13 +1391,17 @@ function AiRulesTab() {
           </span>
         </div>
         <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={load} className="border-slate-600 text-slate-300"><RefreshCw size={14} /></Button>
-        <Button size="sm" onClick={openAdd} className="bg-orange-500 hover:bg-orange-600 text-white">
+        <Button size="sm" variant="outline" onClick={load} disabled={!reconAccountFilter} className="border-slate-600 text-slate-300"><RefreshCw size={14} /></Button>
+        <Button size="sm" onClick={openAdd} disabled={!reconAccountFilter} className="bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50">
           <Plus size={14} className="mr-1" /> Tambah Rule
         </Button>
         </div>
       </div>
-      {loading ? (
+      {!loadingReconAccounts && reconAccounts.length === 0 ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-4 text-sm text-amber-200">
+          Belum ada Akun Rekonsiliasi aktif. Tambahkan koneksi rekening/kas terlebih dahulu sebelum membuat Rule AI.
+        </div>
+      ) : loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
         <div className="overflow-x-auto">
