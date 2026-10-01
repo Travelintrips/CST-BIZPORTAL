@@ -824,6 +824,9 @@ async function syncConfig(config: SheetConfig): Promise<{
           && !["approved", "posted", "reconciled"].includes(matchStatus);
 
         if (canRefreshFromSheet) {
+          const refreshedDescription = item.row.description.trim()
+            ? item.row.description
+            : (found.description ?? "");
           const refreshed = await client.query<ExistingMutation>(
             `update public.bank_mutations bm
                 set canonical_key = $2,
@@ -855,12 +858,12 @@ async function syncConfig(config: SheetConfig): Promise<{
               found.id,
               item.canonical,
               item.row.transactionDate,
-              item.row.description,
+              refreshedDescription,
               item.row.amount,
               item.row.direction,
               item.row.credit,
               item.row.debit,
-              normalizeDescription(item.row.description),
+              normalizeDescription(refreshedDescription),
               item.row.bank,
             ],
           );
