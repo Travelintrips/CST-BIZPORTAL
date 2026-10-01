@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import {
-  getDatabaseSecretName,
   getRuntimeDatabaseUrl,
   pool,
-  readSecret,
 } from "@workspace/db";
 
 export interface DevAuthUser {
@@ -45,7 +43,6 @@ export function isDevelopmentEnvironment(): boolean {
 
 let initializedProductionSessionSecret: string | null = null;
 let productionSessionInitialization: Promise<void> | null = null;
-const OPTIONAL_GCP_SESSION_SECRET_TIMEOUT_MS = 4_000;
 
 function deriveProductionSessionSecret(databaseCredential: string): string {
   return crypto
@@ -53,53 +50,6 @@ function deriveProductionSessionSecret(databaseCredential: string): string {
     .update("cst-bizportal:production-session:v1\0", "utf8")
     .update(databaseCredential, "utf8")
     .digest("hex");
-}
-
-function findSecretString(value: unknown, keys: Set<string>): string | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-
-  for (const [key, nested] of Object.entries(record)) {
-    if (keys.has(key) && typeof nested === "string" && nested.trim().length >= 32) {
-      return nested.trim();
-    }
-  }
-
-  for (const nested of Object.values(record)) {
-    const found = findSecretString(nested, keys);
-    if (found) return found;
-  }
-  return null;
-}
-
-async function getBundledProductionSessionSecret(): Promise<string | null> {
-  if (!process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON?.trim()) return null;
-
-  // Secret Manager is an optional source for the session secret. A stale or
-  // temporarily unavailable GCP bootstrap must never make BizPortal login
-  // unavailable when the canonical production database connection is healthy.
-  // Returning null here lets initializeProductionSessionSigning() fall back to
-  // the already-resolved runtime database credential in the same attempt.
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    OPTIONAL_GCP_SESSION_SECRET_TIMEOUT_MS,
-  );
-  timeout.unref();
-
-  try {
-    const secretValue = await readSecret(getDatabaseSecretName(true), {
-      signal: controller.signal,
-    });
-    return findSecretString(
-      JSON.parse(secretValue) as unknown,
-      new Set(["BIZPORTAL_SESSION_SECRET", "SESSION_SECRET"]),
-    );
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function getExplicitSessionSecret(): string | null {
@@ -132,38 +82,14 @@ export async function initializeProductionSessionSigning(): Promise<void> {
       return;
     }
 
-    // Standalone Hostinger starts the compiled API directly, so secrets stored
-    // in the canonical GCP bundle are not automatically copied into process.env.
-    // Load the session secret explicitly from the same production bundle first.
-    // This keeps signing stable across restarts and database credential rotation.
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const bundledSecret = await getBundledProductionSessionSecret();
-        if (bundledSecret) {
-          initializedProductionSessionSecret = bundledSecret;
-          return;
-        }
-
-        // Backward-compatible safety net for installations whose production
-        // bundle predates SESSION_SECRET. The DB URL is already a required,
-        // high-entropy credential and is resolved through the canonical runtime
-        // path, not by assuming it exists in process.env.
-        const databaseCredential = await getRuntimeDatabaseUrl();
-        initializedProductionSessionSecret =
-          deriveProductionSessionSecret(databaseCredential);
-        return;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
-        }
-      }
-    }
-
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Production session signing could not be initialized");
+    // Password/OTP login has already proven that the canonical production
+    // database path is available. Derive the signing key from that same
+    // high-entropy runtime credential instead of making login depend on a
+    // second external Secret Manager request. This keeps Hostinger login
+    // available during GCP OAuth/Secret Manager latency or outages.
+    const databaseCredential = await getRuntimeDatabaseUrl();
+    initializedProductionSessionSecret =
+      deriveProductionSessionSecret(databaseCredential);
   })();
 
   try {

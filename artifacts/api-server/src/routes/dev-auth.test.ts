@@ -157,7 +157,7 @@ describe("production session signing fallback", () => {
     process.env.NODE_ENV = "production";
     delete process.env.SESSION_SECRET;
     delete process.env.BIZPORTAL_SESSION_SECRET;
-    process.env.SUPABASE_DATABASE_URL = "postgresql://user:strong-password@example.test:5432/postgres";
+    process.env.SUPABASE_DATABASE_URL = "postgresql://postgres.nzdweipzckfszczzqtuw:strong-password@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres";
 
     await initializeProductionSessionSigning();
 
