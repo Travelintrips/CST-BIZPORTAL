@@ -4684,6 +4684,8 @@ function QrisMutationCard({
     canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const allItems = audit.payment_items ?? [];
   const auditStatus = String(audit.status ?? "").toLowerCase();
+  const isLiveReviewSnapshot =
+    String(audit.candidate_source ?? "") === "live_qris_review_snapshot";
   const isReadOnlyReviewSnapshot = [
     "historical_qris_review_snapshot",
     "live_qris_review_snapshot",
@@ -4795,22 +4797,29 @@ function QrisMutationCard({
       ? auditExpectedNet ?? estimatedOriginalExpectedNet
       : null);
   const hasIdentifiedSettlement = originalExpectedNet != null;
-  const expectedNet = hasLiveScope && !isReadOnlyEvidence
-    ? (numericValue(audit.current_expected_amount)
-      ?? (snapshotGross > 0 && originalExpectedNet != null
-        ? candidateGross * originalExpectedNet / snapshotGross
-        : null))
-    : originalExpectedNet;
+  const liveDiagnosticExpectedNet = isLiveReviewSnapshot
+    ? (numericValue(audit.current_expected_amount) ?? numericValue(audit.net_amount))
+    : null;
+  const expectedNet = isLiveReviewSnapshot
+    ? liveDiagnosticExpectedNet
+    : hasLiveScope && !isReadOnlyEvidence
+      ? (numericValue(audit.current_expected_amount)
+        ?? (snapshotGross > 0 && originalExpectedNet != null
+          ? candidateGross * originalExpectedNet / snapshotGross
+          : null))
+      : originalExpectedNet;
   const canonicalMdr = canonicalSettlementDetails?.mdrAmount != null
     ? numericValue(canonicalSettlementDetails.mdrAmount)
     : null;
   const mdr = canonicalSettlementDetails?.mdrAmount != null
     ? canonicalMdr
-    : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
+    : isLiveReviewSnapshot && expectedNet != null
       ? Math.max(0, candidateGross - expectedNet)
-      : hasLiveSettlementProposal
-        ? auditObservedDeduction
-        : null;
+      : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
+        ? Math.max(0, candidateGross - expectedNet)
+        : hasLiveSettlementProposal
+          ? auditObservedDeduction
+          : null;
   const storedAmountComparison = audit.auto_post_details?.amountComparison;
   // The persisted auto-post diagnosis can describe an older candidate
   // snapshot. When the API has a complete live payment scope, render the
