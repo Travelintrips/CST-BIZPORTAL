@@ -507,7 +507,7 @@ router.post("/auth/email-otp/send", async (
        )
        insert into public.bizportal_email_otp_codes
          (email, request_ip, purpose, code_hash, expires_at)
-       values ($1, $3, $2, $4, $5)
+       values ($1, $2, $3, $4, $5)
        returning id`,
       [email, requestIp, EMAIL_OTP_PURPOSE, codeHash, new Date(Date.now() + OTP_TTL_MS)],
     );
