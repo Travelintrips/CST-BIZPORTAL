@@ -89,6 +89,48 @@ interface MatchingMutation {
   review_code: string | null;
 }
 
+interface LocalMatchingSummary {
+  processed: number;
+  failed: number;
+  auto_matched: number;
+  auto_posted: number;
+  manual_review: number;
+  unmatched: number;
+  rule_matched: number;
+  ecf_matched: number;
+}
+
+interface MatchingJobState {
+  running: boolean;
+  status: "running" | "completed" | "failed";
+  total: number;
+  processed: number;
+  failed: number;
+  summary: LocalMatchingSummary;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+const matchingJobsByCompany = new Map<string, MatchingJobState>();
+
+function matchingJobKey(actor: ApprovalActor): string {
+  return actor.companyId == null ? "global" : String(actor.companyId);
+}
+
+function emptyLocalMatchingSummary(): LocalMatchingSummary {
+  return {
+    processed: 0,
+    failed: 0,
+    auto_matched: 0,
+    auto_posted: 0,
+    manual_review: 0,
+    unmatched: 0,
+    rule_matched: 0,
+    ecf_matched: 0,
+  };
+}
+
 interface LocalMatchCandidate {
   candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement";
   candidateId: number;
@@ -1170,19 +1212,24 @@ router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise
     return;
   }
 
-  // The local matcher runs synchronously and returns its aggregate result in
-  // the POST response. Keep the status contract for the existing UI polling
-  // path so a synchronous run never gets stuck in "running".
-  res.json({
-    ok: true,
-    running: false,
-    status: "idle",
-    total: 0,
-    processed: 0,
-    failed: 0,
-    summary: {},
-    error: null,
-  });
+  const state = matchingJobsByCompany.get(matchingJobKey(actor));
+  if (!state) {
+    res.json({
+      ok: true,
+      running: false,
+      status: "idle",
+      total: 0,
+      processed: 0,
+      failed: 0,
+      summary: emptyLocalMatchingSummary(),
+      error: null,
+      started_at: null,
+      finished_at: null,
+    });
+    return;
+  }
+
+  res.json({ ok: true, ...state });
 });
 
 router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void> => {
@@ -1276,62 +1323,171 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     )`);
   }
 
-  const client = await pool.connect();
-  try {
-    const result = await client.query<MatchingMutation>(
-      `select bm.id, bm.amount, bm.direction, bm.transaction_date::text as transaction_date,
-              bm.description, bm.normalized_description, bm.provider_order_id,
-              bm.company_id, bm.status, bm.bank_account_id, bm.bank_reference,
-              bm.provider_name, bm.uploaded_proof_url, bm.review_code
-         from public.bank_mutations bm
-        where ${filters.join(" and ")}
-        order by bm.transaction_date desc, bm.id
-        limit 200`,
-      values as any[],
-    );
-
-    let processed = 0;
-    let autoMatched = 0;
-    let manualReview = 0;
-    let unmatched = 0;
-    let failed = 0;
-    let ruleMatched = 0;
-    let autoPosted = 0;
-
-    for (const mutation of result.rows) {
-      try {
-        await client.query("begin");
-        const outcome = await matchLocalMutation(client, mutation, actor);
-        await client.query("commit");
-        processed++;
-        if (outcome === "matched" || outcome === "auto_posted") autoMatched++;
-        if (outcome === "auto_posted") autoPosted++;
-        const marker = await client.query<{ review_code: string | null }>("select review_code from public.bank_mutations where id=$1", [mutation.id]);
-        if (marker.rows[0]?.review_code === "RULE_AI_MATCH" || marker.rows[0]?.review_code === "RULE_AI_AUTO_POSTED") ruleMatched++;
-        else if (outcome === "manual_review") manualReview++;
-        else unmatched++;
-      } catch (error) {
-        failed++;
-        try {
-          await client.query("rollback");
-        } catch (rollbackError) {
-          req.log.warn({ rollbackError, mutationId: mutation.id }, "Matching rollback failed");
-        }
-        req.log.warn({ error, mutationId: mutation.id }, "Local bank matching failed for mutation");
-      }
+  const executeMatching = async (
+    onProgress?: (state: { total: number; summary: LocalMatchingSummary }) => void,
+  ): Promise<LocalMatchingSummary> => {
+    const loader = await pool.connect();
+    let rows: MatchingMutation[] = [];
+    try {
+      const result = await loader.query<MatchingMutation>(
+        `select bm.id, bm.amount, bm.direction, bm.transaction_date::text as transaction_date,
+                bm.description, bm.normalized_description, bm.provider_order_id,
+                bm.company_id, bm.status, bm.bank_account_id, bm.bank_reference,
+                bm.provider_name, bm.uploaded_proof_url, bm.review_code
+           from public.bank_mutations bm
+          where ${filters.join(" and ")}
+          order by bm.transaction_date desc, bm.id
+          limit 200`,
+        values as any[],
+      );
+      rows = result.rows;
+    } finally {
+      loader.release();
     }
 
+    const summary = emptyLocalMatchingSummary();
+    onProgress?.({ total: rows.length, summary: { ...summary } });
+
+    // Keep a bounded worker pool. Each mutation owns its own DB transaction,
+    // so slow candidate sources cannot force the HTTP request through nginx's
+    // gateway timeout and we do not exhaust the PostgreSQL connection pool.
+    let nextIndex = 0;
+    const workerCount = Math.min(4, rows.length);
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= rows.length) return;
+        const mutation = rows[index]!;
+        const client = await pool.connect();
+        try {
+          await client.query("begin");
+          const outcome = await matchLocalMutation(client, mutation, actor);
+          const marker = await client.query<{ review_code: string | null }>(
+            "select review_code from public.bank_mutations where id=$1",
+            [mutation.id],
+          );
+          await client.query("commit");
+
+          summary.processed++;
+          if (outcome === "matched" || outcome === "auto_posted") summary.auto_matched++;
+          if (outcome === "auto_posted") summary.auto_posted++;
+          if (
+            marker.rows[0]?.review_code === "RULE_AI_MATCH"
+            || marker.rows[0]?.review_code === "RULE_AI_AUTO_POSTED"
+          ) {
+            summary.rule_matched++;
+          } else if (outcome === "manual_review") {
+            summary.manual_review++;
+          } else {
+            summary.unmatched++;
+          }
+        } catch (error) {
+          summary.failed++;
+          try {
+            await client.query("rollback");
+          } catch (rollbackError) {
+            req.log.warn({ rollbackError, mutationId: mutation.id }, "Matching rollback failed");
+          }
+          req.log.warn({ error, mutationId: mutation.id }, "Local bank matching failed for mutation");
+        } finally {
+          client.release();
+          onProgress?.({ total: rows.length, summary: { ...summary } });
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return summary;
+  };
+
+  const isBulkRun = ids.length === 0;
+  const jobKey = matchingJobKey(actor);
+
+  if (isBulkRun) {
+    const existing = matchingJobsByCompany.get(jobKey);
+    if (existing?.running) {
+      res.status(202).json({
+        ok: true,
+        queued: true,
+        already_running: true,
+        processed: existing.processed,
+        failed: existing.failed,
+      });
+      return;
+    }
+
+    const startedAt = new Date().toISOString();
+    matchingJobsByCompany.set(jobKey, {
+      running: true,
+      status: "running",
+      total: 0,
+      processed: 0,
+      failed: 0,
+      summary: emptyLocalMatchingSummary(),
+      error: null,
+      started_at: startedAt,
+      finished_at: null,
+    });
+
+    const runPromise = executeMatching(({ total, summary }) => {
+      const current = matchingJobsByCompany.get(jobKey);
+      if (!current) return;
+      matchingJobsByCompany.set(jobKey, {
+        ...current,
+        total,
+        processed: summary.processed,
+        failed: summary.failed,
+        summary,
+      });
+    });
+
+    void runPromise
+      .then((summary) => {
+        const current = matchingJobsByCompany.get(jobKey);
+        matchingJobsByCompany.set(jobKey, {
+          running: false,
+          status: "completed",
+          total: current?.total ?? summary.processed + summary.failed,
+          processed: summary.processed,
+          failed: summary.failed,
+          summary,
+          error: null,
+          started_at: current?.started_at ?? startedAt,
+          finished_at: new Date().toISOString(),
+        });
+      })
+      .catch((error) => {
+        const current = matchingJobsByCompany.get(jobKey);
+        const message = error instanceof Error ? error.message : String(error);
+        req.log.error({ error }, "Background local bank matching failed");
+        matchingJobsByCompany.set(jobKey, {
+          running: false,
+          status: "failed",
+          total: current?.total ?? 0,
+          processed: current?.processed ?? 0,
+          failed: current?.failed ?? 0,
+          summary: current?.summary ?? emptyLocalMatchingSummary(),
+          error: message,
+          started_at: current?.started_at ?? startedAt,
+          finished_at: new Date().toISOString(),
+        });
+      });
+
+    res.status(202).json({
+      ok: true,
+      queued: true,
+      processed: 0,
+      failed: 0,
+    });
+    return;
+  }
+
+  try {
+    const summary = await executeMatching();
     res.json({
       ok: true,
       queued: false,
-      processed,
-      failed,
-      auto_matched: autoMatched,
-      auto_posted: autoPosted,
-      manual_review: manualReview,
-      unmatched,
-      rule_matched: ruleMatched,
-      ecf_matched: 0,
+      ...summary,
     });
   } catch (error) {
     const code = (error as { code?: string }).code;
@@ -1344,8 +1500,6 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     }
     req.log.error({ error }, "Local bank matching failed");
     res.status(503).json({ error: "AI Matching lokal gagal dijalankan." });
-  } finally {
-    client.release();
   }
 });
 
