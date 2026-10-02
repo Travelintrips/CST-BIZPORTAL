@@ -411,11 +411,12 @@ router.get("/accounting/accounts", async (req, res): Promise<void> => {
     }
     const result = await pool.query<{
       id: number; company_id: number | null; company_code: string | null; code: string;
-      name: string; type: string; parent_id: number | null; is_active: boolean | null; created_at: Date;
+      name: string; type: string; parent_id: number | null; is_active: boolean | null;
+      is_header: boolean | null; is_postable: boolean | null; created_at: Date;
     }>(`
       select a.id, a.company_id, coalesce(c.company_code, c.code) company_code,
              a.code, a.name, coalesce(a.account_type::text, a.type::text) type,
-             a.parent_id, a.is_active, a.created_at
+             a.parent_id, a.is_active, a.is_header, a.is_postable, a.created_at
       from public.chart_of_accounts a
       left join public.companies c on c.id = a.company_id
       ${where}
@@ -424,7 +425,11 @@ router.get("/accounting/accounts", async (req, res): Promise<void> => {
     res.json(result.rows.map((row) => ({
       id: row.id, companyId: row.company_id, companyCode: row.company_code,
       code: row.code, name: row.name, type: row.type,
-      parentId: row.parent_id, isActive: row.is_active ?? true, createdAt: row.created_at,
+      parentId: row.parent_id,
+      isActive: row.is_active ?? true,
+      isHeader: row.is_header ?? false,
+      isPostable: row.is_postable ?? true,
+      createdAt: row.created_at,
     })));
   } catch (error) {
     reportError(req, res, error);
