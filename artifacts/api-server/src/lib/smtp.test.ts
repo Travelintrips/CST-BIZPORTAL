@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
@@ -10,7 +11,7 @@ vi.mock("@workspace/db", () => ({
   readSecret: dbMocks.readSecret,
 }));
 
-import { resolveSmtpConfig } from "./smtp";
+import { resolveSmtpConfig, waitForResponse } from "./smtp";
 
 const SMTP_ENV_KEYS = [
   "APP_ENV",
@@ -74,5 +75,24 @@ describe("resolveSmtpConfig", () => {
 
     expect(dbMocks.readSecret).not.toHaveBeenCalled();
     expect(config.source).toBe("environment");
+  });
+
+  it("preserves multiline EHLO capabilities so AUTH is not discarded", async () => {
+    const socket = new PassThrough();
+    const responsePromise = waitForResponse(socket as never);
+
+    socket.write(
+      "250-smtp.hostinger.com\r\n"
+      + "250-PIPELINING\r\n"
+      + "250-AUTH LOGIN PLAIN\r\n"
+      + "250 SIZE 52428800\r\n",
+    );
+
+    const response = await responsePromise;
+
+    expect(response.code).toBe(250);
+    expect(response.text).toContain("250-AUTH LOGIN PLAIN");
+    expect(response.text).toContain("250 SIZE 52428800");
+    socket.destroy();
   });
 });
