@@ -1484,10 +1484,18 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
 
   try {
     const summary = await executeMatching();
+    const autoPosted = summary.auto_posted;
     res.json({
       ok: true,
       queued: false,
-      ...summary,
+      processed: summary.processed,
+      failed: summary.failed,
+      auto_matched: summary.auto_matched,
+      auto_posted: autoPosted,
+      manual_review: summary.manual_review,
+      unmatched: summary.unmatched,
+      rule_matched: summary.rule_matched,
+      ecf_matched: summary.ecf_matched,
     });
   } catch (error) {
     const code = (error as { code?: string }).code;
