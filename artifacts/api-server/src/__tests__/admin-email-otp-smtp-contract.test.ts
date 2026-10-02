@@ -12,6 +12,13 @@ describe("admin email OTP SMTP contract", () => {
     expect(smtpSource).toContain("configuredUser || fallbackAddress");
   });
 
+
+  it("preserves multiline EHLO capabilities so AUTH is discoverable", () => {
+    expect(smtpSource).toContain("const responseLines: string[] = []");
+    expect(smtpSource).toContain('text: responseLines.join("\\n")');
+    expect(smtpSource).toContain("const responsePromise = waitForResponse(socket)");
+  });
+
   it("logs delivery failures before invalidating the OTP record", () => {
     expect(authSource).toContain('request.log.error({ error, email }, "Admin email OTP delivery failed")');
     expect(authSource).toContain("email_otp_delivery_failed");
