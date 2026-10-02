@@ -4,6 +4,7 @@ import { compare, hash } from "bcryptjs";
 import { pool } from "@workspace/db";
 import { sendAdminLoginOtpEmail } from "../lib/smtp";
 import {
+  getProductionSession,
   getProductionUser,
   initializeProductionSessionSigning,
   isDevelopmentEnvironment,
@@ -92,6 +93,14 @@ function isActivePrivilegedUser(user: RawUser | null): user is RawUser {
     && user.isActive
     && (user.status === null || user.status.trim().toLowerCase() === "active"),
   );
+}
+
+async function getPrivilegedProductionUserFromRequest(request: Request): Promise<RawUser | null> {
+  const session = getProductionSession(request);
+  if (!session) return null;
+
+  const user = await findUserByEmail(session.email);
+  return isActivePrivilegedUser(user) ? user : null;
 }
 
 function getRequestIp(request: Request): string {
@@ -293,6 +302,159 @@ router.post("/auth/email-login", async (
   } catch (error) {
     request.log.error({ error }, "Local production email login failed");
     response.status(503).json({ error: "Layanan login belum tersedia." });
+  }
+});
+
+router.get("/auth/admin/users-password-status", async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (isDevelopmentEnvironment()) {
+    next();
+    return;
+  }
+
+  try {
+    const actor = await getPrivilegedProductionUserFromRequest(request);
+    if (!actor) {
+      response.status(403).json({ error: "Admin/owner only" });
+      return;
+    }
+
+    const result = await pool.query<{ user_data: Record<string, unknown> }>(
+      `select to_jsonb(u) as user_data
+         from public.users u
+        order by lower(coalesce(to_jsonb(u)->>'email', ''))`,
+    );
+
+    const users = result.rows.flatMap(({ user_data: data }) => {
+      const id = typeof data.id === "string" ? data.id : "";
+      const email = typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
+      if (!id || !email) return [];
+
+      const firstName = typeof data.first_name === "string" ? data.first_name.trim() : "";
+      const lastName = typeof data.last_name === "string" ? data.last_name.trim() : "";
+      const fullName = [firstName, lastName].filter(Boolean).join(" ");
+      const name = typeof data.name === "string" && data.name.trim()
+        ? data.name.trim()
+        : fullName || email;
+
+      return [{
+        id,
+        email,
+        name,
+        role: typeof data.role === "string" ? data.role.trim().toLowerCase() : "",
+        hasPassword: typeof data.password_hash === "string" && data.password_hash.trim().length > 0,
+      }];
+    });
+
+    response.json({ users });
+  } catch (error) {
+    request.log.error({ error }, "Local production password status failed");
+    response.status(503).json({ error: "Layanan password belum tersedia." });
+  }
+});
+
+router.post("/auth/admin/set-password", async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (isDevelopmentEnvironment()) {
+    next();
+    return;
+  }
+
+  const userId = typeof request.body?.userId === "string" ? request.body.userId.trim() : "";
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (!userId) {
+    response.status(400).json({ error: "userId wajib diisi" });
+    return;
+  }
+  if (password.length < 8) {
+    response.status(400).json({ error: "Password minimal 8 karakter" });
+    return;
+  }
+
+  try {
+    const actor = await getPrivilegedProductionUserFromRequest(request);
+    if (!actor) {
+      response.status(403).json({ error: "Admin/owner only" });
+      return;
+    }
+
+    const passwordHash = await hash(password, 12);
+    const result = await pool.query<{ id: string; email: string }>(
+      `update public.users
+          set password_hash = $2,
+              updated_at = now()
+        where id = $1
+        returning id, email`,
+      [userId, passwordHash],
+    );
+    const updated = result.rows[0];
+    if (!updated) {
+      response.status(404).json({ error: "User tidak ditemukan" });
+      return;
+    }
+
+    request.log.info(
+      { actorEmail: actor.email, targetUserId: updated.id, targetEmail: updated.email },
+      "Local production password updated",
+    );
+    response.json({ ok: true, email: updated.email });
+  } catch (error) {
+    request.log.error({ error }, "Local production set password failed");
+    response.status(503).json({ error: "Gagal menyimpan password" });
+  }
+});
+
+router.delete("/auth/admin/remove-password/:userId", async (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (isDevelopmentEnvironment()) {
+    next();
+    return;
+  }
+
+  try {
+    const actor = await getPrivilegedProductionUserFromRequest(request);
+    if (!actor) {
+      response.status(403).json({ error: "Admin/owner only" });
+      return;
+    }
+
+    const userId = String(request.params.userId ?? "").trim();
+    if (!userId) {
+      response.status(400).json({ error: "userId wajib diisi" });
+      return;
+    }
+
+    const result = await pool.query<{ id: string; email: string }>(
+      `update public.users
+          set password_hash = null,
+              updated_at = now()
+        where id = $1
+        returning id, email`,
+      [userId],
+    );
+    const updated = result.rows[0];
+    if (!updated) {
+      response.status(404).json({ error: "User tidak ditemukan" });
+      return;
+    }
+
+    request.log.info(
+      { actorEmail: actor.email, targetUserId: updated.id, targetEmail: updated.email },
+      "Local production password removed",
+    );
+    response.json({ ok: true, email: updated.email });
+  } catch (error) {
+    request.log.error({ error }, "Local production remove password failed");
+    response.status(503).json({ error: "Gagal menghapus password" });
   }
 });
 
