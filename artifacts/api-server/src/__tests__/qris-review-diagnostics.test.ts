@@ -24,6 +24,10 @@ describe("QRIS historical review diagnostics", () => {
     expect(diagnosticSource).toContain('qris.mutation_id = any($' + '${values.length}' + '::int[])');
     expect(diagnosticSource).toContain('limit $' + '${values.length}');
   });
+  it("binds canonical QRIS company and account filters as PostgreSQL parameters", () => {
+    expect(routeSource).toMatch(/filters\.push\(`ebs\.company_id = \$\$\{values\.length\}`\)/);
+    expect(routeSource).toMatch(/const accountPlaceholder = `\$\$\{values\.length\}`/);
+  });
   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
     expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");
     expect(diagnosticSource).toContain("candidate_auto_matched");

@@ -8354,7 +8354,7 @@ export default function BankReconciliationPage() {
       && Boolean(account.coa_name?.trim()),
   );
 
-  const { data: summary } = useQuery({
+  const { data: summary, isLoading: summaryLoading, isError: summaryError } = useQuery({
     queryKey: ["bank-reconciliation-summary", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -10208,32 +10208,50 @@ export default function BankReconciliationPage() {
           </div>
         </div>
 
-        {/* ── Step Progress ─────────────────────────────────── */}
-        <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
+        {summaryLoading ? (
+          <Card>
+            <CardContent className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Memuat ringkasan rekonsiliasi…
+            </CardContent>
+          </Card>
+        ) : summaryError ? (
+          <Alert className="border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              Ringkasan rekonsiliasi gagal dimuat. Data tidak akan ditampilkan sebagai nol sampai request berhasil.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <>
+            {/* ── Step Progress ─────────────────────────────────── */}
+            <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
 
-        {/* ── AI Action Center ──────────────────────────────── */}
-        <AIActionCenter
-          summaryMap={summaryMap}
-           onRunMatching={(mode = "new") => {
-            if (workflowStage !== "matching") {
-              toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
-              return;
-            }
-             matchMut.mutate(mode);
-          }}
-           onGenerateQrisCandidates={undefined}
-          onApproveAll={handleApproveAllMatched}
-          onPostAll={handlePostAllPending}
-          onSyncSheet={() => sheetSyncMut.mutate()}
-          matchingPending={matchMut.isPending}
-          matchingBackgroundPending={matchingBackgroundPending}
-          qrisGenerationPending={false}
-          syncPending={sheetSyncMut.isPending}
-          workflowStage={workflowStage}
-        />
+            {/* ── AI Action Center ──────────────────────────────── */}
+            <AIActionCenter
+              summaryMap={summaryMap}
+              onRunMatching={(mode = "new") => {
+                if (workflowStage !== "matching") {
+                  toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
+                  return;
+                }
+                matchMut.mutate(mode);
+              }}
+              onGenerateQrisCandidates={undefined}
+              onApproveAll={handleApproveAllMatched}
+              onPostAll={handlePostAllPending}
+              onSyncSheet={() => sheetSyncMut.mutate()}
+              matchingPending={matchMut.isPending}
+              matchingBackgroundPending={matchingBackgroundPending}
+              qrisGenerationPending={false}
+              syncPending={sheetSyncMut.isPending}
+              workflowStage={workflowStage}
+            />
 
-        {/* ── Summary Cards ─────────────────────────────────── */}
-        <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
+            {/* ── Summary Cards ─────────────────────────────────── */}
+            <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
+          </>
+        )}
 
         {/* Primary scope controls. Reconciliation account isolation is visible
             here so operators do not accidentally match/post another cash/bank account. */}
