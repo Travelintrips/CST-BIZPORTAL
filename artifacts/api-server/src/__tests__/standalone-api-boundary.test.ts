@@ -78,6 +78,21 @@ describe("standalone BizPortal API boundary", () => {
     expect(indexSource).toContain("60_000");
   });
 
+  it("surfaces QRIS booking cohorts when projected settlement date drifts", () => {
+    const qrisDiagnosticsSource = readFileSync(
+      new URL("../lib/reconciliation/qrisReviewDiagnostics.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(qrisDiagnosticsSource).toContain("hasFreshPaymentEvidence");
+    expect(qrisDiagnosticsSource).toContain("calendarDayDistance");
+    expect(qrisDiagnosticsSource).toContain("paidWindowPayments");
+    expect(qrisDiagnosticsSource).toContain("distance >= 0 && distance <= 3");
+    expect(qrisDiagnosticsSource).toContain(
+      "Booking tetap ditampilkan untuk review; metadata tanggal harus diselaraskan sebelum approve.",
+    );
+  });
+
   it("implements local bank reconciliation approval with an atomic journal transaction", () => {
     const bankReconciliationSource = readFileSync(
       new URL("../routes/bank-reconciliation.ts", import.meta.url),
