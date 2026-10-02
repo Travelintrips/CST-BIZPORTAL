@@ -70,6 +70,20 @@ function addCalendarDays(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function calendarDayDistance(from: string, to: string): number {
+  const start = Date.parse(`${from}T00:00:00.000Z`);
+  const end = Date.parse(`${to}T00:00:00.000Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return Number.POSITIVE_INFINITY;
+  return Math.round((end - start) / 86_400_000);
+}
+
+function hasFreshPaymentEvidence(payment: QrisPaymentRow): boolean {
+  const paidDate = dateOnly(payment.paid_at);
+  const createdDate = dateOnly(payment.created_at);
+  if (!paidDate || !createdDate) return false;
+  return Math.abs(calendarDayDistance(createdDate, paidDate)) <= 3;
+}
+
 function money(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -403,6 +417,12 @@ function synthesizeDiagnostic(
     selected.map((payment) => [String(payment.id), safeNumber(payment.amount) ?? 0]),
   );
 
+  const dateMatch =
+    selected.length > 0
+    && settlementDate != null
+    && expectedDates.length === selected.length
+    && expectedDates.every((date) => date === settlementDate);
+
   return {
     mutation_id: mutation.id,
     company_id: mutation.company_id,
@@ -419,7 +439,9 @@ function synthesizeDiagnostic(
     reconciliation_status: "REVIEW",
     confidence: exactAmountMatch ? 0.95 : selected.length > 0 ? 0.6 : 0.2,
     review_reason: exactAmountMatch
-      ? "Payment QRIS live membentuk nominal netto yang tepat sama dengan mutasi bank. Kandidat ini read-only sampai settlement canonical dibuat."
+      ? (dateMatch
+          ? "Payment QRIS live membentuk nominal netto dan tanggal settlement yang tepat sama dengan mutasi bank. Kandidat siap dipersiapkan menjadi settlement canonical."
+          : "Payment QRIS live membentuk nominal netto yang tepat sama dengan mutasi bank, tetapi tanggal settlement sumber berbeda. Booking tetap ditampilkan untuk review; metadata tanggal harus diselaraskan sebelum approve.")
       : selected.length > 0
         ? `Payment QRIS live ditemukan, tetapi netto kandidat berbeda Rp ${Math.abs(difference).toLocaleString("id-ID")} dari mutasi bank. Periksa payment yang belum tercatat atau tanggal settlement.`
         : "Belum ada payment QRIS live yang dapat dipakai untuk mutasi ini. Kandidat diagnostik tetap ditampilkan agar gap sumber terlihat.",
@@ -432,10 +454,7 @@ function synthesizeDiagnostic(
     diagnostic_payment_count: selected.length,
     diagnostic_has_expected_dates:
       selected.length > 0 && expectedDates.length === selected.length,
-    diagnostic_date_match:
-      selected.length > 0
-      && settlementDate != null
-      && expectedDates.every((date) => date === settlementDate),
+    diagnostic_date_match: dateMatch,
     diagnostic_amount_difference: difference,
     diagnostic_bank_date: settlementDate,
     candidate_source: LIVE_SOURCE,
@@ -519,16 +538,39 @@ async function synthesizeLiveReviewDiagnostics(
 
     const mutationDate = dateOnly(mutation.transaction_date);
     if (!mutationDate || mutation.company_id == null) continue;
-    const available = payments.filter((payment) =>
+    const sameDatePayments = payments.filter((payment) =>
       payment.company_id === mutation.company_id
       && !reservedPaymentIds.has(payment.id)
       && dateOnly(payment.expected_settlement_date) === mutationDate
     );
     const bankAmount = safeNumber(mutation.amount) ?? 0;
 
-    const exactSameDate = findExactPaymentSubset(available, bankAmount);
-    const selected = exactSameDate ?? available;
-    const exact = exactSameDate != null;
+    const exactSameDate = findExactPaymentSubset(sameDatePayments, bankAmount);
+    let selected = exactSameDate ?? sameDatePayments;
+    let exact = exactSameDate != null;
+
+    // Bank evidence is authoritative for candidate visibility, but not for
+    // automatic approval. Mandiri QRIS can settle on weekends even when an
+    // older source row was projected with a business-day estimate. When the
+    // strict expected-date cohort is incomplete, inspect fresh payment evidence
+    // from the preceding three calendar days and surface an exact-net booking
+    // cohort for reviewer diagnosis.
+    if (!exactSameDate) {
+      const paidWindowPayments = payments.filter((payment) => {
+        if (payment.company_id !== mutation.company_id) return false;
+        if (reservedPaymentIds.has(payment.id)) return false;
+        if (!hasFreshPaymentEvidence(payment)) return false;
+        const paidDate = dateOnly(payment.paid_at);
+        if (!paidDate) return false;
+        const distance = calendarDayDistance(paidDate, mutationDate);
+        return distance >= 0 && distance <= 3;
+      });
+      const exactPaidWindow = findExactPaymentSubset(paidWindowPayments, bankAmount);
+      if (exactPaidWindow) {
+        selected = exactPaidWindow;
+        exact = true;
+      }
+    }
 
     for (const payment of selected) reservedPaymentIds.add(payment.id);
     synthesized.push(synthesizeDiagnostic(mutation, selected, exact));
