@@ -4684,6 +4684,8 @@ function QrisMutationCard({
     canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const allItems = audit.payment_items ?? [];
   const auditStatus = String(audit.status ?? "").toLowerCase();
+  const isLiveReviewSnapshot =
+    String(audit.candidate_source ?? "") === "live_qris_review_snapshot";
   const isReadOnlyReviewSnapshot = [
     "historical_qris_review_snapshot",
     "live_qris_review_snapshot",
@@ -4795,22 +4797,29 @@ function QrisMutationCard({
       ? auditExpectedNet ?? estimatedOriginalExpectedNet
       : null);
   const hasIdentifiedSettlement = originalExpectedNet != null;
-  const expectedNet = hasLiveScope && !isReadOnlyEvidence
-    ? (numericValue(audit.current_expected_amount)
-      ?? (snapshotGross > 0 && originalExpectedNet != null
-        ? candidateGross * originalExpectedNet / snapshotGross
-        : null))
-    : originalExpectedNet;
+  const liveDiagnosticExpectedNet = isLiveReviewSnapshot
+    ? (numericValue(audit.current_expected_amount) ?? numericValue(audit.net_amount))
+    : null;
+  const expectedNet = isLiveReviewSnapshot
+    ? liveDiagnosticExpectedNet
+    : hasLiveScope && !isReadOnlyEvidence
+      ? (numericValue(audit.current_expected_amount)
+        ?? (snapshotGross > 0 && originalExpectedNet != null
+          ? candidateGross * originalExpectedNet / snapshotGross
+          : null))
+      : originalExpectedNet;
   const canonicalMdr = canonicalSettlementDetails?.mdrAmount != null
     ? numericValue(canonicalSettlementDetails.mdrAmount)
     : null;
   const mdr = canonicalSettlementDetails?.mdrAmount != null
     ? canonicalMdr
-    : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
+    : isLiveReviewSnapshot && expectedNet != null
       ? Math.max(0, candidateGross - expectedNet)
-      : hasLiveSettlementProposal
-        ? auditObservedDeduction
-        : null;
+      : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
+        ? Math.max(0, candidateGross - expectedNet)
+        : hasLiveSettlementProposal
+          ? auditObservedDeduction
+          : null;
   const storedAmountComparison = audit.auto_post_details?.amountComparison;
   // The persisted auto-post diagnosis can describe an older candidate
   // snapshot. When the API has a complete live payment scope, render the
@@ -4993,7 +5002,7 @@ function QrisMutationCard({
               {[
                 { label: "Total Uang Masuk", value: idr(bankAmount), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Payment pada Snapshot" : "Payment Disetujui", value: isReadOnlyEvidence ? `${allItems.length} payment` : `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: isReadOnlyEvidence ? "text-amber-600" : "text-green-600" },
-                { label: isReadOnlyEvidence ? "Siap Di-approve" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
+                { label: isReadOnlyEvidence ? "Siap Dibuatkan Kandidat" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
                 { label: canonicalSettlementDetails?.mdrAmount != null ? "MDR Canonical" : `MDR (Estimasi${metricScopeLabel})`, value: mdr == null ? "Belum dapat dihitung" : idrWhole(mdr), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Gross Snapshot" : "Sisa Payment", value: `${idr(candidateGross)} · ${displayedPaymentCount} payment`, tone: "text-foreground" },
                 { label: canonicalSettlementDetails?.expectedAmount != null ? "Selisih Bank vs Netto Canonical" : differenceLabel, value: differenceAbs == null ? "Belum dapat dihitung" : idrWhole(differenceAbs), tone: differenceAbs != null && differenceAbs < 0.5 ? "text-green-600" : "text-red-600" },
@@ -5454,7 +5463,7 @@ function QrisMutationCard({
                   {qrisGenerationPending
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     : <RotateCcw className="h-3.5 w-3.5" />}
-                  {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
+                  {qrisGenerationPending ? "Menyiapkan..." : "Siapkan Kandidat Canonical"}
                 </Button>
               )}
               {onUnmatch && canUnmatch(m) && (
@@ -5585,7 +5594,7 @@ function QrisMutationCard({
                       {qrisGenerationPending
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         : <RotateCcw className="h-3.5 w-3.5" />}
-                      {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
+                      {qrisGenerationPending ? "Menyiapkan..." : "Siapkan Kandidat Canonical"}
                     </Button>
                   )}
                 </div>
@@ -9247,6 +9256,56 @@ export default function BankReconciliationPage() {
     }),
   });
 
+  const prepareQrisCanonicalMut = useMutation({
+    mutationFn: async (mutationId: number) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/qris-canonical/prepare`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw Object.assign(
+          new Error(body?.error ?? "Kandidat QRIS canonical gagal disiapkan"),
+          { code: body?.code },
+        );
+      }
+      return body as {
+        ok: boolean;
+        settlementId: number;
+        matchId: number;
+        paymentIds: number[];
+        grossAmount: number;
+        mdrAmount: number;
+        netAmount: number;
+        promotedJournalIds?: number[];
+      };
+    },
+    onSuccess: async (result, mutationId) => {
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      await qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      await qc.invalidateQueries({ queryKey: ["bank-reconciliation-ready-approval"] });
+      if (detailMutation?.id === mutationId) {
+        await refreshMutationDetail(mutationId);
+      }
+      toast({
+        title: "Kandidat QRIS canonical siap ✓",
+        description: `Batch #${result.settlementId} sudah diposting dan siap Tautkan & Approve Settlement.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Kandidat QRIS belum dapat disiapkan",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const approveQrisBatchMut = useMutation({
     mutationFn: async ({
       candidateId,
@@ -11116,8 +11175,10 @@ export default function BankReconciliationPage() {
                       ? (candidateId) => qrisRepairMut.mutate(candidateId)
                       : undefined
                   }
-          onGenerateQrisCandidates={undefined}
-                    qrisGenerationPending={qrisRepairMut.isPending}
+          onGenerateQrisCandidates={(mutationId) => {
+                    if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+                  }}
+                    qrisGenerationPending={prepareQrisCanonicalMut.isPending || qrisRepairMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -11404,7 +11465,9 @@ export default function BankReconciliationPage() {
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
             : undefined
         }
-        onGenerateQrisCandidates={undefined}
+        onGenerateQrisCandidates={(mutationId) => {
+          if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+        }}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });

@@ -65,6 +65,12 @@ describe("standalone BizPortal API boundary", () => {
       'router.get("/bank-reconciliation/qris-candidates"',
     );
     expect(bankReconciliationSource).toContain(
+      'router.post("/bank-reconciliation/:mutationId/qris-canonical/prepare"',
+    );
+    expect(bankReconciliationSource).toContain("live_qris_review_snapshot");
+    expect(bankReconciliationSource).toContain("sport_center.create_payment_settlement_batch");
+    expect(bankReconciliationSource).toContain("sport_center.finalize_payment_settlement");
+    expect(bankReconciliationSource).toContain(
       'router.post("/bank-reconciliation/qris-candidates/generate"',
     );
     expect(bankReconciliationSource).toContain(
