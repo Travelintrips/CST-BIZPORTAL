@@ -27,6 +27,7 @@ describe("QRIS historical review diagnostics", () => {
   it("binds canonical QRIS company and account filters as PostgreSQL parameters", () => {
     expect(routeSource).toMatch(/filters\.push\(`ebs\.company_id = \$\$\{values\.length\}`\)/);
     expect(routeSource).toMatch(/const accountPlaceholder = `\$\$\{values\.length\}`/);
+    expect(routeSource).toContain("where cba.id = ${accountPlaceholder}::int");
   });
   it("keeps historical snapshots read-only and outside canonical approval authority", () => {
     expect(diagnosticSource).toContain("public.qris_mutation_batch_candidates");

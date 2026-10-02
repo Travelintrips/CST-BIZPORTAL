@@ -5134,7 +5134,7 @@ async function listQrisCanonicalSettlements(
         and exists (
           select 1
             from public.company_bank_accounts cba
-           where cba.id = ${accountPlaceholder}
+           where cba.id = ${accountPlaceholder}::int
              and cba.company_id = ebs.company_id
              and coalesce(cba.is_active, true) = true
              and (
