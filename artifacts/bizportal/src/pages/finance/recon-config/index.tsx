@@ -780,7 +780,6 @@ function AiRulesTab() {
   const [creatingCoaLoading, setCreatingCoaLoading] = useState(false);
   const [quickCreateChild, setQuickCreateChild] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
-  const [parentSearch, setParentSearch] = useState("");
   const [newCoaForm, setNewCoaForm] = useState({
     code: "",
     name: "",
@@ -994,7 +993,6 @@ function AiRulesTab() {
     setCreatingCoa(false);
     setQuickCreateChild(false);
     setNewCoaRole("child");
-    setParentSearch("");
     setNewCoaForm({
       code: "",
       name: "",
@@ -1020,7 +1018,6 @@ function AiRulesTab() {
        tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
-    setParentSearch("");
     setPreview(null);
     setPreviewAmount("");
     setShowModal(true);
@@ -1070,17 +1067,12 @@ function AiRulesTab() {
       && (account.isHeader === true || account.isPostable === false)
       && account.type === newCoaForm.type,
     )
-    .filter((account) => {
-      const query = parentSearch.trim().toLowerCase();
-      return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
-    })
     .sort((a, b) => a.code.localeCompare(b.code));
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
     setQuickCreateChild(false);
     setNewCoaRole("child");
-    setParentSearch("");
     setNewCoaForm((current) => ({
       ...current,
       name: current.name || String(form.name ?? "").trim(),
@@ -1104,7 +1096,6 @@ function AiRulesTab() {
     setCreatingCoa(true);
     setQuickCreateChild(true);
     setNewCoaRole("child");
-    setParentSearch("");
     setNewCoaForm({
       code: nextSequentialChildCode(selected, coaAccounts),
       name: "",
@@ -1644,8 +1635,7 @@ function AiRulesTab() {
                           const role = value as "parent" | "child";
                           setNewCoaRole(role);
                           if (role === "parent") {
-                            setParentSearch("");
-                            setNewCoaForm((current) => ({ ...current, parentId: null }));
+                                                    setNewCoaForm((current) => ({ ...current, parentId: null }));
                           }
                         }}
                       >
@@ -1724,41 +1714,22 @@ function AiRulesTab() {
                             {coaAccounts.find((account) => account.id === newCoaForm.parentId)?.name ?? "Akun parent"}
                           </div>
                         ) : (
-                          <>
-                            <div className="relative">
-                              <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
-                              <Input
-                                value={parentSearch}
-                                onChange={(event) => setParentSearch(event.target.value)}
-                                placeholder="Cari parent berdasarkan kode atau nama..."
-                                className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
-                              />
-                            </div>
-                            <Select
-                              value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
-                              onValueChange={(value) => setNewCoaForm((current) => ({
-                                ...current,
-                                parentId: value === "__none" ? null : Number(value),
-                              }))}
-                            >
-                              <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
-                                <SelectValue placeholder="Pilih parent akun..." />
-                              </SelectTrigger>
-                              <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                                <SelectItem value="__none">Pilih parent akun...</SelectItem>
-                                {parentAccounts.map((account) => (
-                                  <SelectItem key={account.id} value={String(account.id)}>
-                                    {account.code} — {account.name}
-                                  </SelectItem>
-                                ))}
-                                {parentAccounts.length === 0 && (
-                                  <SelectItem value="__no_parent_results" disabled>
-                                    Parent tidak ditemukan
-                                  </SelectItem>
-                                )}
-                              </SelectContent>
-                            </Select>
-                          </>
+                          <CreatableCombobox
+                            value={newCoaForm.parentId ? String(newCoaForm.parentId) : ""}
+                            onChange={(value) => setNewCoaForm((current) => ({
+                              ...current,
+                              parentId: value ? Number(value) : null,
+                            }))}
+                            options={parentAccounts.map((account) => ({
+                              value: String(account.id),
+                              label: `${account.code} — ${account.name}`,
+                            }))}
+                            loading={creatingCoaLoading}
+                            placeholder="Pilih parent akun..."
+                            searchPlaceholder="Cari parent berdasarkan kode atau nama..."
+                            emptyText="Parent tidak ditemukan."
+                            disabled={creatingCoaLoading}
+                          />
                         )}
                         {creatingCoaLoading && (
                           <p className="flex items-center gap-1 text-[11px] text-slate-400">
@@ -1776,7 +1747,7 @@ function AiRulesTab() {
                     <Button
                       type="button"
                       onClick={createCoa}
-                      disabled={creatingCoaLoading || (newCoaRole === "child" && parentAccounts.length === 0)}
+                      disabled={creatingCoaLoading || (newCoaRole === "child" && !newCoaForm.parentId)}
                       className="w-full gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
                     >
                       {creatingCoaLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
