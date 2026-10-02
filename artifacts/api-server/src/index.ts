@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { runFleetAutoReminderSweep } from "./lib/fleet-wa-reminder";
+import { runQrisAutoCandidateSweep } from "./routes/bank-reconciliation";
 import {
   initializeProductionSessionSigning,
   isDevelopmentEnvironment,
@@ -51,12 +52,46 @@ const fleetReminderTimer = setInterval(() => {
 fleetReminderTimer.unref();
 setTimeout(() => void runFleetReminderTick(), 20_000).unref();
 
+let qrisAutoCandidateRunning = false;
+const runQrisAutoCandidateTick = async () => {
+  if (qrisAutoCandidateRunning) return;
+  qrisAutoCandidateRunning = true;
+  try {
+    const result = await runQrisAutoCandidateSweep();
+    if (
+      result.recoveredExistingSettlement > 0
+      || result.preparedFromLivePayments > 0
+      || result.ambiguousExistingSettlements > 0
+      || result.failed > 0
+    ) {
+      logger.info({ result }, "QRIS Sport Center auto-candidate sweep completed");
+    }
+  } catch (error) {
+    logger.error({ error }, "QRIS Sport Center auto-candidate sweep failed");
+  } finally {
+    qrisAutoCandidateRunning = false;
+  }
+};
+
+const qrisAutoCandidateIntervalMs = Math.max(
+  30_000,
+  Number(process.env["QRIS_AUTO_CANDIDATE_INTERVAL_MS"] ?? 60_000) || 60_000,
+);
+const qrisAutoCandidateTimer = setInterval(() => {
+  void runQrisAutoCandidateTick();
+}, qrisAutoCandidateIntervalMs);
+qrisAutoCandidateTimer.unref();
+setTimeout(() => void runQrisAutoCandidateTick(), 30_000).unref();
+
 server.on("error", (err) => {
   logger.error({ err, port, host }, "Error listening on host/port");
   process.exit(1);
 });
 
 
-const stopFleetReminder = () => clearInterval(fleetReminderTimer);
-process.once("SIGTERM", stopFleetReminder);
-process.once("SIGINT", stopFleetReminder);
+const stopBackgroundTimers = () => {
+  clearInterval(fleetReminderTimer);
+  clearInterval(qrisAutoCandidateTimer);
+};
+process.once("SIGTERM", stopBackgroundTimers);
+process.once("SIGINT", stopBackgroundTimers);
