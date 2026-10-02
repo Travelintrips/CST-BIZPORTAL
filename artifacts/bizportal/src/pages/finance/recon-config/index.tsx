@@ -1126,7 +1126,7 @@ function AiRulesTab() {
       const normalBalance = ["revenue", "liability", "equity"].includes(newCoaForm.type)
         ? "CREDIT"
         : "DEBIT";
-      const r = await fetch(`${API}/accounting/accounts`, {
+      const r = await fetch(`${API}/accounting/accounts?companyId=${activeCompanyId}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
