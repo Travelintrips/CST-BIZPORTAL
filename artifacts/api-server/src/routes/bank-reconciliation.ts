@@ -5325,7 +5325,15 @@ async function prepareCanonicalQrisSettlement(
       "select sport_center.finalize_payment_settlement($1,$2)",
       [settlementId, actor.email],
     );
-    batchResultAfter = await client.query(
+    batchResultAfter = await client.query<{
+      id: number;
+      status: string;
+      gross_amount: string;
+      mdr_amount: string;
+      net_amount: string;
+      settlement_journal_id: number | null;
+      bank_mutation_id: number | null;
+    }>(
       `select id, status::text, gross_amount::text, mdr_amount::text, net_amount::text,
               settlement_journal_id, bank_mutation_id
          from sport_center.payment_settlement_batches
