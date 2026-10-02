@@ -5515,6 +5515,7 @@ export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSwee
               bm.bank_reference, bm.provider_name, bm.uploaded_proof_url, bm.review_code
          from public.bank_mutations bm
         where upper(coalesce(bm.direction, '')) = 'IN'
+          and bm.company_id is not null
           and lower(coalesce(bm.status::text, '')) in
               ('unmatched', 'matched', 'manual_review', 'duplicate_need_review')
           and not exists (
@@ -6628,7 +6629,9 @@ router.post("/bank-reconciliation/sheet-configs/:id/sync", async (req, res): Pro
     return;
   }
   try {
-    res.json(await syncOneBankSheetConfig(id));
+    const syncResult = await syncOneBankSheetConfig(id);
+    const qrisAutoCandidates = await runQrisAutoCandidateSweep();
+    res.json({ ...syncResult, qrisAutoCandidates });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sheet sync gagal";
     req.log.error({ error, configId: id }, "Google Sheet sync failed");
@@ -6650,12 +6653,14 @@ router.post("/bank-reconciliation/sheet-sync", async (req, res): Promise<void> =
     const summaries = await syncAllBankSheetConfigs(companyId ?? undefined);
     const imported = summaries.reduce((sum, item) => sum + Number(item.imported ?? 0), 0);
     const failedConfigs = summaries.filter((item) => item.ok === false);
+    const qrisAutoCandidates = await runQrisAutoCandidateSweep();
     res.status(failedConfigs.length > 0 ? 207 : 200).json({
       ok: failedConfigs.length === 0,
       partial: failedConfigs.length > 0,
       imported,
       failed_configs: failedConfigs.length,
       configs: summaries,
+      qrisAutoCandidates,
       message: failedConfigs.length > 0
         ? `Sync parsial: ${imported} mutasi baru, ${failedConfigs.length} koneksi dilewati karena konfigurasi tidak valid`
         : `Sync dari Google Sheet selesai: ${imported} mutasi baru`,
