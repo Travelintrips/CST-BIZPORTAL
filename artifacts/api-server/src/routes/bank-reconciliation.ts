@@ -5524,6 +5524,14 @@ export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSwee
              where final_match.mutation_id = bm.id
                and lower(coalesce(final_match.status::text, '')) in ('approved', 'posted')
           )
+          and not exists (
+            select 1
+              from public.bank_reconciliation_matches current_qris
+             where current_qris.mutation_id = bm.id
+               and current_qris.candidate_type = 'qris_settlement'
+               and current_qris.candidate_source = 'sport_center.payment_settlement_batches'
+               and lower(coalesce(current_qris.status::text, '')) in ('candidate', 'approved', 'posted')
+          )
           and (
             upper(coalesce(bm.description, '')) like '%QRTRAVELI%'
             or upper(coalesce(bm.normalized_description, '')) like '%QRTRAVELI%'
@@ -5572,7 +5580,7 @@ export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSwee
                  where used_match.candidate_type = 'qris_settlement'
                    and used_match.candidate_id = psb.id
                    and used_match.candidate_source = 'sport_center.payment_settlement_batches'
-                   and lower(coalesce(used_match.status::text, '')) in ('approved', 'posted')
+                   and lower(coalesce(used_match.status::text, '')) in ('candidate', 'approved', 'posted')
               )
             order by psb.id`,
           [
