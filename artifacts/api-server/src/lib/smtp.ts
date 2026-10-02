@@ -133,7 +133,7 @@ function validateAddress(value: string): string {
   return match[1];
 }
 
-function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
+export function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
   return new Promise((resolve, reject) => {
     let buffer = "";
     let timer: NodeJS.Timeout | undefined;
