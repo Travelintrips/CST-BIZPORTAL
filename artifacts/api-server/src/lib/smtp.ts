@@ -86,6 +86,8 @@ export async function resolveSmtpConfig() {
     && (configuredUser || directFallbackAddress),
   );
 
+  const source = hasDirectCoreConfig ? "environment" : "managed-secret";
+
   if (!hasDirectCoreConfig) {
     const managed = await readManagedSmtpConfig();
     configuredHost ||= managed.SMTP_HOST;
@@ -121,7 +123,7 @@ export async function resolveSmtpConfig() {
     throw new SmtpError("SMTP sender address is invalid");
   }
 
-  return { host, port, user, password, from, envelopeFrom: addressMatch, secure };
+  return { host, port, user, password, from, envelopeFrom: addressMatch, secure, source };
 }
 
 function validateAddress(value: string): string {
@@ -131,10 +133,11 @@ function validateAddress(value: string): string {
   return match[1];
 }
 
-function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
+export function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
   return new Promise((resolve, reject) => {
     let buffer = "";
     let timer: NodeJS.Timeout | undefined;
+    const responseLines: string[] = [];
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -156,9 +159,11 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
       for (const line of lines) {
         const match = line.match(/^(\d{3})([ -])(.*)$/);
         if (!match) continue;
+        responseLines.push(line);
         if (match[2] === " ") {
           const code = Number(match[1]);
-          finish(() => resolve({ code, text: line }));
+          const text = responseLines.join("\n");
+          finish(() => resolve({ code, text }));
           return;
         }
       }
