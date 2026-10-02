@@ -137,6 +137,7 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
   return new Promise((resolve, reject) => {
     let buffer = "";
     let timer: NodeJS.Timeout | undefined;
+    const responseLines: string[] = [];
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -158,9 +159,11 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
       for (const line of lines) {
         const match = line.match(/^(\d{3})([ -])(.*)$/);
         if (!match) continue;
+        responseLines.push(line);
         if (match[2] === " ") {
           const code = Number(match[1]);
-          finish(() => resolve({ code, text: line }));
+          const text = responseLines.join("\n");
+          finish(() => resolve({ code, text }));
           return;
         }
       }
