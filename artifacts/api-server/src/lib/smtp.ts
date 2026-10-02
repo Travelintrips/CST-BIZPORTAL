@@ -86,6 +86,8 @@ export async function resolveSmtpConfig() {
     && (configuredUser || directFallbackAddress),
   );
 
+  const source = hasDirectCoreConfig ? "environment" : "managed-secret";
+
   if (!hasDirectCoreConfig) {
     const managed = await readManagedSmtpConfig();
     configuredHost ||= managed.SMTP_HOST;
@@ -121,7 +123,7 @@ export async function resolveSmtpConfig() {
     throw new SmtpError("SMTP sender address is invalid");
   }
 
-  return { host, port, user, password, from, envelopeFrom: addressMatch, secure };
+  return { host, port, user, password, from, envelopeFrom: addressMatch, secure, source };
 }
 
 function validateAddress(value: string): string {
