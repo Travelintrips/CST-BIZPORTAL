@@ -189,7 +189,7 @@ function hasQrisBankEvidenceForAutoPost(mutation: MatchingMutation): boolean {
 }
 
 async function getApprovalActor(request: Request): Promise<ApprovalActor | null> {
-  const allowedRoles = new Set(["admin", "owner", "finance", "accounting"]);
+  const allowedRoles = new Set(["admin", "owner", "finance", "accounting", "accountant", "super_admin"]);
 
   if (isDevelopmentEnvironment()) {
     const user = getDevSession(request);
