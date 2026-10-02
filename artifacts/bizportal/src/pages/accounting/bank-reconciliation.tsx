@@ -4993,7 +4993,7 @@ function QrisMutationCard({
               {[
                 { label: "Total Uang Masuk", value: idr(bankAmount), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Payment pada Snapshot" : "Payment Disetujui", value: isReadOnlyEvidence ? `${allItems.length} payment` : `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: isReadOnlyEvidence ? "text-amber-600" : "text-green-600" },
-                { label: isReadOnlyEvidence ? "Siap Di-approve" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
+                { label: isReadOnlyEvidence ? "Siap Dibuatkan Kandidat" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
                 { label: canonicalSettlementDetails?.mdrAmount != null ? "MDR Canonical" : `MDR (Estimasi${metricScopeLabel})`, value: mdr == null ? "Belum dapat dihitung" : idrWhole(mdr), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Gross Snapshot" : "Sisa Payment", value: `${idr(candidateGross)} · ${displayedPaymentCount} payment`, tone: "text-foreground" },
                 { label: canonicalSettlementDetails?.expectedAmount != null ? "Selisih Bank vs Netto Canonical" : differenceLabel, value: differenceAbs == null ? "Belum dapat dihitung" : idrWhole(differenceAbs), tone: differenceAbs != null && differenceAbs < 0.5 ? "text-green-600" : "text-red-600" },
@@ -5454,7 +5454,7 @@ function QrisMutationCard({
                   {qrisGenerationPending
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     : <RotateCcw className="h-3.5 w-3.5" />}
-                  {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
+                  {qrisGenerationPending ? "Menyiapkan..." : "Siapkan Kandidat Canonical"}
                 </Button>
               )}
               {onUnmatch && canUnmatch(m) && (
@@ -5585,7 +5585,7 @@ function QrisMutationCard({
                       {qrisGenerationPending
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         : <RotateCcw className="h-3.5 w-3.5" />}
-                      {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
+                      {qrisGenerationPending ? "Menyiapkan..." : "Siapkan Kandidat Canonical"}
                     </Button>
                   )}
                 </div>
