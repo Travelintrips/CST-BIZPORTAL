@@ -5089,26 +5089,26 @@ async function prepareCanonicalQrisSettlement(
     mutationIds: [mutationId],
     limit: 50,
   });
-  const live = diagnostics.find((candidate) => {
+  const exactEvidence = diagnostics.find((candidate) => {
     const source = String(candidate.candidate_source ?? "");
     const difference = Number(candidate.diagnostic_amount_difference);
     const ids = Array.isArray(candidate.current_payment_ids) ? candidate.current_payment_ids : [];
-    return source === "live_qris_review_snapshot"
+    return ["live_qris_review_snapshot", "historical_qris_review_snapshot"].includes(source)
       && candidate.diagnostic_date_match === true
       && Number.isFinite(difference)
       && Math.abs(difference) < 0.5
       && ids.length > 0;
   });
-  if (!live) {
+  if (!exactEvidence) {
     throw new ApprovalError(
-      "Belum ada bukti QRIS live dengan tanggal dan netto yang tepat sama dengan mutasi bank.",
+      "Belum ada bukti QRIS dengan tanggal dan netto yang tepat sama dengan mutasi bank.",
       409,
-      "QRIS_LIVE_EXACT_CANDIDATE_REQUIRED",
+      "QRIS_EXACT_CANDIDATE_REQUIRED",
     );
   }
 
   const paymentIds = [...new Set(
-    (Array.isArray(live.current_payment_ids) ? live.current_payment_ids : [])
+    (Array.isArray(exactEvidence.current_payment_ids) ? exactEvidence.current_payment_ids : [])
       .map(Number)
       .filter((id) => Number.isSafeInteger(id) && id > 0),
   )];
