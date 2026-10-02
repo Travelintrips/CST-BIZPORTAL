@@ -5472,6 +5472,217 @@ async function prepareCanonicalQrisSettlement(
   };
 }
 
+
+export interface QrisAutoCandidateSweepResult {
+  skipped: boolean;
+  scanned: number;
+  recoveredExistingSettlement: number;
+  preparedFromLivePayments: number;
+  ambiguousExistingSettlements: number;
+  noExactCandidate: number;
+  failed: number;
+}
+
+export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSweepResult> {
+  const summary: QrisAutoCandidateSweepResult = {
+    skipped: false,
+    scanned: 0,
+    recoveredExistingSettlement: 0,
+    preparedFromLivePayments: 0,
+    ambiguousExistingSettlements: 0,
+    noExactCandidate: 0,
+    failed: 0,
+  };
+
+  const client = await pool.connect();
+  let lockAcquired = false;
+  try {
+    const lock = await client.query<{ acquired: boolean }>(
+      "select pg_try_advisory_lock(hashtext($1)) as acquired",
+      ["bizportal:qris-auto-candidate-sweep"],
+    );
+    lockAcquired = lock.rows[0]?.acquired === true;
+    if (!lockAcquired) {
+      summary.skipped = true;
+      return summary;
+    }
+
+    const openMutations = await client.query<MatchingMutation>(
+      `select bm.id, bm.amount::text as amount, bm.direction,
+              bm.transaction_date::text as transaction_date,
+              bm.description, bm.normalized_description, bm.provider_order_id,
+              bm.company_id, bm.status::text as status, bm.bank_account_id::text,
+              bm.bank_reference, bm.provider_name, bm.uploaded_proof_url, bm.review_code
+         from public.bank_mutations bm
+        where upper(coalesce(bm.direction, '')) = 'IN'
+          and lower(coalesce(bm.status::text, '')) in
+              ('unmatched', 'matched', 'manual_review', 'duplicate_need_review')
+          and not exists (
+            select 1
+              from public.bank_reconciliation_matches final_match
+             where final_match.mutation_id = bm.id
+               and lower(coalesce(final_match.status::text, '')) in ('approved', 'posted')
+          )
+          and (
+            upper(coalesce(bm.description, '')) like '%QRTRAVELI%'
+            or upper(coalesce(bm.normalized_description, '')) like '%QRTRAVELI%'
+            or upper(coalesce(bm.provider_name, '')) like '%QRIS%'
+            or upper(coalesce(bm.description, '')) like '%QRIS%'
+          )
+        order by bm.transaction_date desc, bm.id
+        limit 100`,
+    );
+
+    for (const mutation of openMutations.rows) {
+      summary.scanned += 1;
+      const actor: ApprovalActor = {
+        email: "system:qris-auto-candidate",
+        companyId: mutation.company_id,
+      };
+
+      try {
+        await client.query("begin");
+        const exactSettlements = await client.query<{ id: number }>(
+          `select psb.id::integer as id
+             from sport_center.payment_settlement_batches psb
+             join public.company_bank_accounts cba
+               on cba.company_id = psb.company_id
+              and cba.is_active = true
+              and cba.account_number::text = psb.bank_account_id::text
+             join sport_center.accounting_journals sj
+               on sj.id = psb.settlement_journal_id
+              and sj.status::text = 'posted'
+              and sj.journal_type = 'settlement'
+              and sj.is_reversal = false
+            where psb.company_id = $1
+              and psb.status::text = 'posted'
+              and psb.bank_mutation_id is null
+              and psb.canonical_bank_mutation_id is null
+              and abs(psb.net_amount::numeric - $2::numeric) < 0.01
+              and psb.settlement_date = $3::date
+              and (
+                $4::text is null
+                or cba.id::text = $4::text
+                or cba.account_number::text = $4::text
+              )
+              and not exists (
+                select 1
+                  from public.bank_reconciliation_matches used_match
+                 where used_match.candidate_type = 'qris_settlement'
+                   and used_match.candidate_id = psb.id
+                   and used_match.candidate_source = 'sport_center.payment_settlement_batches'
+                   and lower(coalesce(used_match.status::text, '')) in ('approved', 'posted')
+              )
+            order by psb.id`,
+          [
+            mutation.company_id,
+            mutation.amount,
+            mutation.transaction_date,
+            mutation.bank_account_id,
+          ],
+        );
+
+        if (exactSettlements.rows.length > 0) {
+          for (const settlement of exactSettlements.rows) {
+            await client.query(
+              `insert into public.bank_reconciliation_matches
+                (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+                 amount_match, date_match, name_match, order_id_match, proof_match,
+                 status, candidate_source)
+               select $1, 'qris_settlement', $2, 100,
+                      'QRIS canonical exact: kandidat otomatis dari booking/payment Sport Center; netto dan tanggal settlement sama dengan mutasi bank.',
+                      true, true, false, false, false,
+                      'candidate', 'sport_center.payment_settlement_batches'
+               where not exists (
+                 select 1
+                   from public.bank_reconciliation_matches current_match
+                  where current_match.mutation_id = $1
+                    and current_match.candidate_type = 'qris_settlement'
+                    and current_match.candidate_id = $2
+                    and current_match.candidate_source = 'sport_center.payment_settlement_batches'
+                    and lower(coalesce(current_match.status::text, '')) in ('candidate', 'approved', 'posted')
+               )`,
+              [mutation.id, settlement.id],
+            );
+          }
+
+          const ambiguous = exactSettlements.rows.length > 1;
+          await client.query(
+            `update public.bank_mutations
+                set status = $1,
+                    reconciliation_status = $1,
+                    review_code = $2,
+                    review_reason = $3,
+                    updated_at = now()
+              where id = $4
+                and lower(coalesce(status::text, '')) not in
+                    ('approved_pending_posting', 'approved', 'posted', 'void', 'rejected')`,
+            [
+              ambiguous ? "manual_review" : "matched",
+              ambiguous ? "QRIS_CANONICAL_MULTIPLE_EXACT" : "QRIS_CANONICAL_AUTO_CANDIDATE",
+              ambiguous
+                ? "Lebih dari satu settlement QRIS canonical exact ditemukan. Pilih settlement yang sesuai sebelum approve."
+                : "Kandidat QRIS canonical otomatis tersedia dari booking/payment Sport Center.",
+              mutation.id,
+            ],
+          );
+          await client.query(
+            `insert into public.bank_reconciliation_audit(mutation_id, action, actor, meta)
+             values ($1, $2, $3, $4::jsonb)`,
+            [
+              mutation.id,
+              ambiguous ? "QRIS_CANONICAL_AUTO_AMBIGUOUS" : "QRIS_CANONICAL_AUTO_CANDIDATE",
+              actor.email,
+              JSON.stringify({
+                settlement_ids: exactSettlements.rows.map((row) => row.id),
+                source: "sport_center.payment_settlement_batches",
+                exact_amount: true,
+                exact_date: true,
+              }),
+            ],
+          );
+          await client.query("commit");
+          if (ambiguous) summary.ambiguousExistingSettlements += 1;
+          else summary.recoveredExistingSettlement += 1;
+          continue;
+        }
+        await client.query("rollback");
+      } catch {
+        await client.query("rollback").catch(() => {});
+        summary.failed += 1;
+        continue;
+      }
+
+      try {
+        await client.query("begin");
+        await prepareCanonicalQrisSettlement(client, mutation.id, actor);
+        await client.query("commit");
+        summary.preparedFromLivePayments += 1;
+      } catch (error) {
+        await client.query("rollback").catch(() => {});
+        if (
+          error instanceof ApprovalError
+          && error.code === "QRIS_EXACT_CANDIDATE_REQUIRED"
+        ) {
+          summary.noExactCandidate += 1;
+        } else {
+          summary.failed += 1;
+        }
+      }
+    }
+
+    return summary;
+  } finally {
+    if (lockAcquired) {
+      await client.query(
+        "select pg_advisory_unlock(hashtext($1))",
+        ["bizportal:qris-auto-candidate-sweep"],
+      ).catch(() => {});
+    }
+    client.release();
+  }
+}
+
 router.post("/bank-reconciliation/:mutationId/qris-canonical/prepare", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
   if (mutationId === null) {
@@ -5884,7 +6095,7 @@ router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<voi
     res.json({
       mode: "canonical_qris_settlement",
       automaticFinalReconciliation: false,
-      automaticMatch: false,
+      automaticMatch: true,
       canonicalSettlements,
       // Historical snapshots are read-only diagnostics. They let operators
       // inspect candidate payment evidence without reviving the retired
