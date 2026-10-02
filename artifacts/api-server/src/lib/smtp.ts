@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { getDatabaseSecretName, readSecret } from "@workspace/db";
 
 type SmtpSocket = net.Socket | tls.TLSSocket;
 
@@ -10,16 +11,92 @@ class SmtpError extends Error {
   }
 }
 
-function readConfig() {
-  const configuredHost = process.env.SMTP_HOST?.trim();
-  const configuredPort = process.env.SMTP_PORT?.trim();
-  const configuredUser = process.env.SMTP_USER?.trim();
-  const password = (process.env.SMTP_PASS ?? process.env.SMTP_PASSWORD)?.trim();
-  const configuredFrom = process.env.SMTP_FROM?.trim();
+let managedSmtpConfigPromise: Promise<Record<string, string>> | null = null;
 
-  const fromAddressMatch = configuredFrom?.match(/<([^<>@\s]+@[^<>@\s]+)>/)
-    ?? configuredFrom?.match(/^([^<>@\s]+@[^<>@\s]+)$/);
-  const fallbackAddress = fromAddressMatch?.[1];
+function isProductionRuntime(): boolean {
+  const environment = (process.env.APP_ENV ?? process.env.NODE_ENV ?? "development")
+    .trim()
+    .toLowerCase();
+  return environment === "production";
+}
+
+function extractMailboxAddress(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]
+    ?? value.match(/^([^<>@\s]+@[^<>@\s]+)$/)?.[1];
+}
+
+async function readManagedSmtpConfig(): Promise<Record<string, string>> {
+  if (!managedSmtpConfigPromise) {
+    managedSmtpConfigPromise = (async () => {
+      let raw: string;
+      try {
+        raw = await readSecret(getDatabaseSecretName(isProductionRuntime()));
+      } catch {
+        throw new SmtpError("Managed SMTP configuration is unavailable");
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch {
+        throw new SmtpError("Managed SMTP configuration is invalid");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new SmtpError("Managed SMTP configuration is invalid");
+      }
+
+      const source = parsed as Record<string, unknown>;
+      const resolved: Record<string, string> = {};
+      for (const key of [
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "SMTP_PASSWORD",
+        "SMTP_FROM",
+        "SMTP_SECURE",
+      ]) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim()) {
+          resolved[key] = value.trim();
+        }
+      }
+      return resolved;
+    })().catch((error) => {
+      managedSmtpConfigPromise = null;
+      throw error;
+    });
+  }
+  return managedSmtpConfigPromise;
+}
+
+export async function resolveSmtpConfig() {
+  let configuredHost = process.env.SMTP_HOST?.trim();
+  let configuredPort = process.env.SMTP_PORT?.trim();
+  let configuredUser = process.env.SMTP_USER?.trim();
+  let password = (process.env.SMTP_PASS ?? process.env.SMTP_PASSWORD)?.trim();
+  let configuredFrom = process.env.SMTP_FROM?.trim();
+  let configuredSecure = process.env.SMTP_SECURE?.trim();
+
+  const directFallbackAddress = extractMailboxAddress(configuredFrom);
+  const hasDirectCoreConfig = Boolean(
+    configuredFrom
+    && password
+    && (configuredUser || directFallbackAddress),
+  );
+
+  if (!hasDirectCoreConfig) {
+    const managed = await readManagedSmtpConfig();
+    configuredHost ||= managed.SMTP_HOST;
+    configuredPort ||= managed.SMTP_PORT;
+    configuredUser ||= managed.SMTP_USER;
+    password ||= managed.SMTP_PASS || managed.SMTP_PASSWORD;
+    configuredFrom ||= managed.SMTP_FROM;
+    configuredSecure ||= managed.SMTP_SECURE;
+  }
+
+  const fallbackAddress = extractMailboxAddress(configuredFrom);
 
   // The standalone Hostinger deployment historically only required
   // SMTP_FROM + SMTP_PASS. Preserve that deployment contract while still
@@ -29,7 +106,7 @@ function readConfig() {
   const port = Number(portValue);
   const user = configuredUser || fallbackAddress;
   const from = configuredFrom || user;
-  const secure = process.env.SMTP_SECURE?.trim().toLowerCase() === "true" || port === 465;
+  const secure = configuredSecure?.toLowerCase() === "true" || port === 465;
 
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !user || !password || !from) {
     throw new SmtpError("SMTP email configuration is incomplete");
@@ -39,12 +116,12 @@ function readConfig() {
     throw new SmtpError("SMTP sender configuration is invalid");
   }
 
-  const addressMatch = from.match(/<([^<>@\s]+@[^<>@\s]+)>/) ?? from.match(/^([^<>@\s]+@[^<>@\s]+)$/);
-  if (!addressMatch?.[1]) {
+  const addressMatch = extractMailboxAddress(from);
+  if (!addressMatch) {
     throw new SmtpError("SMTP sender address is invalid");
   }
 
-  return { host, port, user, password, from, envelopeFrom: addressMatch[1], secure };
+  return { host, port, user, password, from, envelopeFrom: addressMatch, secure };
 }
 
 function validateAddress(value: string): string {
@@ -143,7 +220,7 @@ function dotStuff(value: string): string {
 }
 
 export async function sendAdminLoginOtpEmail(recipient: string, code: string): Promise<void> {
-  const config = readConfig();
+  const config = await resolveSmtpConfig();
   const safeRecipient = validateAddress(recipient);
   if (!/^\d{6}$/.test(code)) throw new SmtpError("OTP format is invalid");
 
