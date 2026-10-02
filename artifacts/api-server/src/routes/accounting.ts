@@ -436,6 +436,170 @@ router.get("/accounting/accounts", async (req, res): Promise<void> => {
   }
 });
 
+router.post("/accounting/accounts", async (req, res): Promise<void> => {
+  try {
+    const body = req.body && typeof req.body === "object"
+      ? req.body as Record<string, unknown>
+      : {};
+    const sessionCompanyId = (req as AccountingRequest).accountingUser?.companyId ?? null;
+    const requestedBodyCompanyId = Number(body.companyId ?? body.company_id ?? 0);
+    const companyId = sessionCompanyId ?? (
+      Number.isInteger(requestedBodyCompanyId) && requestedBodyCompanyId > 0
+        ? requestedBodyCompanyId
+        : null
+    );
+
+    if (!companyId) {
+      res.status(400).json({ message: "companyId wajib" });
+      return;
+    }
+    if (
+      sessionCompanyId !== null
+      && Number.isInteger(requestedBodyCompanyId)
+      && requestedBodyCompanyId > 0
+      && requestedBodyCompanyId !== sessionCompanyId
+    ) {
+      res.status(403).json({ message: "Perusahaan tidak sesuai dengan sesi aktif" });
+      return;
+    }
+
+    const code = typeof body.code === "string" ? body.code.trim() : "";
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const type = typeof body.type === "string" ? body.type.trim().toLowerCase() : "";
+    const parentId = body.parentId == null || body.parentId === ""
+      ? null
+      : Number(body.parentId);
+    const isHeader = Boolean(body.isHeader ?? false);
+    const isPostable = isHeader ? false : Boolean(body.isPostable ?? true);
+
+    if (!code || !name || !type) {
+      res.status(400).json({ message: "code, name, type required" });
+      return;
+    }
+    if (!["asset", "liability", "equity", "revenue", "expense"].includes(type)) {
+      res.status(400).json({ message: "Invalid type" });
+      return;
+    }
+    if (isHeader && isPostable) {
+      res.status(422).json({ message: "Akun header tidak boleh postable" });
+      return;
+    }
+    if (parentId !== null && (!Number.isInteger(parentId) || parentId <= 0)) {
+      res.status(400).json({ message: "parentId tidak valid" });
+      return;
+    }
+
+    const duplicate = await pool.query<{ id: number }>(
+      `select id
+         from public.chart_of_accounts
+        where code = $1
+          and (company_id = $2 or company_id is null)
+        limit 1`,
+      [code, companyId],
+    );
+    if (duplicate.rowCount) {
+      res.status(409).json({ message: `Kode COA ${code} sudah digunakan` });
+      return;
+    }
+
+    if (parentId !== null) {
+      const parent = await pool.query<{
+        id: number;
+        type: string;
+        is_header: boolean | null;
+        is_postable: boolean | null;
+      }>(
+        `select id,
+                coalesce(account_type, type::text) as type,
+                is_header,
+                is_postable
+           from public.chart_of_accounts
+          where id = $1
+            and coalesce(is_active, true) = true
+            and (company_id = $2 or company_id is null)
+          limit 1`,
+        [parentId, companyId],
+      );
+      const parentRow = parent.rows[0];
+      if (!parentRow) {
+        res.status(422).json({ message: "Parent akun tidak ditemukan atau tidak aktif" });
+        return;
+      }
+      if (parentRow.is_header !== true && parentRow.is_postable !== false) {
+        res.status(422).json({ message: "Parent akun harus berupa akun header/non-postable" });
+        return;
+      }
+      if (String(parentRow.type).toLowerCase() !== type) {
+        res.status(422).json({ message: "Kelompok akun child harus sama dengan parent" });
+        return;
+      }
+    }
+
+    const normalBalance = ["liability", "equity", "revenue"].includes(type) ? "CREDIT" : "DEBIT";
+    const accountCategory = type.toUpperCase();
+    const actor = (req as AccountingRequest).accountingUser?.email ?? "bizportal";
+
+    const created = await pool.query<{
+      id: number;
+      company_id: number | null;
+      code: string;
+      name: string;
+      type: string;
+      normal_balance: string;
+      parent_id: number | null;
+      is_active: boolean;
+      is_postable: boolean;
+      is_header: boolean;
+      created_at: Date;
+    }>(
+      `insert into public.chart_of_accounts (
+         company_id, code, name, type, account_type, parent_id, is_active,
+         account_category, normal_balance, is_postable, is_header,
+         status, created_by, updated_by
+       )
+       values (
+         $1, $2, $3, $4::account_type, $4, $5, true,
+         $6, $7, $8, $9,
+         'ACTIVE', $10, $10
+       )
+       returning
+         id, company_id, code, name,
+         coalesce(account_type, type::text) as type,
+         normal_balance, parent_id, is_active, is_postable, is_header, created_at`,
+      [
+        companyId,
+        code,
+        name,
+        type,
+        parentId,
+        accountCategory,
+        normalBalance,
+        isPostable,
+        isHeader,
+        actor,
+      ],
+    );
+
+    const row = created.rows[0];
+    res.status(201).json({
+      id: row.id,
+      companyId: row.company_id,
+      code: row.code,
+      name: row.name,
+      type: row.type,
+      normalBalance: row.normal_balance,
+      parentId: row.parent_id,
+      isActive: row.is_active,
+      isPostable: row.is_postable,
+      isHeader: row.is_header,
+      createdAt: row.created_at,
+    });
+  } catch (error) {
+    req.log.error({ error }, "Failed to create chart of account");
+    res.status(503).json({ message: "COA baru tidak dapat dibuat" });
+  }
+});
+
 router.get("/accounting/journals", async (req, res): Promise<void> => {
   try {
     const companyId = requestedCompanyId(req);
