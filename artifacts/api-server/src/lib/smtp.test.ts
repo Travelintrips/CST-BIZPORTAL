@@ -62,5 +62,17 @@ describe("resolveSmtpConfig", () => {
     expect(config.secure).toBe(true);
     expect(config.user).toBe("noreply@cstlogistic.co.id");
     expect(config.envelopeFrom).toBe("noreply@cstlogistic.co.id");
+    expect(config.source).toBe("managed-secret");
+  });
+
+  it("reports environment when SMTP variables are injected directly", async () => {
+    process.env.SMTP_FROM = "noreply@cstlogistic.co.id";
+    process.env.SMTP_USER = "noreply@cstlogistic.co.id";
+    process.env.SMTP_PASS = "test-only-password";
+
+    const config = await resolveSmtpConfig();
+
+    expect(dbMocks.readSecret).not.toHaveBeenCalled();
+    expect(config.source).toBe("environment");
   });
 });
