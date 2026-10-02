@@ -4960,11 +4960,11 @@ async function listQrisCanonicalSettlements(
   const filters = ["ebs.settlement_status in ('posted', 'reconciled')"];
   if (companyId !== null) {
     values.push(companyId);
-    filters.push(`ebs.company_id = ${values.length}`);
+    filters.push(`ebs.company_id = $${values.length}`);
   }
   if (bankAccountId !== null) {
     values.push(bankAccountId);
-    const accountPlaceholder = `${values.length}`;
+    const accountPlaceholder = `$${values.length}`;
     filters.push(`(
       (bm.bank_account_id is not null and bm.bank_account_id::text = ${accountPlaceholder}::text)
       or (
