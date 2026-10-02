@@ -2571,7 +2571,7 @@ export default function SettingsPage() {
     }
   };
 
-  const isAdmin = dbUser?.role === "admin";
+  const isAdmin = dbUser?.role === "admin" || dbUser?.role === "owner";
 
   return (
     <AppShell>
