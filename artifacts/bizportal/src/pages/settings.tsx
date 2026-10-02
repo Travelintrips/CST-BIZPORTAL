@@ -2571,7 +2571,8 @@ export default function SettingsPage() {
     }
   };
 
-  const isAdmin = dbUser?.role === "admin";
+  const currentRole = String(dbUser?.role ?? "").trim().toLowerCase();
+  const isAdmin = currentRole === "admin" || currentRole === "owner";
 
   return (
     <AppShell>
