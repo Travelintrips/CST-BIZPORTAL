@@ -135,6 +135,8 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
   return new Promise((resolve, reject) => {
     let buffer = "";
     let timer: NodeJS.Timeout | undefined;
+    const responseLines: string[] = [];
+    let responseCode: number | null = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -156,9 +158,20 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
       for (const line of lines) {
         const match = line.match(/^(\d{3})([ -])(.*)$/);
         if (!match) continue;
+
+        const code = Number(match[1]);
+        if (responseCode === null) responseCode = code;
+        if (code !== responseCode) {
+          responseLines.length = 0;
+          responseCode = code;
+        }
+        responseLines.push(line);
+
         if (match[2] === " ") {
-          const code = Number(match[1]);
-          finish(() => resolve({ code, text: line }));
+          finish(() => resolve({
+            code,
+            text: responseLines.join("\n"),
+          }));
           return;
         }
       }
@@ -175,8 +188,9 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
 }
 
 async function command(socket: SmtpSocket, value: string, expected: number | number[]): Promise<string> {
+  const responsePromise = waitForResponse(socket);
   socket.write(`${value}\r\n`);
-  const response = await waitForResponse(socket);
+  const response = await responsePromise;
   const accepted = Array.isArray(expected) ? expected.includes(response.code) : response.code === expected;
   if (!accepted) throw new SmtpError(`SMTP command rejected (${response.code})`);
   return response.text;
@@ -273,8 +287,9 @@ export async function sendAdminLoginOtpEmail(recipient: string, code: string): P
       "",
       "Jika Anda tidak meminta kode ini, abaikan email ini.",
     ].join("\r\n");
+    const deliveryResponse = waitForResponse(socket);
     socket.write(`${dotStuff(message)}\r\n.\r\n`);
-    await waitForResponse(socket).then((response) => {
+    await deliveryResponse.then((response) => {
       if (response.code !== 250) throw new SmtpError(`SMTP message rejected (${response.code})`);
     });
     await command(socket, "QUIT", 221).catch(() => undefined);
