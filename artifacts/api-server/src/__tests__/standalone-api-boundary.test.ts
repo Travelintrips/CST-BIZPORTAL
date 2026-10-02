@@ -46,6 +46,38 @@ describe("standalone BizPortal API boundary", () => {
     expect(purchaseWorkflowSource).not.toContain("req.originalUrl");
   });
 
+  it("keeps Sport Center QRIS candidate discovery automatic but approval manual", () => {
+    const bankReconciliationSource = readFileSync(
+      new URL("../routes/bank-reconciliation.ts", import.meta.url),
+      "utf8",
+    );
+    const indexSource = readFileSync(
+      new URL("../index.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(bankReconciliationSource).toContain(
+      "export async function runQrisAutoCandidateSweep",
+    );
+    expect(bankReconciliationSource).toContain("pg_try_advisory_lock");
+    expect(bankReconciliationSource).toContain(
+      "sport_center.payment_settlement_batches",
+    );
+    expect(bankReconciliationSource).toContain(
+      "await prepareCanonicalQrisSettlement(client, mutation.id, actor)",
+    );
+    expect(bankReconciliationSource).toContain("automaticMatch: true");
+    expect(bankReconciliationSource).toContain("automaticFinalReconciliation: false");
+    expect(bankReconciliationSource).toContain("QRIS_EXACT_CANDIDATE_REQUIRED");
+    expect(bankReconciliationSource).toContain("QRIS_CANONICAL_MULTIPLE_EXACT");
+    expect(bankReconciliationSource).toContain(
+      "lower(coalesce(final_match.status::text, '')) in ('approved', 'posted')",
+    );
+    expect(indexSource).toContain("runQrisAutoCandidateSweep");
+    expect(indexSource).toContain("qrisAutoCandidateTimer");
+    expect(indexSource).toContain("60_000");
+  });
+
   it("implements local bank reconciliation approval with an atomic journal transaction", () => {
     const bankReconciliationSource = readFileSync(
       new URL("../routes/bank-reconciliation.ts", import.meta.url),
