@@ -5240,20 +5240,6 @@ async function prepareCanonicalQrisSettlement(
     );
   }
 
-  if (promotedJournalIds.length > 0) {
-    await client.query(
-      `update sport_center.payment_accounting_outbox
-          set status = 'posted',
-              processed_at = coalesce(processed_at, now()),
-              last_error = null,
-              updated_at = now()
-        where payment_id = any($1::int[])
-          and event_type = 'payment_confirmed'
-          and status <> 'posted'`,
-      [paymentIds],
-    );
-  }
-
   const batchResult = await client.query<{ id: number }>(
     `select sport_center.create_payment_settlement_batch(
        $1,$2,$3,$4,$5::date,$6::integer[],$7
