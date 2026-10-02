@@ -8723,10 +8723,20 @@ export default function BankReconciliationPage() {
     while (Date.now() < deadline) {
       const response = await fetch("/api/bank-reconciliation/run-matching/status", {
         credentials: "include",
+        cache: "no-store",
       });
       if (!response.ok) throw new Error("Status matching tidak dapat dibaca");
-      const status = await response.json() as { running?: boolean };
-      if (!status.running) return;
+      const status = await response.json() as {
+        running?: boolean;
+        status?: "idle" | "running" | "completed" | "failed";
+        error?: string | null;
+      };
+      if (!status.running) {
+        if (status.status === "failed") {
+          throw new Error(status.error || "AI Matching background gagal dijalankan.");
+        }
+        return;
+      }
       await new Promise(resolve => window.setTimeout(resolve, 1000));
     }
     throw new Error("Matching belum selesai setelah 5 menit. Periksa status lalu coba lagi.");
