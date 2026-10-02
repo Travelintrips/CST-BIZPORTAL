@@ -14,6 +14,8 @@ describe("admin email OTP SMTP contract", () => {
 
   it("logs delivery failures before invalidating the OTP record", () => {
     expect(authSource).toContain('request.log.error({ error, email }, "Admin email OTP delivery failed")');
+    expect(authSource).toContain("email_otp_delivery_failed");
+    expect(authSource).toContain("errorMessage");
     expect(authSource).toContain("delete from public.bizportal_email_otp_codes");
   });
 });
