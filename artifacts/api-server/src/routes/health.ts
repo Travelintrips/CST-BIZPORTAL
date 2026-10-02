@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { getRuntimeDatabaseUrl, pool } from "@workspace/db";
+import { resolveSmtpConfig } from "../lib/smtp";
 import {
   initializeProductionSessionSigning,
   isDevelopmentEnvironment,
@@ -15,6 +16,22 @@ router.get("/health/live", (_req, res) => {
 router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
   res.json(data);
+});
+
+router.get("/health/smtp", async (_req, res) => {
+  try {
+    const config = await resolveSmtpConfig();
+    res.json({
+      status: "ok",
+      ready: true,
+      source: config.source,
+    });
+  } catch {
+    res.status(503).json({
+      status: "degraded",
+      ready: false,
+    });
+  }
 });
 
 router.get("/health/ready", async (_req, res) => {
