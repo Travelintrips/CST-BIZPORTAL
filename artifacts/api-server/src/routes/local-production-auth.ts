@@ -518,6 +518,16 @@ router.post("/auth/email-otp/send", async (
       await sendAdminLoginOtpEmail(email, code);
     } catch (error) {
       request.log.error({ error, email }, "Admin email OTP delivery failed");
+      const diagnostic = {
+        errorName: error instanceof Error ? error.name : "Error",
+        errorMessage: error instanceof Error ? error.message : "Unknown SMTP delivery failure",
+      };
+      await pool.query(
+        `insert into public.audit_logs
+          (user_email, action, entity_type, entity_id, after_data, ip_address, company_id, module)
+         values ($1, 'email_otp_delivery_failed', 'auth', $2, $3::jsonb, $4, 'default', 'system')`,
+        [email, id, JSON.stringify(diagnostic), requestIp],
+      ).catch(() => undefined);
       await pool.query(
         "delete from public.bizportal_email_otp_codes where id = $1 and verified_at is null",
         [id],
