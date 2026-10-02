@@ -9247,6 +9247,56 @@ export default function BankReconciliationPage() {
     }),
   });
 
+  const prepareQrisCanonicalMut = useMutation({
+    mutationFn: async (mutationId: number) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/qris-canonical/prepare`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw Object.assign(
+          new Error(body?.error ?? "Kandidat QRIS canonical gagal disiapkan"),
+          { code: body?.code },
+        );
+      }
+      return body as {
+        ok: boolean;
+        settlementId: number;
+        matchId: number;
+        paymentIds: number[];
+        grossAmount: number;
+        mdrAmount: number;
+        netAmount: number;
+        promotedJournalIds?: number[];
+      };
+    },
+    onSuccess: async (result, mutationId) => {
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      await qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      await qc.invalidateQueries({ queryKey: ["bank-reconciliation-ready-approval"] });
+      if (detailMutation?.id === mutationId) {
+        await refreshMutationDetail(mutationId);
+      }
+      toast({
+        title: "Kandidat QRIS canonical siap ✓",
+        description: `Batch #${result.settlementId} sudah diposting dan siap Tautkan & Approve Settlement.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Kandidat QRIS belum dapat disiapkan",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const approveQrisBatchMut = useMutation({
     mutationFn: async ({
       candidateId,
@@ -11116,8 +11166,10 @@ export default function BankReconciliationPage() {
                       ? (candidateId) => qrisRepairMut.mutate(candidateId)
                       : undefined
                   }
-          onGenerateQrisCandidates={undefined}
-                    qrisGenerationPending={qrisRepairMut.isPending}
+          onGenerateQrisCandidates={(mutationId) => {
+                    if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+                  }}
+                    qrisGenerationPending={prepareQrisCanonicalMut.isPending || qrisRepairMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -11404,7 +11456,9 @@ export default function BankReconciliationPage() {
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
             : undefined
         }
-        onGenerateQrisCandidates={undefined}
+        onGenerateQrisCandidates={(mutationId) => {
+          if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+        }}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
