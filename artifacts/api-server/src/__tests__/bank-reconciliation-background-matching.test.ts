@@ -21,7 +21,11 @@ describe("bank reconciliation background matching", () => {
   it("uses bounded workers and exposes background status", () => {
     expect(source).toContain("const workerCount = Math.min(4, rows.length)");
     expect(source).toContain("Promise.all(Array.from({ length: workerCount }, () => worker()))");
-    expect(source).toContain("matchingJobsByCompany.get(matchingJobKey(actor))");
+    expect(source).toContain("matchingJobsByCompany.get(jobKey)");
+    expect(source).toContain("loadPersistedMatchingJobState(jobKey)");
+    expect(source).toContain("persistMatchingJobState(jobKey, initialJobState)");
+    expect(source).toContain('X-CST-Bank-Recon-Revision');
+    expect(source).toContain('private, no-store, no-cache, must-revalidate');
     expect(source).toContain('status: "failed"');
   });
 });

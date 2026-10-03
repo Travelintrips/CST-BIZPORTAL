@@ -118,6 +118,61 @@ function matchingJobKey(actor: ApprovalActor): string {
   return actor.companyId == null ? "global" : String(actor.companyId);
 }
 
+async function persistMatchingJobState(jobKey: string, state: MatchingJobState): Promise<void> {
+  await pool.query(
+    `insert into public.reconciliation_matching_jobs
+      (job_key,status,total_count,processed_count,failed_count,summary,error_message,started_at,completed_at,updated_at)
+     values ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,now())
+     on conflict (job_key) do update set
+       status=excluded.status,
+       total_count=excluded.total_count,
+       processed_count=excluded.processed_count,
+       failed_count=excluded.failed_count,
+       summary=excluded.summary,
+       error_message=excluded.error_message,
+       started_at=excluded.started_at,
+       completed_at=excluded.completed_at,
+       updated_at=now()`,
+    [
+      jobKey,
+      state.status,
+      state.total,
+      state.processed,
+      state.failed,
+      JSON.stringify(state.summary),
+      state.error,
+      state.started_at,
+      state.finished_at,
+    ],
+  );
+}
+
+async function loadPersistedMatchingJobState(jobKey: string): Promise<MatchingJobState | null> {
+  const result = await pool.query<any>(
+    `select status,total_count,processed_count,failed_count,summary,error_message,
+            started_at,completed_at
+       from public.reconciliation_matching_jobs
+      where job_key=$1
+      limit 1`,
+    [jobKey],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const status: MatchingJobState["status"] =
+    row.status === "failed" ? "failed" : row.status === "completed" ? "completed" : "running";
+  return {
+    running: status === "running",
+    status,
+    total: Number(row.total_count ?? 0),
+    processed: Number(row.processed_count ?? 0),
+    failed: Number(row.failed_count ?? 0),
+    summary: { ...emptyLocalMatchingSummary(), ...(row.summary ?? {}) },
+    error: row.error_message == null ? null : String(row.error_message),
+    started_at: row.started_at ? new Date(row.started_at).toISOString() : new Date(0).toISOString(),
+    finished_at: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+  };
+}
+
 function emptyLocalMatchingSummary(): LocalMatchingSummary {
   return {
     processed: 0,
@@ -1209,30 +1264,45 @@ async function matchLocalMutation(
 }
 
 router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-CST-Bank-Recon-Revision", "20261003-status-v2");
+
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
-  const state = matchingJobsByCompany.get(matchingJobKey(actor));
-  if (!state) {
-    res.json({
-      ok: true,
-      running: false,
-      status: "idle",
-      total: 0,
-      processed: 0,
-      failed: 0,
-      summary: emptyLocalMatchingSummary(),
-      error: null,
-      started_at: null,
-      finished_at: null,
-    });
+  const jobKey = matchingJobKey(actor);
+  const inMemoryState = matchingJobsByCompany.get(jobKey);
+  if (inMemoryState) {
+    res.json({ ok: true, ...inMemoryState });
     return;
   }
 
-  res.json({ ok: true, ...state });
+  try {
+    const persistedState = await loadPersistedMatchingJobState(jobKey);
+    if (persistedState) {
+      res.json({ ok: true, ...persistedState });
+      return;
+    }
+  } catch (error) {
+    req.log.warn({ error, jobKey }, "Persisted matching status unavailable");
+  }
+
+  res.json({
+    ok: true,
+    running: false,
+    status: "idle",
+    total: 0,
+    processed: 0,
+    failed: 0,
+    summary: emptyLocalMatchingSummary(),
+    error: null,
+    started_at: null,
+    finished_at: null,
+  });
 });
 
 router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void> => {
@@ -1420,7 +1490,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     }
 
     const startedAt = new Date().toISOString();
-    matchingJobsByCompany.set(jobKey, {
+    const initialJobState: MatchingJobState = {
       running: true,
       status: "running",
       total: 0,
@@ -1430,7 +1500,13 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       error: null,
       started_at: startedAt,
       finished_at: null,
-    });
+    };
+    matchingJobsByCompany.set(jobKey, initialJobState);
+    try {
+      await persistMatchingJobState(jobKey, initialJobState);
+    } catch (error) {
+      req.log.warn({ error, jobKey }, "Failed to persist matching start state");
+    }
 
     const runPromise = executeMatching(({ total, summary }) => {
       const current = matchingJobsByCompany.get(jobKey);
@@ -1447,7 +1523,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     void runPromise
       .then((summary) => {
         const current = matchingJobsByCompany.get(jobKey);
-        matchingJobsByCompany.set(jobKey, {
+        const completedState: MatchingJobState = {
           running: false,
           status: "completed",
           total: current?.total ?? summary.processed + summary.failed,
@@ -1457,13 +1533,17 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
           error: null,
           started_at: current?.started_at ?? startedAt,
           finished_at: new Date().toISOString(),
+        };
+        matchingJobsByCompany.set(jobKey, completedState);
+        void persistMatchingJobState(jobKey, completedState).catch((error) => {
+          req.log.warn({ error, jobKey }, "Failed to persist matching completion state");
         });
       })
       .catch((error) => {
         const current = matchingJobsByCompany.get(jobKey);
         const message = error instanceof Error ? error.message : String(error);
         req.log.error({ error }, "Background local bank matching failed");
-        matchingJobsByCompany.set(jobKey, {
+        const failedState: MatchingJobState = {
           running: false,
           status: "failed",
           total: current?.total ?? 0,
@@ -1473,6 +1553,10 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
           error: message,
           started_at: current?.started_at ?? startedAt,
           finished_at: new Date().toISOString(),
+        };
+        matchingJobsByCompany.set(jobKey, failedState);
+        void persistMatchingJobState(jobKey, failedState).catch((persistError) => {
+          req.log.warn({ persistError, jobKey }, "Failed to persist matching failure state");
         });
       });
 
