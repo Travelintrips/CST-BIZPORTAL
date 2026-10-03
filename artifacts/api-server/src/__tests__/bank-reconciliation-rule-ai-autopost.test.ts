@@ -10,7 +10,13 @@ describe("Rule AI deterministic auto posting", () => {
     expect(route).toContain("matchedRule.candidateRequirement !== 'required'");
     expect(route).toContain("Boolean(matchedRule.targetCoaCode)");
     expect(route).toContain("!ruleResult.ambiguityCode");
-    expect(route).toContain("!hasQrisBankEvidenceForAutoPost(mutation)");
+    expect(route).toContain('!(mutation.direction === "IN" && hasQrisBankEvidenceForAutoPost(mutation))');
+  });
+
+  it("allows deterministic outbound QRIS while keeping inbound QRIS settlement-owned", () => {
+    expect(route).toContain('mutation.direction === "IN"');
+    expect(route).toContain("hasQrisBankEvidenceForAutoPost(mutation)");
+    expect(route).toContain("Outbound QRIS is an ordinary company payment rail");
   });
 
   it("uses rule target COA and canonical source", () => {

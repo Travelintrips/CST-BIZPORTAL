@@ -1072,13 +1072,16 @@ async function matchLocalMutation(
     );
 
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
+    // Only inbound QRIS belongs to the Sport Center settlement flow.
+    // Outbound QRIS is an ordinary company payment rail (merchant expense,
+    // vendor payment, etc.) and may be auto-posted by a deterministic Rule AI.
     const autoPostEligible = confidence === 100
       && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
       && !matchedRule.requiresDocumentUpload
       && Boolean(matchedRule.targetCoaCode)
       && !ruleResult.ambiguityCode
-      && !hasQrisBankEvidenceForAutoPost(mutation);
+      && !(mutation.direction === "IN" && hasQrisBankEvidenceForAutoPost(mutation));
     if (autoPostEligible) {
       const ruleMatch = await client.query<{ id: number }>(
         "select id from public.bank_reconciliation_matches where mutation_id=$1 and candidate_type='recon_rule' and candidate_id=$2 and status='candidate' order by id desc limit 1 for update",

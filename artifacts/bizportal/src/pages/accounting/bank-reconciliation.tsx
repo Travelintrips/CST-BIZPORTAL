@@ -1654,7 +1654,7 @@ function statusLabel(m: BankMutation): string {
   }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
-  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Settlement QRIS Belum Tertaut";
+  if (isSettlementOwnedQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Settlement QRIS Belum Tertaut";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
@@ -1670,7 +1670,7 @@ function statusColor(m: BankMutation): string {
   if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
-  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
+  if (isSettlementOwnedQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" || !m.candidates?.length) return STATUS_COLORS.unmatched;
@@ -1804,7 +1804,7 @@ function isUiApprovalEligible(m: BankMutation): boolean {
     || visibleCandidates(m).some(isRealTransactionCandidate);
   return canApprove(m)
     && isExactMatch(m)
-    && !isQrisMutation(m)
+    && !isSettlementOwnedQrisMutation(m)
     && requiredCandidateAvailable;
 }
 
@@ -1815,14 +1815,14 @@ function isUiApprovalEligible(m: BankMutation): boolean {
  */
 function isManualReviewActionable(m: BankMutation): boolean {
   return (m.status === "manual_review" || m.status === "duplicate_need_review")
-    && !isQrisMutation(m)
+    && !isSettlementOwnedQrisMutation(m)
     && !isCanonicalSettlementMutation(m);
 }
 
 function isRuleAutoPostRetryable(m: BankMutation, candidates: Candidate[]): boolean {
   return m.status === "manual_review"
     && m.review_code === "AUTO_POST_GUARD"
-    && !isQrisMutation(m)
+    && !isSettlementOwnedQrisMutation(m)
     && !isCanonicalSettlementMutation(m)
     && candidates.some(candidate =>
       candidate.candidate_type === "recon_rule"
@@ -1880,13 +1880,22 @@ function isQrisMutation(m: BankMutation): boolean {
   }) === "qris";
 }
 
+/**
+ * Canonical QRIS settlement ownership applies only to incoming bank credits.
+ * Outgoing QRIS is a normal company payment rail and must remain eligible for
+ * Rule AI / vendor / manual COA reconciliation.
+ */
+export function isSettlementOwnedQrisMutation(m: BankMutation): boolean {
+  return m.direction === "IN" && isQrisMutation(m);
+}
+
 export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
   // QRIS is settlement-owned even when its H-1 audit is stale/empty. Raw QRIS
   // audit metadata or a canonical settlement candidate is enough to fail
   // closed; never fall back to generic manual COA approval.
   const hasQrisAuditMetadata = Boolean(m.qris_candidate_audit)
     || (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0);
-  if (hasQrisAuditMetadata || isQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
+  if (hasQrisAuditMetadata || isSettlementOwnedQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
   return canApprove(m) && visibleCandidates(m).length === 0;
 }
 
@@ -3995,7 +4004,7 @@ function CoaReferenceDialog({
     const query = parentSearch.trim().toLowerCase();
     return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
   });
-  const isQris = !!mutation && isQrisMutation(mutation);
+  const isQris = !!mutation && isSettlementOwnedQrisMutation(mutation);
   const canApplyCurrent =
     !!mutation &&
     canApprove(mutation) &&
@@ -5761,7 +5770,7 @@ function MutationCard({
     && (m.source_posted_coa_accounts?.length ?? 0) > 0;
   const hasSourceAccountingCorrection = (m.source_correction_coa_accounts?.length ?? 0) > 0;
   const isIN   = m.direction === "IN";
-  const isQris = isQrisMutation(m);
+  const isQris = isSettlementOwnedQrisMutation(m);
   const hasApprovedMatch = hasApprovedReconciliationMatch(m);
   const isClosedQrisSettlement =
     isQris
@@ -6338,7 +6347,7 @@ function MutationCard({
               && !isUiApprovalEligible(m)
               && !canonicalApprovalReady
               && matchingCandidates.length === 0
-              && !(canApprove(m) && cands.length === 0 && !isQrisMutation(m))
+              && !(canApprove(m) && cands.length === 0 && !isSettlementOwnedQrisMutation(m))
               && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review")
               && (
               <Button
@@ -6362,12 +6371,12 @@ function MutationCard({
               >
                  {isQris && onGenerateQrisCandidates
                    ? <CreditCard className="w-3.5 h-3.5" />
-                   : cands.length > 0 && !isQrisMutation(m)
+                   : cands.length > 0 && !isSettlementOwnedQrisMutation(m)
                   ? <CheckCircle2 className="w-3.5 h-3.5" />
                   : <Eye className="w-3.5 h-3.5" />}
                  {isQris && onGenerateQrisCandidates
                    ? "Cari Kandidat QRIS"
-                   : cands.length > 0 && !isQrisMutation(m)
+                   : cands.length > 0 && !isSettlementOwnedQrisMutation(m)
                    ? "Pilih Kandidat & Approve"
                    : "Pilih COA"}
               </Button>
@@ -7022,13 +7031,13 @@ function MutationDetailPanel({
     canonicalApprovalCandidate,
   );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
-  const hasSportCenterEvidence = isQrisMutation(m) || cands.some(candidate =>
+  const hasSportCenterEvidence = isSettlementOwnedQrisMutation(m) || cands.some(candidate =>
     candidate.candidate_type === "sport_payment"
     || candidate.candidate_type === "qris_settlement"
     || candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE
     || candidate.details?.sourceType === "sport_center"
   );
-  const canGenerateQrisForMutation = isQrisMutation(m)
+  const canGenerateQrisForMutation = isSettlementOwnedQrisMutation(m)
     && qrisAudit == null
     && onGenerateQrisCandidates != null;
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
@@ -7628,7 +7637,7 @@ function MutationDetailPanel({
             && m.status !== "manual_review"
             && canApprove(m)
             && cands.length > 0
-            && !isQrisMutation(m)
+            && !isSettlementOwnedQrisMutation(m)
             && (
               <Button
                 className="flex-1 gap-1.5 bg-indigo-600 hover:bg-indigo-700 min-w-[170px]"

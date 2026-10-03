@@ -32,6 +32,7 @@ import {
   CANONICAL_SETTLEMENT_APPROVE_LABEL,
   isCanonicalSettlementApprovalEligible,
   isGenericCoaSelectionEligible,
+  isSettlementOwnedQrisMutation,
 } from "../pages/accounting/bank-reconciliation";
 
 // ─── Helpers extracted from component logic ───────────────────────────────────
@@ -429,6 +430,48 @@ describe("manual_review_required warning preserved", () => {
     expect(showCoaAction({ code: "SPECIFIC_COA_REQUIRED" })).toBe(true);
     expect(showCoaAction({ code: "JOURNAL_MAPPING_REQUIRED" })).toBe(true);
     expect(showCoaAction({ code: "UNKNOWN" })).toBe(false);
+  });
+});
+
+describe("outbound QRIS reconciliation routing", () => {
+  type Mutation = Parameters<typeof isGenericCoaSelectionEligible>[0];
+
+  const outgoingQris = (): Mutation => ({
+    id: 9101,
+    company_id: 1,
+    transaction_date: "2026-09-08",
+    description: "Pembayaran QRIS | CS ENERGY 000540145823 | 8119572481343ej70170",
+    credit_amount: "0",
+    debit_amount: "100000",
+    amount: "100000",
+    direction: "OUT",
+    mutation_key: "MUT-OUT-QRIS-9101",
+    normalized_description: "pembayaran qris cs energy 000540145823 8119572481343ej70170",
+    provider_name: "QRIS",
+    provider_order_id: "8119572481343ej70170",
+    status: "unmatched",
+    matched_payment_id: null,
+    matched_order_id: null,
+    candidates: [],
+    qris_candidate_audit: null,
+    qris_candidate_audits: [],
+  } as Mutation);
+
+  it("does not route outgoing QRIS into the Sport Center settlement flow", () => {
+    const mutation = outgoingQris();
+    expect(isSettlementOwnedQrisMutation(mutation)).toBe(false);
+    expect(isGenericCoaSelectionEligible(mutation)).toBe(true);
+  });
+
+  it("keeps incoming QRIS settlement-owned", () => {
+    const mutation = {
+      ...outgoingQris(),
+      direction: "IN",
+      credit_amount: "100000",
+      debit_amount: "0",
+    } as Mutation;
+    expect(isSettlementOwnedQrisMutation(mutation)).toBe(true);
+    expect(isGenericCoaSelectionEligible(mutation)).toBe(false);
   });
 });
 
