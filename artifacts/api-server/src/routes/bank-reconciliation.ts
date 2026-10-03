@@ -118,6 +118,55 @@ function matchingJobKey(actor: ApprovalActor): string {
   return actor.companyId == null ? "global" : String(actor.companyId);
 }
 
+async function claimMatchingJob(jobKey: string, state: MatchingJobState): Promise<boolean> {
+  const result = await pool.query<{ job_key: string }>(
+    `insert into public.reconciliation_matching_jobs
+      (job_key,status,total_count,processed_count,failed_count,summary,error_message,started_at,completed_at,updated_at)
+     values ($1,'running',$2,$3,$4,$5::jsonb,null,$6,null,now())
+     on conflict (job_key) do update set
+       status='running',
+       total_count=excluded.total_count,
+       processed_count=excluded.processed_count,
+       failed_count=excluded.failed_count,
+       summary=excluded.summary,
+       error_message=null,
+       started_at=excluded.started_at,
+       completed_at=null,
+       updated_at=now()
+     where public.reconciliation_matching_jobs.status <> 'running'
+        or public.reconciliation_matching_jobs.updated_at < now() - interval '15 minutes'
+     returning job_key`,
+    [
+      jobKey,
+      state.total,
+      state.processed,
+      state.failed,
+      JSON.stringify(state.summary),
+      state.started_at,
+    ],
+  );
+  return Boolean(result.rows[0]?.job_key);
+}
+
+async function touchMatchingJobState(jobKey: string, state: MatchingJobState): Promise<void> {
+  await pool.query(
+    `update public.reconciliation_matching_jobs
+        set total_count=$2,
+            processed_count=$3,
+            failed_count=$4,
+            summary=$5::jsonb,
+            updated_at=now()
+      where job_key=$1 and status='running'`,
+    [
+      jobKey,
+      state.total,
+      state.processed,
+      state.failed,
+      JSON.stringify(state.summary),
+    ],
+  );
+}
+
 async function persistMatchingJobState(jobKey: string, state: MatchingJobState): Promise<void> {
   await pool.query(
     `insert into public.reconciliation_matching_jobs
@@ -1501,23 +1550,42 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
       started_at: startedAt,
       finished_at: null,
     };
-    matchingJobsByCompany.set(jobKey, initialJobState);
+    let claimed = true;
     try {
-      await persistMatchingJobState(jobKey, initialJobState);
+      claimed = await claimMatchingJob(jobKey, initialJobState);
     } catch (error) {
-      req.log.warn({ error, jobKey }, "Failed to persist matching start state");
+      req.log.warn({ error, jobKey }, "Distributed matching lock unavailable; using in-memory lock only");
     }
+    if (!claimed) {
+      res.status(202).json({
+        ok: true,
+        queued: true,
+        already_running: true,
+        processed: 0,
+        failed: 0,
+      });
+      return;
+    }
+
+    matchingJobsByCompany.set(jobKey, initialJobState);
 
     const runPromise = executeMatching(({ total, summary }) => {
       const current = matchingJobsByCompany.get(jobKey);
       if (!current) return;
-      matchingJobsByCompany.set(jobKey, {
+      const nextState: MatchingJobState = {
         ...current,
         total,
         processed: summary.processed,
         failed: summary.failed,
         summary,
-      });
+      };
+      matchingJobsByCompany.set(jobKey, nextState);
+      const completed = summary.processed + summary.failed;
+      if (completed > 0 && completed % 10 === 0) {
+        void touchMatchingJobState(jobKey, nextState).catch((error) => {
+          req.log.warn({ error, jobKey }, "Failed to heartbeat matching job");
+        });
+      }
     });
 
     void runPromise
