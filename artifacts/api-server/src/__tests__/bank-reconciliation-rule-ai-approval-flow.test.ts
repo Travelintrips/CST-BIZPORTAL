@@ -20,4 +20,11 @@ describe("Rule AI manual approval flow", () => {
     expect(source).toContain("manualCoaCode = ruleCoaCode");
     expect(source).toContain('"RULE_COA_MISMATCH"');
   });
+
+  it("exposes server-authoritative approval readiness for no-candidate Rule AI matches", () => {
+    expect(source).toContain("as approval_ready");
+    expect(source).toContain("rule.candidate_requirement = 'not_required'");
+    expect(source).toContain("target_coa.is_postable");
+    expect(source).toContain('20261003-rule-ready-v3');
+  });
 });
