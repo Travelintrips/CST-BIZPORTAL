@@ -2591,7 +2591,7 @@ async function approveBankMutation(
   const candidateType = textValue(body.candidate_type);
   const requestedSource = textValue(body.candidate_source);
   const note = textValue(body.note);
-  const manualCoaCode = textValue(body.manual_coa_code);
+  let manualCoaCode = textValue(body.manual_coa_code);
 
   const mutationResult = await client.query<{
     id: number;
@@ -2736,6 +2736,50 @@ async function approveBankMutation(
     selectedCandidateSource,
     companyId,
   );
+  if (selectedCandidateType === "recon_rule" && selectedCandidateId != null) {
+    const ruleResult = await client.query<{
+      target_coa_code: string | null;
+      candidate_requirement: string | null;
+      requires_document_upload: boolean | null;
+    }>(
+      `select target_coa_code,candidate_requirement,requires_document_upload
+         from public.recon_rules
+        where id=$1
+          and company_id=$2
+          and is_active=true
+        limit 1
+        for update`,
+      [selectedCandidateId, companyId],
+    );
+    const rule = ruleResult.rows[0];
+    if (!rule) {
+      throw new ApprovalError("Rule AI tidak ditemukan atau sudah tidak aktif.", 409, "STALE_CANDIDATE");
+    }
+    if (rule.candidate_requirement !== "not_required") {
+      throw new ApprovalError(
+        "Rule AI ini tetap membutuhkan kandidat transaksi canonical sebelum approval.",
+        422,
+        "RULE_CANDIDATE_REQUIRED",
+      );
+    }
+    const ruleCoaCode = textValue(rule.target_coa_code);
+    if (!ruleCoaCode) {
+      throw new ApprovalError(
+        "Rule AI belum memiliki target COA yang valid.",
+        422,
+        "JOURNAL_MAPPING_REQUIRED",
+      );
+    }
+    if (manualCoaCode && manualCoaCode !== ruleCoaCode) {
+      throw new ApprovalError(
+        "COA approval harus sama dengan target COA Rule AI.",
+        422,
+        "RULE_COA_MISMATCH",
+      );
+    }
+    manualCoaCode = ruleCoaCode;
+  }
+
   if (selectedCandidateType === "sport_company_invoice") {
     throw new ApprovalError(
       "Invoice perusahaan Sport Center sudah cocok dengan mutasi bank, tetapi approval accounting otomatis belum diaktifkan untuk source corporate invoice. Matching tetap disimpan; posting diblokir agar tidak menggandakan pendapatan.",
@@ -4476,6 +4520,89 @@ async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Pr
       }
     } catch {
       // Vendor invoice details are additive to the core match response.
+    }
+  }
+
+  const ruleIds = idsFor("recon_rule");
+  if (ruleIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select
+             r.id,
+             r.name,
+             r.description,
+             r.priority,
+             r.direction,
+             r.condition_type,
+             r.condition_field,
+             r.condition_operator,
+             r.condition_value,
+             r.conditions_json,
+             r.logic,
+             r.specificity,
+             r.target_type,
+             r.target_coa_code,
+             r.confidence_score,
+             r.stop_processing,
+             r.candidate_requirement,
+             r.requires_document_upload,
+             r.tax_type,
+             coa.code as resolved_coa_code,
+             coa.name as target_coa_name
+           from public.recon_rules r
+           left join lateral (
+             select c.code, c.name
+               from public.chart_of_accounts c
+              where c.code = r.target_coa_code
+                and (c.company_id = r.company_id or c.company_id is null)
+                and coalesce(c.is_active, true) = true
+                and coalesce(c.is_header, false) = false
+                and coalesce(c.is_postable, true) = true
+              order by case when c.company_id = r.company_id then 0 else 1 end, c.id
+              limit 1
+           ) coa on true
+          where r.id = any($1::bigint[])`,
+        [ruleIds],
+      );
+      for (const row of result.rows) {
+        const targetCoaCode = row.target_coa_code == null ? null : String(row.target_coa_code);
+        const resolvedCoaCode = row.resolved_coa_code == null ? null : String(row.resolved_coa_code);
+        details.set(candidateDetailKey("recon_rule", row.id), {
+          name: row.name,
+          ruleDescription: row.description,
+          rulePriority: row.priority,
+          ruleDirection: row.direction,
+          conditionType: row.condition_type,
+          conditionField: row.condition_field,
+          conditionOperator: row.condition_operator,
+          conditionValue: row.condition_value,
+          conditions: row.conditions_json,
+          logic: row.logic,
+          specificity: row.specificity,
+          targetType: row.target_type,
+          targetCoaCode,
+          targetCoaName: row.target_coa_name,
+          targetCoaValidationStatus: !targetCoaCode
+            ? "missing"
+            : resolvedCoaCode
+              ? "valid"
+              : "invalid",
+          targetCoaValidationMessage: !targetCoaCode
+            ? "Rule AI belum memiliki target COA."
+            : resolvedCoaCode
+              ? null
+              : "Target COA Rule AI tidak ditemukan atau tidak postable.",
+          confidenceScore: row.confidence_score,
+          stopProcessing: row.stop_processing,
+          candidateRequirement: row.candidate_requirement,
+          requiresDocumentUpload: row.requires_document_upload,
+          taxType: row.tax_type,
+          sourceType: "recon_rule",
+          status: "active",
+        });
+      }
+    } catch {
+      // Rule details are additive to the reconciliation list.
     }
   }
 
