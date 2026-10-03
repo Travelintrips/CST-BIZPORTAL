@@ -1327,7 +1327,7 @@ async function matchLocalMutation(
 router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise<void> => {
   res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
   res.setHeader("Pragma", "no-cache");
-  res.setHeader("X-CST-Bank-Recon-Revision", "20261003-status-v2");
+  res.setHeader("X-CST-Bank-Recon-Revision", "20261003-rule-ready-v3");
 
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) {
@@ -4265,6 +4265,38 @@ const mutationListColumns = `
     where approved_match.mutation_id = bm.id
       and approved_match.status = 'approved'
   ) as has_approved_match,
+  (
+    bm.status = 'matched'
+    and not exists (
+      select 1
+        from public.bank_reconciliation_matches approved_match
+       where approved_match.mutation_id = bm.id
+         and approved_match.status in ('approved','posted')
+    )
+    and exists (
+      select 1
+        from public.bank_reconciliation_matches rule_match
+        join public.recon_rules rule
+          on rule_match.candidate_type = 'recon_rule'
+         and rule_match.candidate_source = 'public.recon_rules'
+         and rule_match.candidate_id = rule.id
+         and rule.company_id = bm.company_id
+         and rule.is_active = true
+         and rule.candidate_requirement = 'not_required'
+         and rule.target_coa_code is not null
+       where rule_match.mutation_id = bm.id
+         and rule_match.status = 'candidate'
+         and exists (
+           select 1
+             from public.chart_of_accounts target_coa
+            where target_coa.code = rule.target_coa_code
+              and (target_coa.company_id = bm.company_id or target_coa.company_id is null)
+              and coalesce(target_coa.is_active, true) = true
+              and coalesce(target_coa.is_header, false) = false
+              and coalesce(target_coa.is_postable, true) = true
+         )
+    )
+  ) as approval_ready,
   '[]'::json as qris_candidate_audits,
   null::json as qris_candidate_audit
 `;

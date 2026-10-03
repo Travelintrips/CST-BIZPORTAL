@@ -770,6 +770,8 @@ interface BankMutation {
   status: MutationStatus;
   /** True when this bank mutation is already linked to an approved match. */
   has_approved_match?: boolean | null;
+  /** Server-authoritative readiness for deterministic Rule AI approval. */
+  approval_ready?: boolean | null;
   matched_payment_id: number | null;
   matched_order_id: number | null;
   candidates: Candidate[] | null;
@@ -1812,12 +1814,20 @@ function requiresRealTransactionCandidate(m: BankMutation): boolean {
 }
 
 function isUiApprovalEligible(m: BankMutation): boolean {
-  // This is deliberately stricter than the backend action guard. The server
-  // remains the final authority; the UI only avoids offering an unsafe action.
-  // QRIS must use the canonical batch settlement flow. The generic bank
-  // mutation approval creates a normal draft journal and must never be shown
-  // for a QRIS mutation, even when its legacy sport_payment candidate happens
-  // to look like an exact match.
+  // The server is authoritative for deterministic Rule AI readiness because it
+  // can validate the live rule, candidate requirement, target COA, and company
+  // scope in one database read. This also avoids hiding a valid Rule AI match
+  // when optional candidate-detail hydration is unavailable.
+  if (
+    m.status === "matched"
+    && m.approval_ready === true
+    && !isSettlementOwnedQrisMutation(m)
+  ) {
+    return true;
+  }
+
+  // This is deliberately stricter than the backend action guard for ordinary
+  // transaction candidates. The server remains the final authority.
   const requiredCandidateAvailable = !requiresRealTransactionCandidate(m)
     || visibleCandidates(m).some(isRealTransactionCandidate);
   return canApprove(m)
