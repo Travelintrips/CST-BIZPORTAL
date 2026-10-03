@@ -1298,7 +1298,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     filters.push(`bm.company_id = ${addValue(actor.companyId)}`);
   }
   if (requestedBankAccountId != null) {
-    filters.push(`bm.bank_account_id = ${addValue(requestedBankAccountId)}`);
+    filters.push(`bm.bank_account_id = ${addValue(requestedBankAccountId)}::text`);
   }
 
   if (matchingMode === "new") {
