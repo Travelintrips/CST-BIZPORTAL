@@ -134,7 +134,7 @@ async function claimMatchingJob(jobKey: string, state: MatchingJobState): Promis
        completed_at=null,
        updated_at=now()
      where public.reconciliation_matching_jobs.status <> 'running'
-        or public.reconciliation_matching_jobs.updated_at < now() - interval '15 minutes'
+        or public.reconciliation_matching_jobs.updated_at < now() - interval '5 minutes'
      returning job_key`,
     [
       jobKey,
@@ -199,7 +199,7 @@ async function persistMatchingJobState(jobKey: string, state: MatchingJobState):
 async function loadPersistedMatchingJobState(jobKey: string): Promise<MatchingJobState | null> {
   const result = await pool.query<any>(
     `select status,total_count,processed_count,failed_count,summary,error_message,
-            started_at,completed_at
+            started_at,completed_at,updated_at
        from public.reconciliation_matching_jobs
       where job_key=$1
       limit 1`,
@@ -207,8 +207,16 @@ async function loadPersistedMatchingJobState(jobKey: string): Promise<MatchingJo
   );
   const row = result.rows[0];
   if (!row) return null;
+  const staleRunning =
+    row.status === "running"
+    && row.updated_at
+    && Date.now() - new Date(row.updated_at).getTime() > 5 * 60 * 1000;
   const status: MatchingJobState["status"] =
-    row.status === "failed" ? "failed" : row.status === "completed" ? "completed" : "running";
+    staleRunning || row.status === "failed"
+      ? "failed"
+      : row.status === "completed"
+        ? "completed"
+        : "running";
   return {
     running: status === "running",
     status,
@@ -216,7 +224,11 @@ async function loadPersistedMatchingJobState(jobKey: string): Promise<MatchingJo
     processed: Number(row.processed_count ?? 0),
     failed: Number(row.failed_count ?? 0),
     summary: { ...emptyLocalMatchingSummary(), ...(row.summary ?? {}) },
-    error: row.error_message == null ? null : String(row.error_message),
+    error: staleRunning
+      ? "AI Matching worker terhenti sebelum selesai. Jalankan AI Matching lagi."
+      : row.error_message == null
+        ? null
+        : String(row.error_message),
     started_at: row.started_at ? new Date(row.started_at).toISOString() : new Date(0).toISOString(),
     finished_at: row.completed_at ? new Date(row.completed_at).toISOString() : null,
   };
@@ -1459,7 +1471,7 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
            from public.bank_mutations bm
           where ${filters.join(" and ")}
           order by bm.transaction_date desc, bm.id
-          limit 200`,
+          limit 1000`,
         values as any[],
       );
       rows = result.rows;
