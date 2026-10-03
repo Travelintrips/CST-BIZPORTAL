@@ -8728,7 +8728,7 @@ export default function BankReconciliationPage() {
   } | null>(null);
 
   const waitForMatchingCompletion = async () => {
-    const deadline = Date.now() + 5 * 60 * 1000;
+    const deadline = Date.now() + 15 * 60 * 1000;
     let consecutiveReadFailures = 0;
     while (Date.now() < deadline) {
       try {
@@ -8769,7 +8769,7 @@ export default function BankReconciliationPage() {
       }
       await new Promise(resolve => window.setTimeout(resolve, 1000));
     }
-    throw new Error("Matching belum selesai setelah 5 menit. Proses tetap berjalan di server; muat ulang halaman untuk melihat hasil terbaru.");
+    throw new Error("Matching belum selesai setelah 15 menit. Proses tetap berjalan di server; muat ulang halaman untuk melihat hasil terbaru.");
   };
 
   const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
