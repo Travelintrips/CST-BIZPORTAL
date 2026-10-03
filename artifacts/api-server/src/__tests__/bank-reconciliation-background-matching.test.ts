@@ -30,4 +30,10 @@ describe("bank reconciliation background matching", () => {
     expect(source).toContain('private, no-store, no-cache, must-revalidate');
     expect(source).toContain('status: "failed"');
   });
+
+  it("recovers stale persisted jobs and does not truncate normal company runs at 200 rows", () => {
+    expect(source).toContain("updated_at < now() - interval '5 minutes'");
+    expect(source).toContain("staleRunning");
+    expect(source).toContain("limit 1000");
+  });
 });
