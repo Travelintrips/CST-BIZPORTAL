@@ -8729,26 +8729,47 @@ export default function BankReconciliationPage() {
 
   const waitForMatchingCompletion = async () => {
     const deadline = Date.now() + 5 * 60 * 1000;
+    let consecutiveReadFailures = 0;
     while (Date.now() < deadline) {
-      const response = await fetch("/api/bank-reconciliation/run-matching/status", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      if (!response.ok) throw new Error("Status matching tidak dapat dibaca");
-      const status = await response.json() as {
-        running?: boolean;
-        status?: "idle" | "running" | "completed" | "failed";
-        error?: string | null;
-      };
-      if (!status.running) {
-        if (status.status === "failed") {
-          throw new Error(status.error || "AI Matching background gagal dijalankan.");
+      try {
+        const response = await fetch(
+          `/api/bank-reconciliation/run-matching/status?t=${Date.now()}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Cache-Control": "no-cache" },
+          },
+        );
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({})) as { error?: string };
+          const retryable = [401, 408, 429, 500, 502, 503, 504].includes(response.status);
+          consecutiveReadFailures += 1;
+          if (retryable && consecutiveReadFailures < 8) {
+            await new Promise(resolve => window.setTimeout(resolve, 1500));
+            continue;
+          }
+          throw new Error(body.error || `Status matching tidak dapat dibaca (HTTP ${response.status})`);
         }
-        return;
+
+        consecutiveReadFailures = 0;
+        const status = await response.json() as {
+          running?: boolean;
+          status?: "idle" | "running" | "completed" | "failed";
+          error?: string | null;
+        };
+        if (!status.running) {
+          if (status.status === "failed") {
+            throw new Error(status.error || "AI Matching background gagal dijalankan.");
+          }
+          return;
+        }
+      } catch (error) {
+        consecutiveReadFailures += 1;
+        if (consecutiveReadFailures >= 8) throw error;
       }
       await new Promise(resolve => window.setTimeout(resolve, 1000));
     }
-    throw new Error("Matching belum selesai setelah 5 menit. Periksa status lalu coba lagi.");
+    throw new Error("Matching belum selesai setelah 5 menit. Proses tetap berjalan di server; muat ulang halaman untuk melihat hasil terbaru.");
   };
 
   const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
