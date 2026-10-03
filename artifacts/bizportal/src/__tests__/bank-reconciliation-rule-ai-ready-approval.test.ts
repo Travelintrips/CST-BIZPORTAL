@@ -14,4 +14,9 @@ describe("Rule AI ready-approval visibility", () => {
     expect(source).toContain('candidate.details?.candidateRequirement === "not_required"');
     expect(source).toContain('candidate.details?.targetCoaValidationStatus === "valid"');
   });
+
+  it("uses server approval_ready as the authoritative Rule AI queue signal", () => {
+    expect(source).toContain("approval_ready?: boolean | null");
+    expect(source).toContain('m.approval_ready === true');
+  });
 });
