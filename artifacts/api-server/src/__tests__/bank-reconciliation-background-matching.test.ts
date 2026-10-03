@@ -23,7 +23,9 @@ describe("bank reconciliation background matching", () => {
     expect(source).toContain("Promise.all(Array.from({ length: workerCount }, () => worker()))");
     expect(source).toContain("matchingJobsByCompany.get(jobKey)");
     expect(source).toContain("loadPersistedMatchingJobState(jobKey)");
-    expect(source).toContain("persistMatchingJobState(jobKey, initialJobState)");
+    expect(source).toContain("claimMatchingJob(jobKey, initialJobState)");
+    expect(source).toContain("touchMatchingJobState(jobKey, nextState)");
+    expect(source).toContain("already_running: true");
     expect(source).toContain('X-CST-Bank-Recon-Revision');
     expect(source).toContain('private, no-store, no-cache, must-revalidate');
     expect(source).toContain('status: "failed"');
