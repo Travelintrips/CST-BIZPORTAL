@@ -728,6 +728,7 @@ interface CandidateDetails {
   confidenceScore?: number | null;
   stopProcessing?: boolean | null;
   requiresDocumentUpload?: boolean | null;
+  candidateRequirement?: "required" | "not_required" | string | null;
   taxType?: string | null;
   settlementItems?: Array<{
     id?: number;
@@ -1764,6 +1765,23 @@ function hasUnresolvedVariance(m: BankMutation): boolean {
 function isExactMatch(m: BankMutation): boolean {
   const candidate = visibleCandidates(m)[0];
   if (!candidate || m.status !== "matched" || hasUnresolvedVariance(m)) return false;
+
+  // Rule AI is a deterministic accounting classification, not a dated
+  // business-document candidate. For rules that explicitly do not require a
+  // canonical transaction, date_match is intentionally false and must not
+  // hide the match from the approval queue. The configured target COA must
+  // still resolve to an active/postable account.
+  if (candidate.candidate_type === "recon_rule") {
+    return Boolean(
+      m.review_code === "RULE_AI_MATCH"
+        && candidate.candidate_source === "public.recon_rules"
+        && candidate.amount_match
+        && candidate.name_match
+        && candidate.details?.candidateRequirement === "not_required"
+        && candidate.details?.targetCoaValidationStatus === "valid",
+    );
+  }
+
   // Same-day and same-amount candidates remain selectable for reviewer
   // confirmation even when the payer name differs. Auto-post is stricter:
   // the candidate must also carry a positive name match. The backend remains
