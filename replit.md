@@ -44,4 +44,4 @@ _Populate as you build — sharp edges, "always run X before Y" rules._
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
 
-<!-- hostinger-redeploy: 2026-10-03T09:26:00Z -->
+<!-- hostinger-redeploy: 2026-10-03T09:43:00Z -->

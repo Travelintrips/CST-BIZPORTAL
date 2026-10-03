@@ -13,4 +13,9 @@ describe("bank reconciliation account filter typing", () => {
       "bm.bank_account_id = ${addValue(requestedBankAccountId)}::text",
     );
   });
+
+  it("parses text bank_account_id as a numeric Rule AI account id", () => {
+    expect(src).toContain("bank_account_id&&/^\\d+$/.test(mutation.bank_account_id)");
+    expect(src).not.toContain("bank_account_id&&/^\\\\d+$/.test(mutation.bank_account_id)");
+  });
 });
