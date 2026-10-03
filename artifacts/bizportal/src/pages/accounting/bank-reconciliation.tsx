@@ -1886,7 +1886,7 @@ function isQrisMutation(m: BankMutation): boolean {
  * Rule AI / vendor / manual COA reconciliation.
  */
 export function isSettlementOwnedQrisMutation(m: BankMutation): boolean {
-  return m.direction === "IN" && isSettlementOwnedQrisMutation(m);
+  return m.direction === "IN" && isQrisMutation(m);
 }
 
 export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
