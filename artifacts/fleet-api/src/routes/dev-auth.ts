@@ -3,7 +3,7 @@ import { Router, type Request, type Response } from "express";
 import {
   getRuntimeDatabaseUrl,
   pool,
-} from "@workspace/db";
+} from "../lib/db";
 
 export interface DevAuthUser {
   id: string;
