@@ -10,6 +10,12 @@ class SmtpError extends Error {
   }
 }
 
+function extractMailboxAddress(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.match(/<([^<>@\s]+@[^<>@\s]+)>/)?.[1]
+    ?? value.match(/^([^<>@\s]+@[^<>@\s]+)$/)?.[1];
+}
+
 export async function resolveSmtpConfig() {
   let configuredHost = process.env.SMTP_HOST?.trim();
   let configuredPort = process.env.SMTP_PORT?.trim();
