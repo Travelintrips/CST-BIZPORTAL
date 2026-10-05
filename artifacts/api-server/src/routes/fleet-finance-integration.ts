@@ -299,6 +299,103 @@ router.get("/companies/:companyId/accounting-settings", async (req, res) => {
   }
 });
 
+router.put("/companies/:companyId/accounting-settings", async (req, res) => {
+  const key = requireIdempotencyKey(req, res);
+  if (!key) return;
+
+  const companyId = parsePositiveInt(req.params.companyId);
+  const cashId = parsePositiveInt(req.body?.fleetCashAccountId);
+  const receivableId = parsePositiveInt(req.body?.fleetDriverReceivableAccountId);
+  const journalId = parsePositiveInt(req.body?.journalId);
+  if (!companyId || !cashId || !receivableId || !journalId) {
+    res.status(400).json({ error: "companyId, Fleet cash COA, piutang driver COA, dan journalId wajib valid." });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const accounts = await client.query(
+      `SELECT id,type::text,is_active,is_postable,status
+         FROM public.chart_of_accounts
+        WHERE company_id=$1
+          AND id=ANY($2::int[])`,
+      [companyId, [cashId, receivableId]],
+    );
+    if (accounts.rowCount !== 2) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "COA Fleet tidak ditemukan pada company ini." });
+      return;
+    }
+    for (const row of accounts.rows as Array<Record<string, unknown>>) {
+      if (
+        row.is_active === false ||
+        row.is_postable === false ||
+        String(row.status ?? "ACTIVE") !== "ACTIVE" ||
+        String(row.type ?? "") !== "asset"
+      ) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "COA Fleet harus aktif, postable, dan bertipe asset." });
+        return;
+      }
+    }
+
+    const journal = await client.query(
+      `SELECT id
+         FROM public.accounting_journals
+        WHERE id=$1
+          AND company_id=$2
+          AND COALESCE(is_active,true)=true
+        LIMIT 1`,
+      [journalId, companyId],
+    );
+    if (!journal.rows[0]) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "Jurnal Fleet tidak valid atau tidak aktif untuk company ini." });
+      return;
+    }
+
+    const existing = await client.query(
+      "SELECT id FROM public.accounting_settings WHERE company_id=$1 LIMIT 1",
+      [companyId],
+    );
+    if (existing.rows[0]?.id) {
+      await client.query(
+        `UPDATE public.accounting_settings
+            SET fleet_cash_account_id=$2,
+                fleet_driver_receivable_account_id=$3,
+                cash_journal_id=$4,
+                updated_at=NOW()
+          WHERE id=$1`,
+        [existing.rows[0].id, cashId, receivableId, journalId],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO public.accounting_settings(
+           company_id,fleet_cash_account_id,fleet_driver_receivable_account_id,cash_journal_id,updated_at
+         ) VALUES($1,$2,$3,$4,NOW())`,
+        [companyId, cashId, receivableId, journalId],
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({
+      ok: true,
+      fleetCashAccountId: cashId,
+      fleetDriverReceivableAccountId: receivableId,
+      journalId,
+      idempotencyKey: key,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    req.log.error({ error, companyId }, "Fleet Finance settings update failed");
+    res.status(503).json({ error: error instanceof Error ? error.message : "Fleet Finance settings update failed" });
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/cash-payments", async (req, res) => {
   const key = requireIdempotencyKey(req, res);
   if (!key) return;
