@@ -1,6 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
-import { getDatabaseSecretName, readSecret } from "@workspace/db";
+import { getDatabaseSecretName, readSecret } from "./db";
 
 type SmtpSocket = net.Socket | tls.TLSSocket;
 
