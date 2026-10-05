@@ -2288,6 +2288,29 @@ router.patch("/cash-payments/:id/cancel", async (req: AdminRequest, res) => {
     client.release();
   }
 });
+const FLEET_EXPENSE_TYPES = ["Ban","Perbaikan","Service Rutin","Asuransi","Bahan Bakar","Parkir","Tilang","Oli","Spare Part","Lainnya"] as const;
+
+async function ensureFleetOpsTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.fleet_expense_budgets (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      expense_type TEXT NOT NULL,
+      budget_month DATE NOT NULL,
+      budget_amount NUMERIC(18,2) NOT NULL CHECK (budget_amount >= 0),
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(company_id, expense_type, budget_month)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS fleet_expense_budgets_company_month_idx
+      ON public.fleet_expense_budgets(company_id,budget_month)
+  `);
+}
+
 router.get("/expenses", async (req: AdminRequest, res) => {
   try {
     const cid = companyId(req);
