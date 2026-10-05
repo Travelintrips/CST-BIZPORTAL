@@ -248,7 +248,7 @@ function emptyLocalMatchingSummary(): LocalMatchingSummary {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement";
+  candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement" | "internal_transfer";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -274,6 +274,8 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
       return "public.vendor_invoices";
     case "qris_settlement":
       return "sport_center.payment_settlement_batches";
+    case "internal_transfer":
+      return "public.bank_mutations";
   }
 }
 
@@ -400,6 +402,120 @@ async function loadLocalMatchCandidates(
   const candidates: LocalMatchCandidate[] = [];
 
   if (direction === "IN") {
+    // Pair incoming cash/bank mutations with an already-posted outgoing mutation
+    // from another company-owned account only when the source journal already
+    // proves the same internal transfer (Dr target cash/bank, Cr source bank).
+    // This prevents an incoming transfer from being misclassified as revenue
+    // and prevents a second accounting journal from being created.
+    if (mutation.bank_account_id) {
+      try {
+        const internalTransfers = await client.query<{
+          id: number;
+          transaction_date: string;
+          description: string;
+          date_distance_days: number;
+          source_account_name: string | null;
+        }>(
+          `select source.id,
+                  source.transaction_date::text,
+                  source.description,
+                  abs(source.transaction_date - $3::date)::integer as date_distance_days,
+                  source_account.name as source_account_name
+             from public.bank_mutations source
+             join public.company_bank_accounts target_account
+               on target_account.company_id = $1
+              and coalesce(target_account.is_active, true) = true
+              and (
+                target_account.id::text = $4::text
+                or target_account.account_number::text = $4::text
+                or regexp_replace(coalesce(target_account.account_number, ''), '[^0-9]', '', 'g') =
+                   regexp_replace(coalesce($4::text, ''), '[^0-9]', '', 'g')
+              )
+             join public.company_bank_accounts source_account
+               on source_account.company_id = source.company_id
+              and coalesce(source_account.is_active, true) = true
+              and (
+                source_account.id::text = source.bank_account_id::text
+                or source_account.account_number::text = source.bank_account_id::text
+                or regexp_replace(coalesce(source_account.account_number, ''), '[^0-9]', '', 'g') =
+                   regexp_replace(coalesce(source.bank_account_id::text, ''), '[^0-9]', '', 'g')
+              )
+             join public.accounting_entries source_entry
+               on source_entry.id = source.journal_entry_id
+              and source_entry.company_id = source.company_id
+              and source_entry.status::text = 'posted'
+              and coalesce(source_entry.is_voided, false) = false
+            where source.company_id = $1
+              and source.id <> $5
+              and source.direction = 'OUT'
+              and source.status = 'posted'
+              and source.reconciliation_status = 'reconciled'
+              and coalesce(source.accounting_posted, false) = true
+              and source.journal_entry_id is not null
+              and source_account.id <> target_account.id
+              and abs(source.amount::numeric - $2::numeric) < 0.01
+              and source.transaction_date between ($3::date - 1) and ($3::date + 1)
+              and (
+                source.linked_transaction_id is null
+                or (
+                  source.linked_transaction_type = 'internal_transfer'
+                  and source.linked_transaction_id = $5
+                )
+              )
+              and exists (
+                select 1
+                  from public.accounting_entry_lines target_line
+                 where target_line.entry_id = source_entry.id
+                   and target_line.account_id = target_account.coa_id
+                   and target_line.debit > 0
+                   and abs(target_line.debit::numeric - $2::numeric) < 0.01
+              )
+              and exists (
+                select 1
+                  from public.accounting_entry_lines source_line
+                 where source_line.entry_id = source_entry.id
+                   and source_line.account_id = source_account.coa_id
+                   and source_line.credit > 0
+                   and abs(source_line.credit::numeric - $2::numeric) < 0.01
+              )
+              and not exists (
+                select 1
+                  from public.bank_reconciliation_matches brm
+                 where brm.candidate_type = 'internal_transfer'
+                   and brm.candidate_id = source.id
+                   and brm.candidate_source = 'public.bank_mutations'
+                   and brm.mutation_id <> $5
+                   and brm.status in ('approved', 'posted')
+              )
+            order by abs(source.transaction_date - $3::date), source.id
+            limit 10`,
+          [mutation.company_id, amount, date, mutation.bank_account_id, mutation.id],
+        );
+
+        for (const source of internalTransfers.rows) {
+          const dateDistanceDays = Number(source.date_distance_days);
+          const exactDateMatch = dateDistanceDays === 0;
+          candidates.push({
+            candidateType: "internal_transfer",
+            candidateId: Number(source.id),
+            score: exactDateMatch ? 100 : 96,
+            amountMatch: true,
+            dateMatch: dateDistanceDays <= 1,
+            referenceMatch: false,
+            nameMatch: tokenOverlap(mutation.description, source.description),
+            reason: exactDateMatch
+              ? "Transfer internal: nominal, tanggal, rekening tujuan, dan jurnal sumber cocok."
+              : "Transfer internal: nominal dan jurnal sumber cocok; tanggal dalam toleransi 1 hari.",
+            customerName: source.source_account_name,
+            orderRef: String(source.id),
+          });
+        }
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "42P01" && code !== "42703") throw error;
+      }
+    }
+
     // Canonical QRIS settlements are the source of truth for net bank credits.
     // A QRIS bank mutation is net of MDR, so comparing it directly with one
     // sport_payments.amount drops valid candidates (for example 130,000 gross
@@ -1843,6 +1959,152 @@ async function resolvePostedSourceReceiptJournal(
   };
 }
 
+async function resolvePostedInternalTransferJournal(
+  client: ApprovalClient,
+  companyId: number,
+  sourceMutationId: number,
+  targetMutationId: number,
+  targetBankCoaId: number,
+  amount: number,
+): Promise<SourceReceiptJournal> {
+  const sourceResult = await client.query<{
+    id: number;
+    journal_entry_id: number;
+    bank_account_id: string | null;
+    linked_transaction_type: string | null;
+    linked_transaction_id: number | null;
+  }>(
+    `select id,
+            journal_entry_id,
+            bank_account_id::text,
+            linked_transaction_type,
+            linked_transaction_id
+       from public.bank_mutations
+      where id = $1
+        and company_id = $2
+        and direction = 'OUT'
+        and status = 'posted'
+        and reconciliation_status = 'reconciled'
+        and coalesce(accounting_posted, false) = true
+        and journal_entry_id is not null
+        and abs(amount::numeric - $3::numeric) < 0.01
+      limit 1
+      for update`,
+    [sourceMutationId, companyId, amount],
+  );
+  const source = sourceResult.rows[0];
+  if (!source) {
+    throw new ApprovalError(
+      "Mutasi sumber transfer internal belum posted/reconciled atau nominalnya berubah.",
+      409,
+      "INTERNAL_TRANSFER_SOURCE_INVALID",
+    );
+  }
+  if (
+    source.linked_transaction_id != null
+    && !(
+      source.linked_transaction_type === "internal_transfer"
+      && source.linked_transaction_id === targetMutationId
+    )
+  ) {
+    throw new ApprovalError(
+      "Mutasi sumber transfer internal sudah ditautkan ke mutasi lain.",
+      409,
+      "INTERNAL_TRANSFER_SOURCE_ALREADY_LINKED",
+    );
+  }
+
+  const sourceBankCoaId = await resolveApprovalBankAccount(
+    client,
+    companyId,
+    source.bank_account_id,
+  );
+  if (sourceBankCoaId == null || sourceBankCoaId === targetBankCoaId) {
+    throw new ApprovalError(
+      "Rekening sumber transfer internal tidak dapat ditentukan atau sama dengan rekening tujuan.",
+      422,
+      "INTERNAL_TRANSFER_ACCOUNT_INVALID",
+    );
+  }
+
+  const entryResult = await client.query<{ id: number; entry_number: string }>(
+    `select id, entry_number
+       from public.accounting_entries
+      where id = $1
+        and company_id = $2
+        and status::text = 'posted'
+        and coalesce(is_voided, false) = false
+      limit 1`,
+    [source.journal_entry_id, companyId],
+  );
+  const entry = entryResult.rows[0];
+  if (!entry) {
+    throw new ApprovalError(
+      "Jurnal sumber transfer internal tidak ditemukan atau tidak posted.",
+      409,
+      "INTERNAL_TRANSFER_JOURNAL_INVALID",
+    );
+  }
+
+  const proofResult = await client.query<{
+    target_debit_count: string;
+    source_credit_count: string;
+  }>(
+    `select
+        count(*) filter (
+          where line.account_id = $2
+            and line.debit > 0
+            and abs(line.debit::numeric - $4::numeric) < 0.01
+        )::text as target_debit_count,
+        count(*) filter (
+          where line.account_id = $3
+            and line.credit > 0
+            and abs(line.credit::numeric - $4::numeric) < 0.01
+        )::text as source_credit_count
+       from public.accounting_entry_lines line
+      where line.entry_id = $1`,
+    [entry.id, targetBankCoaId, sourceBankCoaId, amount],
+  );
+  const proof = proofResult.rows[0];
+  if (
+    Number(proof?.target_debit_count ?? 0) !== 1
+    || Number(proof?.source_credit_count ?? 0) !== 1
+  ) {
+    throw new ApprovalError(
+      "Jurnal sumber tidak membuktikan transfer internal ke rekening tujuan yang dipilih.",
+      409,
+      "INTERNAL_TRANSFER_JOURNAL_MISMATCH",
+    );
+  }
+
+  const targetAccountResult = await client.query<{ code: string; name: string }>(
+    `select code, name
+       from public.chart_of_accounts
+      where id = $1
+        and (company_id = $2 or company_id is null)
+        and coalesce(is_active, true) = true
+      limit 1`,
+    [targetBankCoaId, companyId],
+  );
+  const targetAccount = targetAccountResult.rows[0];
+  if (!targetAccount) {
+    throw new ApprovalError(
+      "COA rekening tujuan transfer internal tidak aktif.",
+      422,
+      "COA_NOT_FOUND",
+    );
+  }
+
+  return {
+    entryId: entry.id,
+    entryNumber: entry.entry_number,
+    debitAccountId: targetBankCoaId,
+    debitAccountCode: targetAccount.code,
+    debitAccountName: targetAccount.name,
+    debitAmount: amount,
+  };
+}
+
 async function assertSportPaymentSourceReceiptAccount(
   client: ApprovalClient,
   companyId: number,
@@ -2331,7 +2593,25 @@ async function assertApprovalCandidateExists(
       `select id from public.recon_rules where id = $1 and company_id = $2 and is_active = true limit 1 for update`,
       [candidateId, companyId],
     );
-    } else if (candidateType === "qris_settlement") {
+    } else if (candidateType === "internal_transfer") {
+    if (candidateSource !== "public.bank_mutations") {
+      throw new ApprovalError("Sumber kandidat transfer internal tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id
+         from public.bank_mutations
+        where id = $1
+          and company_id = $2
+          and direction = 'OUT'
+          and status = 'posted'
+          and reconciliation_status = 'reconciled'
+          and coalesce(accounting_posted, false) = true
+          and journal_entry_id is not null
+        limit 1
+        for update`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "qris_settlement") {
     if (candidateSource !== "sport_center.payment_settlement_batches") {
       throw new ApprovalError("QRIS settlement legacy/tanpa source canonical tidak dapat di-approve.", 409, "STALE_CANDIDATE");
     }
@@ -2727,6 +3007,8 @@ async function approveBankMutation(
           ? "public.tenant_payments"
           : selectedCandidateType === "recon_rule"
             ? "public.recon_rules"
+          : selectedCandidateType === "internal_transfer"
+            ? "public.bank_mutations"
             : null;
   }
   await assertApprovalCandidateExists(
@@ -2813,6 +3095,86 @@ async function approveBankMutation(
       "COA_NOT_FOUND",
     );
   }
+  if (
+    direction === "IN"
+    && selectedCandidateType === "internal_transfer"
+    && selectedCandidateId != null
+    && selectedCandidateSource === "public.bank_mutations"
+  ) {
+    await assertSourceOwnedCandidateNotReconciledElsewhere(
+      client,
+      mutationId,
+      selectedCandidateType,
+      selectedCandidateId,
+      selectedCandidateSource,
+    );
+    const sourceJournal = await resolvePostedInternalTransferJournal(
+      client,
+      companyId,
+      selectedCandidateId,
+      mutationId,
+      bankCoaId,
+      amount,
+    );
+    const result = await finalizeSourceJournalReuse(
+      client,
+      mutationId,
+      companyId,
+      matchId,
+      selectedCandidateType,
+      selectedCandidateId,
+      selectedCandidateSource,
+      sourceJournal,
+      actor,
+    );
+
+    await client.query(
+      `update public.bank_mutations
+          set linked_transaction_type = 'internal_transfer',
+              linked_transaction_id = $2,
+              updated_at = now()
+        where id = $1
+          and company_id = $3
+          and (
+            linked_transaction_id is null
+            or (
+              linked_transaction_type = 'internal_transfer'
+              and linked_transaction_id = $2
+            )
+          )`,
+      [selectedCandidateId, mutationId, companyId],
+    );
+    await client.query(
+      `update public.bank_mutations
+          set review_code = 'INTERNAL_TRANSFER_JOURNAL_REUSED',
+              review_reason = 'Transfer internal dipasangkan ke mutasi rekening sumber dan memakai jurnal posted yang sama.',
+              updated_at = now()
+        where id = $1
+          and company_id = $2`,
+      [mutationId, companyId],
+    );
+    await client.query(
+      `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
+       values($1,'INTERNAL_TRANSFER_PAIRED',$2,$3::jsonb)`,
+      [
+        mutationId,
+        actor.email,
+        JSON.stringify({
+          source_mutation_id: selectedCandidateId,
+          source_journal_id: sourceJournal.entryId,
+          source_journal_number: sourceJournal.entryNumber,
+          target_bank_coa_id: bankCoaId,
+          amount,
+          contract: "internal-transfer-journal-reuse-v1",
+        }),
+      ],
+    );
+    return {
+      ...result,
+      internal_transfer_source_mutation_id: selectedCandidateId,
+    };
+  }
+
   let sourceReceiptJournal: SourceReceiptJournal | null = null;
   if (
     direction === "IN"
