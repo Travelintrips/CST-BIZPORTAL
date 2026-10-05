@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { createHash } from "node:crypto";
-import { pool } from "@workspace/db";
+import { pool } from "../lib/db";
 import { authenticateAdmin, type AdminRequest } from "./admin-auth";
 import { sendFleetOutstandingReminders } from "../lib/fleet-wa-reminder";
 import { postFleetCashPayment, reverseFleetCashPayment } from "../lib/central-finance-client";
