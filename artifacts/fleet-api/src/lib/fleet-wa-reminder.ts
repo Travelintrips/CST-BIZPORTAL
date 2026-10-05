@@ -1,4 +1,5 @@
 import { pool } from "@workspace/db";
+import { normalizeFleetPhone, sendFleetWa } from "./wa-gateway-client";
 
 type ReminderRow = {
   id: number;
@@ -16,15 +17,9 @@ export type FleetReminderSweepResult = {
   skippedSuppressed: number;
   skippedNoPhone: number;
   lastError?: string | null;
+  senderDevice?: string | null;
+  deviceStatus?: string | null;
 };
-
-function normalizePhone(value: unknown): string {
-  const digits = String(value ?? "").replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("62")) return digits;
-  if (digits.startsWith("0")) return "62" + digits.slice(1);
-  return "62" + digits;
-}
 
 function formatIdr(value: unknown): string {
   return new Intl.NumberFormat("id-ID", {
@@ -34,22 +29,20 @@ function formatIdr(value: unknown): string {
   }).format(Number(value) || 0);
 }
 
-async function getFonnteToken(): Promise<string> {
-  const envToken = process.env.FONNTE_TOKEN?.trim();
-  if (envToken) return envToken;
-  try {
-    const result = await pool.query<{ value: string }>(
-      `SELECT value
-         FROM public.portal_content
-        WHERE key='fonnte_token'
-          AND trim(COALESCE(value,'')) <> ''
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1`,
-    );
-    return result.rows[0]?.value?.trim() ?? "";
-  } catch {
-    return "";
-  }
+async function ensureFleetReminderTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.fleet_settings (
+      company_id INTEGER PRIMARY KEY,
+      auto_blast_enabled BOOLEAN NOT NULL DEFAULT false,
+      auto_blast_hour INTEGER NOT NULL DEFAULT 8,
+      auto_blast_last_run TIMESTAMPTZ,
+      fleet_cash_account_id INTEGER,
+      fleet_driver_receivable_account_id INTEGER,
+      journal_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 async function updateWorkerState(companyId: number, patch: {
@@ -93,75 +86,6 @@ async function updateWorkerState(companyId: number, patch: {
   ).catch(() => undefined);
 }
 
-async function getConfiguredFleetSender(): Promise<string | null> {
-  const envSender = process.env.FONNTE_SENDER_WA?.trim();
-  if (envSender) return normalizePhone(envSender);
-  try {
-    const result = await pool.query<{ value: string }>(
-      `SELECT value
-         FROM public.portal_content
-        WHERE key='fleet_fonnte_sender_wa'
-          AND trim(COALESCE(value,'')) <> ''
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1`,
-    );
-    const value = result.rows[0]?.value?.trim();
-    return value ? normalizePhone(value) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function getFonnteDeviceProfile(token: string): Promise<{ device: string | null; deviceStatus: string | null }> {
-  try {
-    const response = await fetch("https://api.fonnte.com/device", {
-      method: "POST",
-      headers: { Authorization: token },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const payload = await response.json().catch(() => null) as {
-      status?: boolean | string;
-      device?: string;
-      device_status?: string;
-    } | null;
-    if (!response.ok || payload?.status === false || payload?.status === "false") {
-      return { device: null, deviceStatus: null };
-    }
-    return {
-      device: payload?.device ? normalizePhone(payload.device) : null,
-      deviceStatus: payload?.device_status ? String(payload.device_status) : null,
-    };
-  } catch {
-    return { device: null, deviceStatus: null };
-  }
-}
-
-async function sendFonnte(target: string, message: string, token: string): Promise<{ messageId: string | null }> {
-  const response = await fetch("https://api.fonnte.com/send", {
-    method: "POST",
-    headers: {
-      Authorization: token,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({ target, message }).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
-  const payload = await response.json().catch(() => null) as {
-    status?: boolean | string;
-    reason?: string;
-    message?: string;
-  } | null;
-  const rejected = payload?.status === false || payload?.status === "false";
-  if (!response.ok || rejected) {
-    throw new Error(payload?.reason ?? payload?.message ?? `Fonnte returned ${response.status}`);
-  }
-  const rawId = (payload as Record<string, unknown> | null)?.id
-    ?? (payload as Record<string, unknown> | null)?.message_id
-    ?? (payload as Record<string, unknown> | null)?.requestid
-    ?? null;
-  return { messageId: rawId == null ? null : String(rawId) };
-}
-
 function reminderMessage(row: ReminderRow): string {
   const plate = String(row.vehicle_plate ?? "").trim();
   return [
@@ -193,24 +117,13 @@ export async function sendFleetOutstandingReminders(args: {
   const suppressHours = Math.max(1, Math.min(168, Number(args.suppressHours) || 24));
   const sendType = args.sendType ?? "manual";
   const ids = Array.isArray(args.ids) ? args.ids.filter((id) => Number.isSafeInteger(id) && id > 0) : [];
-  const token = await getFonnteToken();
-  if (!token) throw new Error("FONNTE_TOKEN belum dikonfigurasi.");
-
   const minOutstanding = Math.max(0, Number(args.minOutstanding) || 0);
-
-  const deviceProfile = await getFonnteDeviceProfile(token);
-  const configuredSender = await getConfiguredFleetSender();
-  // Fonnte's device/profile endpoint may report the account/admin profile device
-  // rather than the WhatsApp number that actually appears as the outbound sender.
-  // For Fleet audit logs, prefer the explicitly configured sender that has been
-  // operationally verified, while the token still controls the real provider route.
-  const senderDevice = configuredSender ?? deviceProfile.device;
 
   const params: unknown[] = [companyId, suppressHours, minOutstanding];
   let idFilter = "";
   if (ids.length) {
     params.push(ids);
-    idFilter = ` AND o.id = ANY(${params.length}::int[])`;
+    idFilter = ` AND o.id = ANY($${params.length}::int[])`;
   }
 
   const result = await pool.query<ReminderRow & { suppressed: boolean }>(
@@ -245,6 +158,8 @@ export async function sendFleetOutstandingReminders(args: {
   let skippedSuppressed = 0;
   let skippedNoPhone = 0;
   let lastError: string | null = null;
+  let senderDevice: string | null = process.env.FLEET_WA_DEVICE_ID?.trim() || null;
+  let deviceStatus: string | null = null;
   const allowOverrides = ids.length === 1;
 
   for (const row of result.rows) {
@@ -252,7 +167,7 @@ export async function sendFleetOutstandingReminders(args: {
       skippedSuppressed += 1;
       continue;
     }
-    const phone = normalizePhone(allowOverrides ? (args.phoneOverride ?? row.driver_phone) : row.driver_phone);
+    const phone = normalizeFleetPhone(allowOverrides ? (args.phoneOverride ?? row.driver_phone) : row.driver_phone);
     if (!phone) {
       skippedNoPhone += 1;
       continue;
@@ -261,7 +176,13 @@ export async function sendFleetOutstandingReminders(args: {
       ? args.messageOverride.trim()
       : reminderMessage(row);
     try {
-      const provider = await sendFonnte(phone, message, token);
+      const provider = await sendFleetWa({
+        phone,
+        message,
+        idempotencyKey: `fleet-wa:${companyId}:${row.id}:${sendType}`,
+      });
+      senderDevice = provider.senderDevice ?? senderDevice;
+      deviceStatus = provider.deviceStatus ?? deviceStatus;
       await pool.query(
         `INSERT INTO public.fleet_wa_logs
           (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status,sender_device,provider_message_id)
@@ -296,62 +217,49 @@ export async function sendFleetOutstandingReminders(args: {
     skippedNoPhone,
     lastError,
     senderDevice,
-    deviceStatus: deviceProfile.deviceStatus,
-  } as FleetReminderSweepResult & { senderDevice: string | null; deviceStatus: string | null };
+    deviceStatus,
+  };
 }
 
 export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepResult[]> {
+  await ensureFleetReminderTables();
   const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const hourWib = nowWib.getUTCHours();
   const dateWib = nowWib.toISOString().slice(0,10);
 
   const settings = await pool.query<{
     company_id: number;
-    fleet_auto_blast_hour: number | null;
-    fleet_auto_blast_last_run: string | Date | null;
+    auto_blast_hour: number | null;
+    auto_blast_last_run: string | Date | null;
   }>(
-    `SELECT company_id,fleet_auto_blast_hour,fleet_auto_blast_last_run
-       FROM public.accounting_settings
-      WHERE fleet_auto_blast_enabled=true
-        AND company_id IS NOT NULL`,
+    `SELECT company_id,auto_blast_hour,auto_blast_last_run
+       FROM public.fleet_settings
+      WHERE auto_blast_enabled=true`,
   );
 
   for (const row of settings.rows) {
     await updateWorkerState(Number(row.company_id), { tick: true });
   }
 
-  const token = await getFonnteToken();
-  if (!token) {
-    for (const row of settings.rows) {
-      await updateWorkerState(Number(row.company_id), {
-        error: "FONNTE_TOKEN belum dikonfigurasi pada runtime production.",
-      });
-    }
-    return [];
-  }
-
   const output: FleetReminderSweepResult[] = [];
   for (const row of settings.rows) {
     const companyId = Number(row.company_id);
-    const configuredHour = Number(row.fleet_auto_blast_hour ?? 8);
-    const lastRunDate = row.fleet_auto_blast_last_run
-      ? new Date(row.fleet_auto_blast_last_run).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" })
+    const configuredHour = Number(row.auto_blast_hour ?? 8);
+    const lastRunDate = row.auto_blast_last_run
+      ? new Date(row.auto_blast_last_run).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" })
       : null;
 
-    // Run once per WIB day at or after configured hour. This makes the worker
-    // resilient to Hostinger restarts or deploys that happen after 08:00.
     if (hourWib < configuredHour || lastRunDate === dateWib) continue;
-
     await updateWorkerState(companyId, { attempt: true });
 
     const claimed = await pool.query(
-      `UPDATE public.accounting_settings
-          SET fleet_auto_blast_last_run=NOW(),updated_at=NOW()
+      `UPDATE public.fleet_settings
+          SET auto_blast_last_run=NOW(),updated_at=NOW()
         WHERE company_id=$1
-          AND fleet_auto_blast_enabled=true
+          AND auto_blast_enabled=true
           AND (
-            fleet_auto_blast_last_run IS NULL
-            OR (fleet_auto_blast_last_run AT TIME ZONE 'Asia/Jakarta')::date < (NOW() AT TIME ZONE 'Asia/Jakarta')::date
+            auto_blast_last_run IS NULL
+            OR (auto_blast_last_run AT TIME ZONE 'Asia/Jakarta')::date < (NOW() AT TIME ZONE 'Asia/Jakarta')::date
           )
         RETURNING company_id`,
       [companyId],
@@ -366,14 +274,10 @@ export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepRes
         sendType: "auto",
         minOutstanding: 50_000,
       });
-      const extended = result as FleetReminderSweepResult & {
-        senderDevice?: string | null;
-        deviceStatus?: string | null;
-      };
       await updateWorkerState(companyId, {
         success: result.failed === 0,
-        senderDevice: extended.senderDevice ?? null,
-        deviceStatus: extended.deviceStatus ?? null,
+        senderDevice: result.senderDevice ?? null,
+        deviceStatus: result.deviceStatus ?? null,
         result,
         error: result.failed > 0 ? `${result.failed} pesan gagal dikirim.` : null,
       });
@@ -381,10 +285,9 @@ export async function runFleetAutoReminderSweep(): Promise<FleetReminderSweepRes
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await updateWorkerState(companyId, { error: message });
-      // Allow a retry on the next scheduler tick if the entire attempt failed.
       await pool.query(
-        `UPDATE public.accounting_settings
-            SET fleet_auto_blast_last_run=NULL,updated_at=NOW()
+        `UPDATE public.fleet_settings
+            SET auto_blast_last_run=NULL,updated_at=NOW()
           WHERE company_id=$1`,
         [companyId],
       ).catch(() => undefined);
