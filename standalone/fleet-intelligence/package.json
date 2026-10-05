@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "verify:snapshot": "node scripts/verify-snapshot.mjs",
-    "audit:imports": "node scripts/audit-imports.mjs"
+    "audit:imports": "node scripts/audit-imports.mjs",
+    "test:runtime": "node --test runtime/runtime-contract.test.mjs",
+    "start:health": "node runtime/health-server.mjs"
   }
 }
