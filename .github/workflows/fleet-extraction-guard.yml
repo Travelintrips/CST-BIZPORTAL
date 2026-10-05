@@ -1,0 +1,80 @@
+name: Fleet Extraction Guard
+
+on:
+  pull_request:
+    paths:
+      - "standalone/fleet-intelligence/**"
+      - "artifacts/bizportal/src/pages/logistics/fleet-intelligence/**"
+      - "artifacts/api-server/src/routes/fleet-intelligence.ts"
+      - "artifacts/api-server/src/lib/fleet-wa-reminder.ts"
+      - "artifacts/fleet-api/**"
+      - "artifacts/fleet-intelligence/**"
+      - ".github/workflows/fleet-extraction-guard.yml"
+  push:
+    branches:
+      - "chore/extract-fleet-intelligence"
+    paths:
+      - "standalone/fleet-intelligence/**"
+      - "artifacts/fleet-api/**"
+      - "artifacts/fleet-intelligence/**"
+      - ".github/workflows/fleet-extraction-guard.yml"
+
+concurrency:
+  group: fleet-extraction-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fleet-extraction-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify Fleet source snapshot parity
+        working-directory: standalone/fleet-intelligence
+        run: node scripts/verify-snapshot.mjs
+
+      - name: Audit extracted frontend imports
+        working-directory: standalone/fleet-intelligence
+        run: node scripts/audit-imports.mjs > /tmp/fleet-import-audit.json
+
+      - name: Run Fleet standalone runtime contracts
+        working-directory: standalone/fleet-intelligence
+        run: node --test runtime/runtime-contract.test.mjs
+
+      - name: Install standalone Fleet frontend dependencies
+        working-directory: artifacts/fleet-intelligence
+        run: npm install --ignore-scripts --package-lock=false
+
+      - name: Typecheck standalone Fleet frontend
+        working-directory: artifacts/fleet-intelligence
+        run: npm run typecheck
+
+      - name: Build standalone Fleet frontend
+        working-directory: artifacts/fleet-intelligence
+        run: npm run build
+
+      - name: Install standalone Fleet API dependencies
+        working-directory: artifacts/fleet-api
+        run: npm install --ignore-scripts --package-lock=false
+
+      - name: Typecheck standalone Fleet API
+        working-directory: artifacts/fleet-api
+        run: npm run typecheck
+
+      - name: Build standalone Fleet API
+        working-directory: artifacts/fleet-api
+        run: npm run build
+
+      - name: Guard production cutover
+        run: |
+          test -f standalone/fleet-intelligence/CUTOVER_CHECKLIST.md
+          test -f standalone/fleet-intelligence/DATA_OWNERSHIP.md
+          test -f standalone/fleet-intelligence/API_INVENTORY.md

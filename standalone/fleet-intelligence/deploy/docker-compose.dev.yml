@@ -1,0 +1,32 @@
+services:
+  fleet-api:
+    container_name: cst-fleet-api-dev
+    build:
+      context: ../../../artifacts/fleet-api
+    env_file:
+      - .env.dev
+    environment:
+      APP_ENV: development
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+      CENTRAL_FINANCE_WRITE_ENABLED: "false"
+    restart: unless-stopped
+    networks:
+      - fleet-dev
+
+  fleet-web:
+    container_name: cst-fleet-web-dev
+    build:
+      context: ../../../artifacts/fleet-intelligence
+    depends_on:
+      - fleet-api
+    ports:
+      - "127.0.0.1:18460:80"
+    restart: unless-stopped
+    networks:
+      - fleet-dev
+
+networks:
+  fleet-dev:
+    name: cst-fleet-dev

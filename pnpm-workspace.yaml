@@ -36,6 +36,8 @@ minimumReleaseAgeExclude:
 
 packages:
   - artifacts/*
+  - '!artifacts/fleet-intelligence'
+  - '!artifacts/fleet-api'
   - lib/*
   - lib/integrations/*
   - scripts
