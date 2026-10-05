@@ -15,6 +15,10 @@ on:
       - "standalone/fleet-intelligence/**"
       - ".github/workflows/fleet-extraction-guard.yml"
 
+concurrency:
+  group: fleet-extraction-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
