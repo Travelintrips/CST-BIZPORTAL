@@ -2593,7 +2593,7 @@ async function assertApprovalCandidateExists(
       `select id from public.recon_rules where id = $1 and company_id = $2 and is_active = true limit 1 for update`,
       [candidateId, companyId],
     );
-    } else if (candidateType === "internal_transfer") {
+  } else if (candidateType === "internal_transfer") {
     if (candidateSource !== "public.bank_mutations") {
       throw new ApprovalError("Sumber kandidat transfer internal tidak valid.", 409, "STALE_CANDIDATE");
     }
