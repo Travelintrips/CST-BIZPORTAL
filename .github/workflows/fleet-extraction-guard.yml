@@ -7,12 +7,16 @@ on:
       - "artifacts/bizportal/src/pages/logistics/fleet-intelligence/**"
       - "artifacts/api-server/src/routes/fleet-intelligence.ts"
       - "artifacts/api-server/src/lib/fleet-wa-reminder.ts"
+      - "artifacts/fleet-api/**"
+      - "artifacts/fleet-intelligence/**"
       - ".github/workflows/fleet-extraction-guard.yml"
   push:
     branches:
       - "chore/extract-fleet-intelligence"
     paths:
       - "standalone/fleet-intelligence/**"
+      - "artifacts/fleet-api/**"
+      - "artifacts/fleet-intelligence/**"
       - ".github/workflows/fleet-extraction-guard.yml"
 
 concurrency:
