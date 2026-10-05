@@ -915,6 +915,7 @@ router.post("/outstanding/wa-reminder", async (req: AdminRequest, res) => {
       actor:req.adminUser?.email??"system",
       suppressHours:Number(req.body?.suppress_hours)||24,
       sendType:"manual",
+      minOutstanding:50_000,
     });
     res.json({ok:true,...result});
   } catch(error) {
