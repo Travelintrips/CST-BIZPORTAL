@@ -1,4 +1,4 @@
-import { pool } from "@workspace/db";
+import { pool } from "./db";
 import { normalizeFleetPhone, sendFleetWa } from "./wa-gateway-client";
 
 type ReminderRow = {
