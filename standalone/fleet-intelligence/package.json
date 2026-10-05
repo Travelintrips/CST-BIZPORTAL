@@ -1,0 +1,10 @@
+{
+  "name": "@cst/fleet-intelligence-extraction",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "verify:snapshot": "node scripts/verify-snapshot.mjs",
+    "audit:imports": "node scripts/audit-imports.mjs"
+  }
+}
