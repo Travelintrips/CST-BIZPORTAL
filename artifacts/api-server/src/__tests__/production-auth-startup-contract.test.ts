@@ -14,6 +14,13 @@ describe("production auth startup contract", () => {
     expect(listen).toBeGreaterThan(init);
   });
 
+  it("retries transient production session initialization failures before giving up", () => {
+    expect(indexSource).toContain("initializeProductionSessionSigningWithRetry");
+    expect(indexSource).toContain("STARTUP_INIT_MAX_ATTEMPTS");
+    expect(indexSource).toContain("Production session signing initialization failed; retrying");
+    expect(indexSource).toContain("Math.min(5_000");
+  });
+
   it("uses the canonical runtime database resolver when standalone session secrets are absent", () => {
     expect(authSource).toContain("process.env.BIZPORTAL_SESSION_SECRET");
     expect(authSource).toContain("process.env.SESSION_SECRET");
