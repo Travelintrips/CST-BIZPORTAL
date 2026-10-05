@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { compare, hash } from "bcryptjs";
-import { pool } from "@workspace/db";
+import { pool } from "../lib/db";
 import { sendAdminLoginOtpEmail } from "../lib/smtp";
 import {
   getProductionSession,
