@@ -19,7 +19,7 @@ export async function sendFleetWa(args: { phone: string; message: string; idempo
   if (!phone) throw new Error("Nomor WhatsApp Fleet tidak valid.");
   const deviceId = String(process.env.FLEET_WA_DEVICE_ID ?? "").trim();
 
-  const response = await fetch(`${baseUrl}/api/messages`, {
+  const response = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -27,9 +27,9 @@ export async function sendFleetWa(args: { phone: string; message: string; idempo
       ...(args.idempotencyKey ? { "Idempotency-Key": args.idempotencyKey } : {}),
     },
     body: JSON.stringify({
+      type: "text",
       to: phone,
-      message: args.message,
-      source: "fleet-intelligence",
+      text: args.message,
       ...(deviceId ? { deviceId } : {}),
     }),
     signal: AbortSignal.timeout(15_000),
