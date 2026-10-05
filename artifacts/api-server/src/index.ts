@@ -23,8 +23,40 @@ if (Number.isNaN(port) || port <= 0) {
 
 const host = process.env["HOST"]?.trim() || "0.0.0.0";
 
+async function initializeProductionSessionSigningWithRetry(): Promise<void> {
+  const maxAttempts = Math.max(
+    1,
+    Math.min(10, Number(process.env["STARTUP_INIT_MAX_ATTEMPTS"] ?? 6) || 6),
+  );
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await initializeProductionSessionSigning();
+      if (attempt > 1) {
+        logger.info({ attempt }, "Production session signing recovered after retry");
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) break;
+
+      const backoffMs = Math.min(5_000, 500 * (2 ** (attempt - 1)));
+      logger.warn(
+        { error, attempt, maxAttempts, backoffMs },
+        "Production session signing initialization failed; retrying",
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Production session signing initialization failed");
+}
+
 if (!isDevelopmentEnvironment()) {
-  await initializeProductionSessionSigning();
+  await initializeProductionSessionSigningWithRetry();
   logger.info("Production session signing initialized");
 }
 
