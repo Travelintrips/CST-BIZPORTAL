@@ -12,7 +12,7 @@ function resolveEnvironment(): AppEnvironment {
   throw new Error('APP_ENV wajib "development" atau "production".');
 }
 
-function resolveDatabaseUrl(): string {
+export function getRuntimeDatabaseUrl(): string {
   const env=resolveEnvironment();
   const key=env==="production"?"SUPABASE_DATABASE_URL":"SUPABASE_DATABASE_URL_DEV";
   const value=String(process.env[key] ?? "").trim();
@@ -33,7 +33,7 @@ function resolveDatabaseUrl(): string {
 }
 
 export const pool = new Pool({
-  connectionString: resolveDatabaseUrl(),
+  connectionString: getRuntimeDatabaseUrl(),
   max: Math.max(2, Number(process.env.DB_POOL_MAX ?? 10) || 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 15_000,
