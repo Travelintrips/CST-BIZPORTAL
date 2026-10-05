@@ -15,6 +15,7 @@ export type FleetReminderSweepResult = {
   failed: number;
   skippedSuppressed: number;
   skippedNoPhone: number;
+  lastError?: string | null;
 };
 
 function normalizePhone(value: unknown): string {
@@ -185,6 +186,8 @@ export async function sendFleetOutstandingReminders(args: {
   ids?: number[];
   sendType?: "manual" | "selected" | "auto";
   minOutstanding?: number;
+  phoneOverride?: string;
+  messageOverride?: string;
 }): Promise<FleetReminderSweepResult> {
   const companyId = args.companyId;
   const suppressHours = Math.max(1, Math.min(168, Number(args.suppressHours) || 24));
@@ -232,7 +235,6 @@ export async function sendFleetOutstandingReminders(args: {
         AND o.outstanding_amount >= $3
         AND d.status='active'
         AND COALESCE(d.source_present_in_latest_snapshot,true)=true
-        AND NULLIF(d.vehicle_plate,'') IS NOT NULL
         ${idFilter}
       ORDER BY o.outstanding_amount DESC,o.id`,
     params,
@@ -242,18 +244,22 @@ export async function sendFleetOutstandingReminders(args: {
   let failed = 0;
   let skippedSuppressed = 0;
   let skippedNoPhone = 0;
+  let lastError: string | null = null;
+  const allowOverrides = ids.length === 1;
 
   for (const row of result.rows) {
     if (row.suppressed) {
       skippedSuppressed += 1;
       continue;
     }
-    const phone = normalizePhone(row.driver_phone);
+    const phone = normalizePhone(allowOverrides ? (args.phoneOverride ?? row.driver_phone) : row.driver_phone);
     if (!phone) {
       skippedNoPhone += 1;
       continue;
     }
-    const message = reminderMessage(row);
+    const message = allowOverrides && args.messageOverride?.trim()
+      ? args.messageOverride.trim()
+      : reminderMessage(row);
     try {
       const provider = await sendFonnte(phone, message, token);
       await pool.query(
@@ -271,11 +277,12 @@ export async function sendFleetOutstandingReminders(args: {
       sent += 1;
     } catch (error) {
       failed += 1;
+      lastError = error instanceof Error ? error.message : String(error);
       await pool.query(
         `INSERT INTO public.fleet_wa_logs
           (company_id,outstanding_id,driver_name,driver_phone,vehicle_plate,outstanding_amount,message,sent_by,send_type,status,sender_device,error_detail)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'failed',$10,$11)`,
-        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType,senderDevice,error instanceof Error ? error.message : String(error)],
+        [companyId,row.id,row.driver_name,phone,row.vehicle_plate,row.outstanding_amount,message,args.actor ?? "system",sendType,senderDevice,lastError],
       ).catch(() => undefined);
     }
   }
@@ -287,6 +294,7 @@ export async function sendFleetOutstandingReminders(args: {
     failed,
     skippedSuppressed,
     skippedNoPhone,
+    lastError,
     senderDevice,
     deviceStatus: deviceProfile.deviceStatus,
   } as FleetReminderSweepResult & { senderDevice: string | null; deviceStatus: string | null };

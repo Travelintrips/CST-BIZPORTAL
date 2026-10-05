@@ -48,6 +48,7 @@ type OutstandingRow = {
 
 type SortKey = "outstanding_amount" | "due_days" | "last_updated_date";
 const MIN_MACET = 500_000;
+const MIN_WA_REMINDER = 50_000;
 
 const DEFAULT_REMINDER_MSG =
   `Yth. [Nama Driver],\n\nKami menginformasikan bahwa Anda memiliki outstanding yang belum terselesaikan.\n\nMohon segera menghubungi admin untuk penyelesaian.\n\nTerima kasih.`;
@@ -65,6 +66,7 @@ export default function DriverMacetPage() {
   const [resolveNotes, setResolveNotes] = useState("");
   const [waDriver, setWaDriver] = useState<OutstandingRow | null>(null);
   const [waMessage, setWaMessage] = useState("");
+  const [waResult, setWaResult] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OutstandingRow | null>(null);
   const [showReminderDialog, setShowReminderDialog] = useState(false);
   const [reminderMsg, setReminderMsg] = useState(DEFAULT_REMINDER_MSG);
@@ -116,19 +118,37 @@ export default function DriverMacetPage() {
 
   const waMutation = useMutation({
     mutationFn: async () => {
+      setWaResult(null);
       const res = await fetch(`/api/logistics/fleet/outstanding/${waDriver!.id}/wa`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: waDriver!.driver_phone, message: waMessage }),
       });
-      if (!res.ok) throw new Error("Gagal kirim WA");
+      const payload = await res.json().catch(() => ({})) as {
+        ok?: boolean;
+        sent?: number;
+        failed?: number;
+        skippedSuppressed?: number;
+        provider_message_id?: string | null;
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok) throw new Error(payload.error || "Gagal kirim WA");
+      if ((payload.sent ?? 0) < 1) {
+        throw new Error(payload.error || "WA belum terkirim. Silakan periksa status gateway/provider.");
+      }
+      return payload;
     },
-    onSuccess: () => {
-      toast.success("WhatsApp berhasil dikirim");
-      setWaDriver(null); setWaMessage("");
+    onSuccess: (payload) => {
+      const text = payload.message || "WhatsApp berhasil dikirim";
+      setWaResult({ kind: "success", text });
+      toast.success(text);
       qc.invalidateQueries({ queryKey: ["fleet-macet-outstanding"] });
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      setWaResult({ kind: "error", text: e.message });
+      toast.error(e.message);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -169,6 +189,10 @@ export default function DriverMacetPage() {
     () => allOpen.filter((r) => (parseFloat(String(r.outstanding_amount)) || 0) >= MIN_MACET),
     [allOpen]
   );
+  const waReminderList = useMemo(
+    () => allOpen.filter((r) => (parseFloat(String(r.outstanding_amount)) || 0) > MIN_WA_REMINDER && r.driver_phone),
+    [allOpen]
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -205,6 +229,7 @@ export default function DriverMacetPage() {
   const totalOutstanding = filtered.reduce((s, r) => s + (parseFloat(String(r.outstanding_amount)) || 0), 0);
 
   function openWa(driver: OutstandingRow) {
+    setWaResult(null);
     setWaMessage(
       `Yth. ${driver.driver_name},\n\nKami menginformasikan bahwa Anda memiliki outstanding sebesar ${fmtIdr(driver.outstanding_amount)} yang belum terselesaikan.\n\nMohon segera menghubungi admin untuk penyelesaian.\n\nTerima kasih.`
     );
@@ -262,7 +287,7 @@ export default function DriverMacetPage() {
               size="sm"
               className="bg-green-700 hover:bg-green-600 text-white gap-1.5"
               onClick={() => setShowReminderDialog(true)}
-              disabled={macetList.length === 0}
+              disabled={waReminderList.length === 0}
             >
               <Send className="w-3.5 h-3.5" />
               WA Reminder Semua
@@ -483,12 +508,12 @@ export default function DriverMacetPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Send className="w-4 h-4 text-green-400" />
-                WA Reminder — {macetList.filter(d => d.driver_phone).length} Driver
+                WA Reminder — {waReminderList.length} Driver
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
               <div className="bg-slate-700/50 rounded-lg p-3 text-xs text-slate-300 space-y-1">
-                <p>WA dikirim ke semua driver dengan outstanding &gt; Rp 500 ribu yang memiliki nomor HP.</p>
+                <p>WA dikirim ke semua driver dengan outstanding &gt; Rp 50 ribu yang memiliki nomor HP.</p>
                 <p className="text-slate-400">Driver yang sudah dikirim dalam periode suppress akan dilewati otomatis.</p>
               </div>
               <div className="space-y-1.5">
@@ -586,7 +611,7 @@ export default function DriverMacetPage() {
 
       {/* Dialog: Kirim WA (per driver) */}
       {waDriver !== null && (
-        <Dialog open onOpenChange={() => setWaDriver(null)}>
+        <Dialog open onOpenChange={() => { setWaDriver(null); setWaResult(null); }}>
           <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-md">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
@@ -604,12 +629,23 @@ export default function DriverMacetPage() {
                 <Textarea value={waMessage} onChange={(e) => setWaMessage(e.target.value)}
                   className="bg-slate-700 border-slate-600 text-white resize-none text-sm" rows={6} />
               </div>
+              {waResult && (
+                <div className={`rounded-md border px-3 py-2 text-sm ${
+                  waResult.kind === "success"
+                    ? "border-emerald-600/50 bg-emerald-950/40 text-emerald-300"
+                    : "border-red-600/50 bg-red-950/40 text-red-300"
+                }`}>
+                  {waResult.kind === "success" ? "✓ " : "✕ "}{waResult.text}
+                </div>
+              )}
               <div className="flex gap-3">
-                <Button variant="outline" className="flex-1 border-slate-600" onClick={() => setWaDriver(null)}>Batal</Button>
+                <Button variant="outline" className="flex-1 border-slate-600" onClick={() => { setWaDriver(null); setWaResult(null); }}>
+                  {waResult?.kind === "success" ? "Tutup" : "Batal"}
+                </Button>
                 <Button className="flex-1 bg-green-600 hover:bg-green-700"
-                  disabled={waMutation.isPending || !waMessage.trim()} onClick={() => waMutation.mutate()}>
-                  <MessageCircle className="w-4 h-4 mr-1.5" />
-                  {waMutation.isPending ? "Mengirim..." : "Kirim WA"}
+                  disabled={waMutation.isPending || !waMessage.trim() || waResult?.kind === "success"} onClick={() => waMutation.mutate()}>
+                  {waMutation.isPending ? <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> : <MessageCircle className="w-4 h-4 mr-1.5" />}
+                  {waMutation.isPending ? "Mengirim..." : waResult?.kind === "success" ? "Terkirim" : "Kirim WA"}
                 </Button>
               </div>
             </div>

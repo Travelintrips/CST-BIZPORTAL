@@ -793,16 +793,26 @@ router.post("/outstanding/:id/wa", async (req: AdminRequest, res) => {
       suppressHours:1,
       ids:[id],
       sendType:"selected",
+      phoneOverride:typeof req.body?.phone==="string"?req.body.phone:undefined,
+      messageOverride:typeof req.body?.message==="string"?req.body.message:undefined,
     });
     if(result.eligible===0){
       res.status(409).json({error:"Driver tidak memenuhi syarat reminder: harus aktif dan memiliki outstanding > 0."});
       return;
     }
     if(result.sent===0&&result.skippedSuppressed>0){
-      res.status(409).json({error:"Reminder baru saja dikirim. Tunggu sebelum mengirim ulang agar tidak duplikat/spam."});
+      res.status(409).json({error:"Reminder baru saja dikirim. Tunggu sebelum mengirim ulang agar tidak duplikat/spam.",...result});
       return;
     }
-    res.json({ok:true,...result});
+    if(result.sent===0&&result.failed>0){
+      res.status(502).json({error:result.lastError??"Provider WhatsApp gagal mengirim pesan.",...result});
+      return;
+    }
+    if(result.sent===0){
+      res.status(409).json({error:"WA belum terkirim. Periksa nomor driver dan status gateway/provider.",...result});
+      return;
+    }
+    res.json({ok:true,message:"WhatsApp berhasil dikirim.",...result});
   } catch(error) {
     req.log.error({error},"Fleet single WA reminder failed");
     res.status(503).json({error:error instanceof Error?error.message:"Gagal mengirim WA Fleet."});
@@ -905,6 +915,7 @@ router.post("/outstanding/wa-reminder", async (req: AdminRequest, res) => {
       actor:req.adminUser?.email??"system",
       suppressHours:Number(req.body?.suppress_hours)||24,
       sendType:"manual",
+      minOutstanding:50_000,
     });
     res.json({ok:true,...result});
   } catch(error) {
