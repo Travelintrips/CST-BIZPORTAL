@@ -41,6 +41,30 @@ jobs:
         working-directory: standalone/fleet-intelligence
         run: node --test runtime/runtime-contract.test.mjs
 
+      - name: Install standalone Fleet frontend dependencies
+        working-directory: artifacts/fleet-intelligence
+        run: npm install --ignore-scripts --package-lock=false
+
+      - name: Typecheck standalone Fleet frontend
+        working-directory: artifacts/fleet-intelligence
+        run: npm run typecheck
+
+      - name: Build standalone Fleet frontend
+        working-directory: artifacts/fleet-intelligence
+        run: npm run build
+
+      - name: Install standalone Fleet API dependencies
+        working-directory: artifacts/fleet-api
+        run: npm install --ignore-scripts --package-lock=false
+
+      - name: Typecheck standalone Fleet API
+        working-directory: artifacts/fleet-api
+        run: npm run typecheck
+
+      - name: Build standalone Fleet API
+        working-directory: artifacts/fleet-api
+        run: npm run build
+
       - name: Guard production cutover
         run: |
           test -f standalone/fleet-intelligence/CUTOVER_CHECKLIST.md
