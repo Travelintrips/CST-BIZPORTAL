@@ -1,0 +1,48 @@
+name: Fleet Extraction Guard
+
+on:
+  pull_request:
+    paths:
+      - "standalone/fleet-intelligence/**"
+      - "artifacts/bizportal/src/pages/logistics/fleet-intelligence/**"
+      - "artifacts/api-server/src/routes/fleet-intelligence.ts"
+      - "artifacts/api-server/src/lib/fleet-wa-reminder.ts"
+      - ".github/workflows/fleet-extraction-guard.yml"
+  push:
+    branches:
+      - "chore/extract-fleet-intelligence"
+    paths:
+      - "standalone/fleet-intelligence/**"
+      - ".github/workflows/fleet-extraction-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fleet-extraction-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify Fleet source snapshot parity
+        working-directory: standalone/fleet-intelligence
+        run: node scripts/verify-snapshot.mjs
+
+      - name: Audit extracted frontend imports
+        working-directory: standalone/fleet-intelligence
+        run: node scripts/audit-imports.mjs > /tmp/fleet-import-audit.json
+
+      - name: Run Fleet standalone runtime contracts
+        working-directory: standalone/fleet-intelligence
+        run: node --test runtime/runtime-contract.test.mjs
+
+      - name: Guard production cutover
+        run: |
+          test -f standalone/fleet-intelligence/CUTOVER_CHECKLIST.md
+          test -f standalone/fleet-intelligence/DATA_OWNERSHIP.md
+          test -f standalone/fleet-intelligence/API_INVENTORY.md
