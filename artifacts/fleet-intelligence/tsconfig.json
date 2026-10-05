@@ -4,6 +4,7 @@
   "compilerOptions": {
     "noEmit": true,
     "jsx": "react-jsx",
+    "lib": ["esnext", "dom", "dom.iterable"],
     "moduleResolution": "bundler",
     "types": ["node", "vite/client"],
     "paths": { "@/*": ["./src/*"] }
