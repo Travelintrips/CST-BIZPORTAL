@@ -14,6 +14,7 @@ import aiReviewReadParityRouter from "./ai-review-read-parity";
 import cashBankReadParityRouter from "./cash-bank-read-parity";
 import accountingSettingsReadParityRouter from "./accounting-settings-read-parity";
 import fleetIntelligenceRouter from "./fleet-intelligence";
+import fleetFinanceIntegrationRouter from "./fleet-finance-integration";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -54,6 +55,7 @@ router.use(aiReviewReadParityRouter);
 router.use(cashBankReadParityRouter);
 router.use(accountingSettingsReadParityRouter);
 router.use("/logistics/fleet", fleetIntelligenceRouter);
+router.use("/integrations/fleet", fleetFinanceIntegrationRouter);
 
 router.post("/sport-center/payments/:id/void", async (req, res): Promise<void> => {
   const rawId = req.params.id;
