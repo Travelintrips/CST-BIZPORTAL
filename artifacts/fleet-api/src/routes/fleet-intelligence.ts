@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { pool } from "@workspace/db";
 import { authenticateAdmin, type AdminRequest } from "./admin-auth";
 import { sendFleetOutstandingReminders } from "../lib/fleet-wa-reminder";
+import { postFleetCashPayment, reverseFleetCashPayment } from "../lib/central-finance-client";
 
 const router = Router();
 
@@ -251,6 +252,19 @@ async function ensureFleetTables(): Promise<void> {
       rows_skipped INTEGER NOT NULL DEFAULT 0,
       unmatched_drivers INTEGER NOT NULL DEFAULT 0,
       notes TEXT
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.fleet_settings (
+      company_id INTEGER PRIMARY KEY,
+      auto_blast_enabled BOOLEAN NOT NULL DEFAULT false,
+      auto_blast_hour INTEGER NOT NULL DEFAULT 8,
+      auto_blast_last_run TIMESTAMPTZ,
+      fleet_cash_account_id INTEGER,
+      fleet_driver_receivable_account_id INTEGER,
+      journal_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
@@ -860,19 +874,20 @@ router.get("/outstanding/wa-logs", async (req: AdminRequest, res) => {
 
 router.get("/outstanding/auto-blast-settings", async (req: AdminRequest, res) => {
   try {
+    await ensureFleetTables();
     const cid=companyId(req);
     const result=await pool.query(
-      `SELECT fleet_auto_blast_enabled,fleet_auto_blast_hour,fleet_auto_blast_last_run
-         FROM public.accounting_settings
+      `SELECT auto_blast_enabled,auto_blast_hour,auto_blast_last_run
+         FROM public.fleet_settings
         WHERE company_id=$1
         LIMIT 1`,
       [cid],
     );
     const row=result.rows[0] as Record<string,unknown>|undefined;
     res.json({
-      enabled:Boolean(row?.fleet_auto_blast_enabled),
-      hour:Number(row?.fleet_auto_blast_hour??8),
-      last_run:row?.fleet_auto_blast_last_run??null,
+      enabled:Boolean(row?.auto_blast_enabled),
+      hour:Number(row?.auto_blast_hour??8),
+      last_run:row?.auto_blast_last_run??null,
     });
   } catch(error) {
     req.log.error({error},"Fleet auto reminder settings failed");
@@ -882,24 +897,19 @@ router.get("/outstanding/auto-blast-settings", async (req: AdminRequest, res) =>
 
 router.put("/outstanding/auto-blast-settings", async (req: AdminRequest, res) => {
   try {
+    await ensureFleetTables();
     const cid=companyId(req);
     const enabled=req.body?.enabled===true||req.body?.enabled==="true";
     const hour=Math.max(0,Math.min(23,Number(req.body?.hour??8)||8));
-    const existing=await pool.query("SELECT id FROM public.accounting_settings WHERE company_id=$1 LIMIT 1",[cid]);
-    if(existing.rows[0]?.id){
-      await pool.query(
-        `UPDATE public.accounting_settings
-            SET fleet_auto_blast_enabled=$2,fleet_auto_blast_hour=$3,updated_at=NOW()
-          WHERE id=$1`,
-        [existing.rows[0].id,enabled,hour],
-      );
-    }else{
-      await pool.query(
-        `INSERT INTO public.accounting_settings(company_id,fleet_auto_blast_enabled,fleet_auto_blast_hour)
-         VALUES($1,$2,$3)`,
-        [cid,enabled,hour],
-      );
-    }
+    await pool.query(
+      `INSERT INTO public.fleet_settings(company_id,auto_blast_enabled,auto_blast_hour,updated_at)
+       VALUES($1,$2,$3,NOW())
+       ON CONFLICT(company_id) DO UPDATE
+         SET auto_blast_enabled=EXCLUDED.auto_blast_enabled,
+             auto_blast_hour=EXCLUDED.auto_blast_hour,
+             updated_at=NOW()`,
+      [cid,enabled,hour],
+    );
     res.json({ok:true,enabled,hour});
   } catch(error) {
     req.log.error({error},"Fleet auto reminder settings update failed");
