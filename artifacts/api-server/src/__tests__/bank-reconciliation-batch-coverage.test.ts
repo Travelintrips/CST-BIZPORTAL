@@ -12,6 +12,6 @@ describe("bank reconciliation matching batch coverage", () => {
     const start = source.indexOf('router.post("/bank-reconciliation/run-matching"');
     const end = source.indexOf("type SourceReceiptJournal", start);
     const body = source.slice(start, end);
-    expect(body).toContain("limit 200");
+    expect(body).toContain("limit 1000");
   });
 });

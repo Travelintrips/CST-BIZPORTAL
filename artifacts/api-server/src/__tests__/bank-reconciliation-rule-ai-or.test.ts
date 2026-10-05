@@ -16,7 +16,7 @@ const wifiRule: ReconRule = {
   conditionValue: "Wifi kantor",
   conditionsJson: [
     { field: "description", operator: "contains", value: "Wifi kantor", negate: false },
-    { field: "description", operator: "contains", value: "My Telkomsel", negate: false },
+    { field: "description", operator: "contains", value: "MyTelkomsel App", negate: false },
   ],
   logic: "OR",
   specificity: 2,
