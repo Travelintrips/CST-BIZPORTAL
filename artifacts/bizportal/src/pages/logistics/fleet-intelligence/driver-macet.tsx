@@ -48,6 +48,7 @@ type OutstandingRow = {
 
 type SortKey = "outstanding_amount" | "due_days" | "last_updated_date";
 const MIN_MACET = 500_000;
+const MIN_WA_REMINDER = 50_000;
 
 const DEFAULT_REMINDER_MSG =
   `Yth. [Nama Driver],\n\nKami menginformasikan bahwa Anda memiliki outstanding yang belum terselesaikan.\n\nMohon segera menghubungi admin untuk penyelesaian.\n\nTerima kasih.`;
@@ -188,6 +189,10 @@ export default function DriverMacetPage() {
     () => allOpen.filter((r) => (parseFloat(String(r.outstanding_amount)) || 0) >= MIN_MACET),
     [allOpen]
   );
+  const waReminderList = useMemo(
+    () => allOpen.filter((r) => (parseFloat(String(r.outstanding_amount)) || 0) > MIN_WA_REMINDER && r.driver_phone),
+    [allOpen]
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -282,7 +287,7 @@ export default function DriverMacetPage() {
               size="sm"
               className="bg-green-700 hover:bg-green-600 text-white gap-1.5"
               onClick={() => setShowReminderDialog(true)}
-              disabled={macetList.length === 0}
+              disabled={waReminderList.length === 0}
             >
               <Send className="w-3.5 h-3.5" />
               WA Reminder Semua
@@ -503,12 +508,12 @@ export default function DriverMacetPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Send className="w-4 h-4 text-green-400" />
-                WA Reminder — {macetList.filter(d => d.driver_phone).length} Driver
+                WA Reminder — {waReminderList.length} Driver
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
               <div className="bg-slate-700/50 rounded-lg p-3 text-xs text-slate-300 space-y-1">
-                <p>WA dikirim ke semua driver dengan outstanding &gt; Rp 500 ribu yang memiliki nomor HP.</p>
+                <p>WA dikirim ke semua driver dengan outstanding &gt; Rp 50 ribu yang memiliki nomor HP.</p>
                 <p className="text-slate-400">Driver yang sudah dikirim dalam periode suppress akan dilewati otomatis.</p>
               </div>
               <div className="space-y-1.5">
