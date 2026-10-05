@@ -20,11 +20,11 @@ export function resolveFleetEnvironment(env = process.env) {
 }
 
 function hasDevMarker(value) {
-  return /(^|[._:/-])(dev|development|staging|test)([._:/-]|$)/i.test(value);
+  return /(?:^|[^a-z0-9])(dev|development|staging|test)(?:[^a-z0-9]|$)/i.test(value);
 }
 
 function hasProdMarker(value) {
-  return /(^|[._:/-])(prod|production)([._:/-]|$)/i.test(value);
+  return /(?:^|[^a-z0-9])(prod|production)(?:[^a-z0-9]|$)/i.test(value);
 }
 
 export function assertFleetEnvironmentIsolation(env = process.env) {
