@@ -28,6 +28,7 @@ describe("Fleet Central Finance service integration", () => {
 
   it("keeps the accounting settings source inside Central Finance", () => {
     expect(integration).toContain('router.get("/companies/:companyId/accounting-settings"');
+    expect(integration).toContain('router.put("/companies/:companyId/accounting-settings"');
     expect(integration).toContain("public.accounting_settings");
     expect(integration).toContain("public.chart_of_accounts");
     expect(integration).toContain("public.accounting_journals");
