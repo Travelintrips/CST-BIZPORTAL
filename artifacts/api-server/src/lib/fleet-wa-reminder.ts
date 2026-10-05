@@ -235,7 +235,6 @@ export async function sendFleetOutstandingReminders(args: {
         AND o.outstanding_amount >= $3
         AND d.status='active'
         AND COALESCE(d.source_present_in_latest_snapshot,true)=true
-        AND NULLIF(d.vehicle_plate,'') IS NOT NULL
         ${idFilter}
       ORDER BY o.outstanding_amount DESC,o.id`,
     params,
