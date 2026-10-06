@@ -1440,6 +1440,102 @@ async function matchLocalMutation(
 
 }
 
+router.get("/bank-reconciliation/qris-reset-history", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const requestedCompanyIdRaw = req.query.companyId ?? req.query.company_id;
+  const requestedCompanyId =
+    requestedCompanyIdRaw == null || requestedCompanyIdRaw === ""
+      ? null
+      : safeInteger(requestedCompanyIdRaw);
+  if (
+    requestedCompanyIdRaw != null
+    && requestedCompanyIdRaw !== ""
+    && requestedCompanyId == null
+  ) {
+    res.status(400).json({ error: "Company context tidak valid." });
+    return;
+  }
+  if (
+    actor.companyId != null
+    && requestedCompanyId != null
+    && actor.companyId !== requestedCompanyId
+  ) {
+    res.status(403).json({ error: "Company context tidak sesuai dengan perusahaan aktif." });
+    return;
+  }
+
+  const companyId = actor.companyId ?? requestedCompanyId;
+  if (companyId == null) {
+    res.status(400).json({ error: "Company context tidak tersedia." });
+    return;
+  }
+
+  const limitRaw = Number(req.query.limit ?? 500);
+  const limit = Number.isFinite(limitRaw)
+    ? Math.max(1, Math.min(500, Math.floor(limitRaw)))
+    : 500;
+
+  try {
+    const result = await pool.query<{
+      id: number;
+      company_id: number | null;
+      user_email: string | null;
+      action: string | null;
+      module: string | null;
+      reference_id: string | null;
+      old_data: unknown;
+      new_data: unknown;
+      created_at: string | Date | null;
+    }>(
+      `select al.id,
+              al.company_id,
+              al.user_email,
+              al.action,
+              al.module,
+              al.reference_id,
+              al.old_data,
+              al.new_data,
+              al.created_at
+         from public.erp_audit_logs al
+        where al.company_id = $1
+          and lower(coalesce(al.module, '')) = 'accounting'
+          and lower(coalesce(al.action, '')) = 'status_change'
+          and lower(coalesce(al.reference_id, '')) like 'sport-payment-%'
+          and lower(coalesce(al.new_data->>'settlement_status', '')) = 'unsettled'
+          and lower(coalesce(al.old_data->>'settlement_status', '')) <> 'unsettled'
+        order by al.created_at desc, al.id desc
+        limit $2`,
+      [companyId, limit],
+    );
+
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+    res.json({
+      rows: result.rows,
+      total: result.rows.length,
+      limit,
+    });
+  } catch (error) {
+    req.log.error({ error, companyId }, "QRIS settlement reset history load failed");
+    const code = (error as { code?: string }).code;
+    if (code === "42P01" || code === "42703") {
+      res.status(503).json({
+        error: "Schema audit QRIS belum tersedia.",
+        code: "QRIS_RESET_AUDIT_SCHEMA_UNAVAILABLE",
+      });
+      return;
+    }
+    res.status(503).json({
+      error: "Riwayat reset settlement QRIS tidak dapat dimuat.",
+      code: "QRIS_RESET_HISTORY_UNAVAILABLE",
+    });
+  }
+});
+
 router.get("/bank-reconciliation/run-matching/status", async (req, res): Promise<void> => {
   res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
   res.setHeader("Pragma", "no-cache");

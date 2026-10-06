@@ -8459,14 +8459,14 @@ export default function BankReconciliationPage() {
   } = useQuery({
     queryKey: ["qris-settlement-reset-history", qrisCompanyId],
     queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10);
       const params = new URLSearchParams({
-        from: "2020-01-01",
-        to: today,
+        companyId: String(qrisCompanyId),
         limit: "500",
-        offset: "0",
       });
-      const response = await fetch(`/api/audit-logs?${params}`, { credentials: "include" });
+      const response = await fetch(
+        `/api/bank-reconciliation/qris-reset-history?${params}`,
+        { credentials: "include" },
+      );
       if (!response.ok) throw new Error(await response.text());
       const body = await response.json() as { rows?: unknown[] };
       return groupQrisResetHistoryByDate(
