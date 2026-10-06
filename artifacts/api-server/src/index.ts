@@ -67,6 +67,9 @@ if (!isDevelopmentEnvironment()) {
   void initializeProductionSessionSigningInBackground();
 }
 
+const embeddedFleetReminderEnabled =
+  String(process.env["FLEET_EMBEDDED_REMINDER_ENABLED"] ?? "").trim().toLowerCase() === "true";
+
 let fleetReminderRunning = false;
 const runFleetReminderTick = async () => {
   if (fleetReminderRunning) return;
@@ -81,11 +84,21 @@ const runFleetReminderTick = async () => {
   }
 };
 
-const fleetReminderTimer = setInterval(() => {
-  void runFleetReminderTick();
-}, 5 * 60 * 1000);
-fleetReminderTimer.unref();
-setTimeout(() => void runFleetReminderTick(), 20_000).unref();
+const fleetReminderTimer = embeddedFleetReminderEnabled
+  ? setInterval(() => {
+      void runFleetReminderTick();
+    }, 5 * 60 * 1000)
+  : null;
+
+if (fleetReminderTimer) {
+  fleetReminderTimer.unref();
+  setTimeout(() => void runFleetReminderTick(), 20_000).unref();
+  logger.warn(
+    "Embedded Fleet reminder scheduler is enabled. Disable it after standalone Fleet cutover to avoid duplicate WhatsApp reminders.",
+  );
+} else {
+  logger.info("Embedded Fleet reminder scheduler disabled; standalone Fleet owns reminder scheduling.");
+}
 
 let qrisAutoCandidateRunning = false;
 const runQrisAutoCandidateTick = async () => {
@@ -125,7 +138,7 @@ server.on("error", (err) => {
 
 
 const stopBackgroundTimers = () => {
-  clearInterval(fleetReminderTimer);
+  if (fleetReminderTimer) clearInterval(fleetReminderTimer);
   clearInterval(qrisAutoCandidateTimer);
   if (startupInitializationTimer) {
     clearTimeout(startupInitializationTimer);
