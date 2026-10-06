@@ -85,6 +85,32 @@ describe("QRIS bulk reset execution", () => {
 });
 
 describe("QRIS reset audit history", () => {
+  it("parses the production status_change audit shape", () => {
+    const entries = parseQrisResetHistory([
+      {
+        id: 3697,
+        created_at: "2026-09-17T17:15:53.243Z",
+        action: "status_change",
+        module: "accounting",
+        user_email: "finance@example.com",
+        reference_id: "sport-payment-495",
+        old_data: {
+          settlement_date: "2026-06-03",
+          settlement_status: "settled",
+          settlement_reference: "SC-MBP-24",
+        },
+        new_data: {
+          reason: "Reset status settlement QRIS melalui aksi langsung.",
+          settlement_status: "unsettled",
+        },
+      },
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.settlementDate).toBe("2026-06-03");
+    expect(entries[0]?.action).toBe("status_change");
+  });
+
   it("parses and groups server audit rows by settlement date", () => {
     const entries = parseQrisResetHistory([
       {
