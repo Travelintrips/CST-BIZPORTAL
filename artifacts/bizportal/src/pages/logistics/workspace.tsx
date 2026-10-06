@@ -170,50 +170,50 @@ const CONFIGS: Record<string, WorkspaceConfig> = {
       {
         label: "Dashboard",
         description: "Ringkasan performa armada",
-        href: "/logistics/fleet-intelligence",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence",
         icon: Gauge,
         badge: "Core",
       },
       {
         label: "Drivers",
         description: "Manajemen driver armada",
-        href: "/logistics/fleet-intelligence/drivers",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/drivers",
         icon: Users,
       },
       {
         label: "Vehicles",
         description: "Inventaris kendaraan",
-        href: "/logistics/fleet-intelligence/vehicles",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/vehicles",
         icon: Truck,
       },
       {
         label: "Transactions",
         description: "Transaksi keuangan armada",
-        href: "/logistics/fleet-intelligence/transactions",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/transactions",
         icon: Banknote,
       },
       {
         label: "Outstanding",
         description: "Tagihan dan saldo outstanding",
-        href: "/logistics/fleet-intelligence/outstanding",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/outstanding",
         icon: Activity,
       },
       {
         label: "Alerts",
         description: "Peringatan dan anomali armada",
-        href: "/logistics/fleet-intelligence/alerts",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/alerts",
         icon: AlertTriangle,
       },
       {
         label: "Control Center",
         description: "Pusat kontrol operasional armada",
-        href: "/logistics/fleet-intelligence/control-center",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/control-center",
         icon: Radio,
       },
       {
         label: "Accounting",
         description: "Rekonsiliasi dan akuntansi armada",
-        href: "/logistics/fleet-intelligence/accounting",
+        href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence/accounting",
         icon: BookOpen,
       },
     ],
@@ -320,32 +320,33 @@ export default function LogisticsWorkspacePage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {config.items.map((item) => {
             const ItemIcon = item.icon;
-            return (
-              <Link key={item.href + item.label} href={item.href}>
-                <div className="group relative flex flex-col gap-2 rounded-xl border bg-card p-4 cursor-pointer transition-all duration-150 hover:shadow-md hover:-translate-y-0.5 hover:border-primary/40 h-full">
-                  <div className="flex items-start justify-between">
-                    <div className={`rounded-lg border p-2 ${config.iconBg}`}>
-                      <ItemIcon className={`h-4 w-4 ${config.color}`} />
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {item.badge && (
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                          {item.badge}
-                        </span>
-                      )}
-                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </div>
+            const card = (
+              <div className="group relative flex flex-col gap-2 rounded-xl border bg-card p-4 cursor-pointer transition-all duration-150 hover:shadow-md hover:-translate-y-0.5 hover:border-primary/40 h-full">
+                <div className="flex items-start justify-between">
+                  <div className={`rounded-lg border p-2 ${config.iconBg}`}>
+                    <ItemIcon className={`h-4 w-4 ${config.color}`} />
                   </div>
-                  <div className="mt-1">
-                    <p className="text-sm font-semibold leading-tight">{item.label}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
-                  </div>
-                  <div className="mt-auto pt-2 border-t border-border/50">
-                    <span className="text-[11px] font-medium text-primary group-hover:underline">Buka →</span>
+                  <div className="flex items-center gap-1.5">
+                    {item.badge && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                        {item.badge}
+                      </span>
+                    )}
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
                 </div>
-              </Link>
+                <div className="mt-1">
+                  <p className="text-sm font-semibold leading-tight">{item.label}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                </div>
+                <div className="mt-auto pt-2 border-t border-border/50">
+                  <span className="text-[11px] font-medium text-primary group-hover:underline">Buka →</span>
+                </div>
+              </div>
             );
+            return item.href.startsWith("http")
+              ? <a key={item.href + item.label} href={item.href}>{card}</a>
+              : <Link key={item.href + item.label} href={item.href}>{card}</Link>;
           })}
           </div>
         )}

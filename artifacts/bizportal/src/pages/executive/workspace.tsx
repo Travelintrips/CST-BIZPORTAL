@@ -48,7 +48,7 @@ const SECTIONS: Section[] = [
     items: [
       { label: "Logistics Dashboard", href: "/logistics/dashboard", icon: LayoutDashboard },
       { label: "Executive Logistics", href: "/executive/logistics", icon: Activity },
-      { label: "Fleet Intelligence", href: "/logistics/fleet-intelligence", icon: FlameKindling },
+      { label: "Fleet Intelligence", href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence", icon: FlameKindling },
     ],
   },
 ];
@@ -108,19 +108,20 @@ export default function ExecutiveWorkspacePage({ section }: { section?: string }
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {activeSection.items.map((item) => {
               const Icon = item.icon;
-              return (
-                <Link key={item.href} href={item.href}>
-                  <div
-                    className={`group flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-all hover:shadow-sm hover:-translate-y-0.5 ${colors.border} ${colors.bg}`}
-                  >
-                    <div className="rounded-md p-2 bg-white dark:bg-black/20 shadow-sm shrink-0">
-                      <Icon className={`h-4 w-4 ${colors.text}`} />
-                    </div>
-                    <span className="text-sm font-medium group-hover:underline flex-1">{item.label}</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+              const card = (
+                <div
+                  className={`group flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-all hover:shadow-sm hover:-translate-y-0.5 ${colors.border} ${colors.bg}`}
+                >
+                  <div className="rounded-md p-2 bg-white dark:bg-black/20 shadow-sm shrink-0">
+                    <Icon className={`h-4 w-4 ${colors.text}`} />
                   </div>
-                </Link>
+                  <span className="text-sm font-medium group-hover:underline flex-1">{item.label}</span>
+                  <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                </div>
               );
+              return item.href.startsWith("http")
+                ? <a key={item.href} href={item.href}>{card}</a>
+                : <Link key={item.href} href={item.href}>{card}</Link>;
             })}
           </div>
         )}

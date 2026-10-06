@@ -58,6 +58,7 @@ const SUBMODULES: SubModule[] = [
     desc: "Pemantauan armada dan analitik driver real-time",
     features: ["Dashboard", "Drivers & Vehicles", "Transactions", "Alerts", "Control Center", "Accounting"],
     section: "fleet-intelligence",
+    href: "https://fleet.cstlogistic.co.id/logistics/fleet-intelligence",
     color: "border-purple-500/30 hover:border-purple-500/60",
     iconBg: "bg-purple-500/10 text-purple-600",
   },
@@ -108,36 +109,38 @@ export default function LogisticsHubPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {SUBMODULES.map((mod) => {
             const Icon = mod.icon;
-            return (
-              <Link key={mod.section} href={mod.href ?? `/logistics/workspace/${mod.section}`}>
-                <div className={cn(
-                  "group relative flex flex-col gap-3 rounded-xl border bg-card p-5 cursor-pointer transition-all duration-150 hover:shadow-md hover:-translate-y-0.5",
-                  mod.color,
-                )}>
-                  <div className="flex items-start justify-between">
-                    <div className={cn("rounded-lg p-2.5", mod.iconBg)}>
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
+            const href = mod.href ?? `/logistics/workspace/${mod.section}`;
+            const card = (
+              <div className={cn(
+                "group relative flex flex-col gap-3 rounded-xl border bg-card p-5 cursor-pointer transition-all duration-150 hover:shadow-md hover:-translate-y-0.5",
+                mod.color,
+              )}>
+                <div className="flex items-start justify-between">
+                  <div className={cn("rounded-lg p-2.5", mod.iconBg)}>
+                    <Icon className="h-5 w-5" />
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-sm leading-tight">{mod.title}</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{mod.desc}</p>
-                  </div>
-                  <ul className="space-y-0.5">
-                    {mod.features.map((f) => (
-                      <li key={f} className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                        <span className="h-1 w-1 rounded-full bg-muted-foreground/50 shrink-0" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="mt-auto pt-2 border-t border-border/50">
-                    <span className="text-[11px] font-medium text-primary group-hover:underline">Buka workspace →</span>
-                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
                 </div>
-              </Link>
+                <div>
+                  <h3 className="font-semibold text-sm leading-tight">{mod.title}</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{mod.desc}</p>
+                </div>
+                <ul className="space-y-0.5">
+                  {mod.features.map((feature) => (
+                    <li key={feature} className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                      <span className="h-1 w-1 rounded-full bg-muted-foreground/50 shrink-0" />
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-auto pt-2 border-t border-border/50">
+                  <span className="text-[11px] font-medium text-primary group-hover:underline">Buka workspace →</span>
+                </div>
+              </div>
             );
+            return href.startsWith("http")
+              ? <a key={mod.section} href={href}>{card}</a>
+              : <Link key={mod.section} href={href}>{card}</Link>;
           })}
         </div>
 
