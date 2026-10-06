@@ -7,18 +7,25 @@ const authSource = readFileSync(resolve(process.cwd(), "src/routes/dev-auth.ts")
 const localAuthSource = readFileSync(resolve(process.cwd(), "src/routes/local-production-auth.ts"), "utf8");
 
 describe("production auth startup contract", () => {
-  it("initializes session signing before the server accepts traffic", () => {
-    const init = indexSource.indexOf("await initializeProductionSessionSigning()");
+  it("keeps process liveness independent from production session initialization", () => {
     const listen = indexSource.indexOf("app.listen(");
-    expect(init).toBeGreaterThanOrEqual(0);
-    expect(listen).toBeGreaterThan(init);
+    const backgroundInit = indexSource.indexOf(
+      "void initializeProductionSessionSigningInBackground()",
+    );
+    expect(listen).toBeGreaterThanOrEqual(0);
+    expect(backgroundInit).toBeGreaterThan(listen);
+    expect(indexSource).not.toContain(
+      "await initializeProductionSessionSigningWithRetry()",
+    );
   });
 
-  it("retries transient production session initialization failures before giving up", () => {
-    expect(indexSource).toContain("initializeProductionSessionSigningWithRetry");
-    expect(indexSource).toContain("STARTUP_INIT_MAX_ATTEMPTS");
-    expect(indexSource).toContain("Production session signing initialization failed; retrying");
-    expect(indexSource).toContain("Math.min(5_000");
+  it("retries transient production session initialization without terminating the server", () => {
+    expect(indexSource).toContain("initializeProductionSessionSigningInBackground");
+    expect(indexSource).toContain("server remains live and will retry");
+    expect(indexSource).toContain("setTimeout(() =>");
+    expect(indexSource).toContain("Math.min(");
+    expect(indexSource).toContain("30_000");
+    expect(indexSource).not.toContain("process.exit(1);\n}\n\nif (!isDevelopmentEnvironment())");
   });
 
   it("uses the canonical runtime database resolver when standalone session secrets are absent", () => {
@@ -36,6 +43,16 @@ describe("production auth startup contract", () => {
     expect(initSource).not.toContain("readSecret(");
     expect(initSource).not.toContain("getBundledProductionSessionSecret");
     expect(initSource).not.toContain("AbortController");
+  });
+
+  it("keeps authentication fail-closed at the request boundary", () => {
+    const routeStart = localAuthSource.indexOf('router.post("/auth/email-login"');
+    const routeEnd = localAuthSource.indexOf('router.get("/auth/admin/users-password-status"', routeStart);
+    const emailLoginRoute = localAuthSource.slice(routeStart, routeEnd);
+    const init = emailLoginRoute.indexOf("await initializeProductionSessionSigning()");
+    const cookie = emailLoginRoute.indexOf("setProductionSessionCookie(response, session)");
+    expect(init).toBeGreaterThanOrEqual(0);
+    expect(cookie).toBeGreaterThan(init);
   });
 
   it("does not perform a redundant second database lookup after password verification", () => {

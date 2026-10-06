@@ -23,46 +23,49 @@ if (Number.isNaN(port) || port <= 0) {
 
 const host = process.env["HOST"]?.trim() || "0.0.0.0";
 
-async function initializeProductionSessionSigningWithRetry(): Promise<void> {
-  const maxAttempts = Math.max(
-    1,
-    Math.min(10, Number(process.env["STARTUP_INIT_MAX_ATTEMPTS"] ?? 6) || 6),
-  );
+let startupInitializationTimer: NodeJS.Timeout | null = null;
 
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await initializeProductionSessionSigning();
-      if (attempt > 1) {
-        logger.info({ attempt }, "Production session signing recovered after retry");
-      }
-      return;
-    } catch (error) {
-      lastError = error;
-      if (attempt >= maxAttempts) break;
+async function initializeProductionSessionSigningInBackground(
+  attempt = 1,
+): Promise<void> {
+  try {
+    await initializeProductionSessionSigning();
+    logger.info(
+      { attempt },
+      attempt === 1
+        ? "Production session signing initialized"
+        : "Production session signing recovered after retry",
+    );
+    startupInitializationTimer = null;
+  } catch (error) {
+    const exponent = Math.min(Math.max(attempt - 1, 0), 5);
+    const backoffMs = Math.min(
+      30_000,
+      Math.max(1_000, 1_000 * (2 ** exponent)),
+    );
 
-      const backoffMs = Math.min(5_000, 500 * (2 ** (attempt - 1)));
-      logger.warn(
-        { error, attempt, maxAttempts, backoffMs },
-        "Production session signing initialization failed; retrying",
-      );
-      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
-    }
+    logger.warn(
+      { error, attempt, backoffMs },
+      "Production session signing initialization failed; server remains live and will retry",
+    );
+
+    startupInitializationTimer = setTimeout(() => {
+      void initializeProductionSessionSigningInBackground(attempt + 1);
+    }, backoffMs);
+    startupInitializationTimer.unref();
   }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Production session signing initialization failed");
-}
-
-if (!isDevelopmentEnvironment()) {
-  await initializeProductionSessionSigningWithRetry();
-  logger.info("Production session signing initialized");
 }
 
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
 });
+
+if (!isDevelopmentEnvironment()) {
+  // Do not make process liveness depend on database/Secret Manager availability.
+  // Authentication routes and /api/health/ready still fail closed until this
+  // initialization succeeds, while static UI and /api/health/live remain up.
+  void initializeProductionSessionSigningInBackground();
+}
 
 let fleetReminderRunning = false;
 const runFleetReminderTick = async () => {
@@ -124,6 +127,10 @@ server.on("error", (err) => {
 const stopBackgroundTimers = () => {
   clearInterval(fleetReminderTimer);
   clearInterval(qrisAutoCandidateTimer);
+  if (startupInitializationTimer) {
+    clearTimeout(startupInitializationTimer);
+    startupInitializationTimer = null;
+  }
 };
 process.once("SIGTERM", stopBackgroundTimers);
 process.once("SIGINT", stopBackgroundTimers);
