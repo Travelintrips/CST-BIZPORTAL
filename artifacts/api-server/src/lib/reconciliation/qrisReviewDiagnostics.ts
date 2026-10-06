@@ -464,6 +464,34 @@ function synthesizeDiagnostic(
   };
 }
 
+function openMutationDatesByCompany(
+  mutations: QrisMutationRow[],
+): Map<number, Set<string>> {
+  const datesByCompany = new Map<number, Set<string>>();
+  for (const mutation of mutations) {
+    if (mutation.company_id == null) continue;
+    const mutationDate = dateOnly(mutation.transaction_date);
+    if (!mutationDate) continue;
+    const dates = datesByCompany.get(mutation.company_id) ?? new Set<string>();
+    dates.add(mutationDate);
+    datesByCompany.set(mutation.company_id, dates);
+  }
+  return datesByCompany;
+}
+
+export function isProtectedForDifferentOpenSettlementDate(
+  expectedSettlementDate: string | null,
+  currentMutationDate: string,
+  protectedDates: ReadonlySet<string> | undefined,
+): boolean {
+  const expectedDate = dateOnly(expectedSettlementDate);
+  return Boolean(
+    expectedDate
+    && expectedDate !== currentMutationDate
+    && protectedDates?.has(expectedDate)
+  );
+}
+
 function currentPaymentIds(candidate: Record<string, unknown>): number[] {
   if (Array.isArray(candidate.current_payment_ids)) {
     return candidate.current_payment_ids
@@ -510,6 +538,7 @@ async function synthesizeLiveReviewDiagnostics(
   }
 
   const reservedPaymentIds = new Set<number>();
+  const protectedMutationDates = openMutationDatesByCompany(openMutations);
   const synthesized: Record<string, unknown>[] = [];
   const mutations = [...openMutations].sort((left, right) => {
     const dateCompare = String(left.transaction_date).localeCompare(String(right.transaction_date));
@@ -560,6 +589,22 @@ async function synthesizeLiveReviewDiagnostics(
         if (payment.company_id !== mutation.company_id) return false;
         if (reservedPaymentIds.has(payment.id)) return false;
         if (!hasFreshPaymentEvidence(payment)) return false;
+
+        // Never "borrow" a payment from a different expected settlement date
+        // when that date has its own open QRIS bank mutation in the same
+        // reconciliation scope. This keeps a later cohort available for its
+        // real bank credit instead of manufacturing an exact amount on an
+        // earlier mutation.
+        if (
+          isProtectedForDifferentOpenSettlementDate(
+            payment.expected_settlement_date,
+            mutationDate,
+            protectedMutationDates.get(payment.company_id),
+          )
+        ) {
+          return false;
+        }
+
         const paidDate = dateOnly(payment.paid_at);
         if (!paidDate) return false;
         const distance = calendarDayDistance(paidDate, mutationDate);
