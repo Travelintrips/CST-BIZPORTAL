@@ -8,9 +8,10 @@ import {
 } from "./dev-auth";
 
 const router: IRouter = Router();
+const STARTUP_MODE = "nonblocking-session-init-v2";
 
 router.get("/health/live", (_req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", startupMode: STARTUP_MODE });
 });
 
 router.get("/healthz", (_req, res) => {
@@ -47,6 +48,7 @@ router.get("/health/ready", async (_req, res) => {
       database: "connected",
       authSessionSigning: "ready",
       databaseProvider: runtimeDatabaseUrl.includes("supabase") ? "supabase" : "postgres",
+      startupMode: STARTUP_MODE,
     });
   } catch (error) {
     res.status(503).json({
@@ -55,6 +57,7 @@ router.get("/health/ready", async (_req, res) => {
       database: "unavailable-or-auth-not-ready",
       authSessionSigning: "not-ready",
       error: error instanceof Error ? error.message : "Runtime readiness failed",
+      startupMode: STARTUP_MODE,
     });
   }
 });
