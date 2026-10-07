@@ -248,7 +248,7 @@ function emptyLocalMatchingSummary(): LocalMatchingSummary {
 }
 
 interface LocalMatchCandidate {
-  candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement" | "internal_transfer";
+  candidateType: "sport_payment" | "sport_group_payment" | "sport_company_invoice" | "tenant_invoice" | "vendor_invoice" | "qris_settlement" | "internal_transfer" | "payroll_item" | "cash_advance";
   candidateId: number;
   score: number;
   amountMatch: boolean;
@@ -276,6 +276,10 @@ function localCandidateSource(candidateType: LocalMatchCandidate["candidateType"
       return "sport_center.payment_settlement_batches";
     case "internal_transfer":
       return "public.bank_mutations";
+    case "payroll_item":
+      return "public.payroll_items";
+    case "cash_advance":
+      return "public.cash_advances";
   }
 }
 
@@ -386,6 +390,70 @@ function tokenOverlap(left: unknown, right: unknown): boolean {
     if (leftTokens.has(token)) return true;
   }
   return false;
+}
+
+const PAYROLL_MONTHS: Record<string, number> = {
+  januari: 1, jan: 1,
+  februari: 2, feb: 2,
+  maret: 3, mar: 3,
+  april: 4, apr: 4,
+  mei: 5,
+  juni: 6, jun: 6,
+  juli: 7, jul: 7,
+  agustus: 8, agu: 8, ags: 8,
+  september: 9, sep: 9,
+  oktober: 10, okt: 10,
+  november: 11, nov: 11,
+  desember: 12, des: 12,
+};
+
+function payrollPeriodFromMutation(
+  description: unknown,
+  transactionDate: unknown,
+): { month: number; year: number } | null {
+  const text = normalizeMatchText(description);
+  const dateText = calendarDateValue(transactionDate);
+  if (!dateText) return null;
+  const transactionYear = Number(dateText.slice(0, 4));
+  const transactionMonth = Number(dateText.slice(5, 7));
+  const explicitYearMatch = text.match(/\b(20\d{2})\b/);
+  const explicitYear = explicitYearMatch ? Number(explicitYearMatch[1]) : null;
+  for (const [label, month] of Object.entries(PAYROLL_MONTHS)) {
+    if (new RegExp(`\\b${label}\\b`, "i").test(text)) {
+      return { month, year: explicitYear ?? transactionYear };
+    }
+  }
+  // Descriptions such as "gaji cariu" omit the payroll month. Salary
+  // disbursements are normally paid in the following calendar month, so the
+  // previous month is the safe deterministic fallback.
+  const fallbackMonth = transactionMonth === 1 ? 12 : transactionMonth - 1;
+  const fallbackYear = transactionMonth === 1 ? transactionYear - 1 : transactionYear;
+  return { month: fallbackMonth, year: explicitYear ?? fallbackYear };
+}
+
+function candidateRelevantToRule(
+  rule: ReconRule,
+  candidate: LocalMatchCandidate,
+): boolean {
+  switch (rule.targetType) {
+    case "payroll":
+      return candidate.candidateType === "payroll_item";
+    case "employee_advance":
+      return candidate.candidateType === "cash_advance";
+    case "vendor_payment":
+      return candidate.candidateType === "vendor_invoice";
+    case "internal_transfer":
+      return candidate.candidateType === "internal_transfer";
+    case "customer_payment":
+      return [
+        "sport_payment",
+        "sport_group_payment",
+        "sport_company_invoice",
+        "tenant_invoice",
+      ].includes(candidate.candidateType);
+    default:
+      return true;
+  }
 }
 
 async function isKasBesarScReconciliationAccount(
@@ -1116,9 +1184,143 @@ async function loadLocalMatchCandidates(
       const code = (error as { code?: string }).code;
       if (code !== "42P01" && code !== "42703") throw error;
     }
-  } else if (direction === "OUT" && !vendorInvoiceMatchBlocked) {
-    try {
-      const invoices = await client.query<{
+  } else if (direction === "OUT") {
+    const descriptionText = normalizeMatchText(mutation.description);
+
+    if (descriptionText.includes("gaji") || descriptionText.includes("payroll") || descriptionText.includes("upah")) {
+      const period = payrollPeriodFromMutation(mutation.description, mutation.transaction_date);
+      if (period) {
+        try {
+          const payrollItems = await client.query<{
+            id: number;
+            run_id: number;
+            employee_name: string;
+            net_salary: string;
+            month: number;
+            year: number;
+          }>(
+            `select pi.id,
+                    pi.run_id,
+                    concat_ws(' ', e.first_name, e.last_name) as employee_name,
+                    pi.net_salary::text,
+                    pr.month,
+                    pr.year
+               from public.payroll_items pi
+               join public.payroll_runs pr on pr.id = pi.run_id
+               join public.employees e
+                 on e.id = pi.employee_id
+                and e.company_id = pr.company_id
+              where pr.company_id = $1
+                and pr.month = $3
+                and pr.year = $4
+                and (
+                  lower(coalesce(pr.status, '')) in ('approved','posted','paid')
+                  or lower(coalesce(pr.posting_status, '')) = 'posted'
+                )
+                and coalesce(pi.is_paid, false) = false
+                and abs(pi.net_salary::numeric - $2::numeric) < 0.01
+                and not exists (
+                  select 1
+                    from public.bank_reconciliation_matches brm
+                   where brm.candidate_type = 'payroll_item'
+                     and brm.candidate_id = pi.id
+                     and brm.candidate_source = 'public.payroll_items'
+                     and brm.status in ('approved','posted')
+                )
+              order by pi.id
+              limit 30`,
+            [mutation.company_id, amount, period.month, period.year],
+          );
+
+          for (const item of payrollItems.rows) {
+            const nameMatch = tokenOverlap(mutation.description, item.employee_name);
+            if (!nameMatch) continue;
+            candidates.push({
+              candidateType: "payroll_item",
+              candidateId: item.id,
+              score: 100,
+              amountMatch: true,
+              dateMatch: true,
+              referenceMatch: false,
+              nameMatch: true,
+              reason: `Payroll ${String(item.month).padStart(2, "0")}/${item.year}: nominal net dan nama karyawan cocok.`,
+              customerName: item.employee_name,
+              orderRef: `PAYROLL/${item.year}-${String(item.month).padStart(2, "0")}/ITEM-${item.id}`,
+            });
+          }
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (code !== "42P01" && code !== "42703") throw error;
+        }
+      }
+    }
+
+    if (descriptionText.includes("kasbon")) {
+      try {
+        const advances = await client.query<{
+          id: number;
+          advance_number: string;
+          party_name: string;
+          amount: string;
+          advance_date: string;
+          date_distance_days: number;
+        }>(
+          `select ca.id,
+                  ca.advance_number,
+                  ca.party_name,
+                  ca.amount::text,
+                  ca.date::text as advance_date,
+                  abs($3::date - ca.date)::integer as date_distance_days
+             from public.cash_advances ca
+            where ca.company_id = $1
+              and upper(coalesce(ca.advance_type, '')) = 'EMPLOYEE'
+              and lower(coalesce(ca.status, '')) not in ('repaid','void','voided','cancelled','canceled')
+              and lower(coalesce(ca.lifecycle_status, '')) not in ('settled','closed','voided')
+              and coalesce(ca.posting_status, 'PENDING') <> 'POSTED'
+              and ca.accounting_entry_id is null
+              and abs(ca.amount::numeric - $2::numeric) < 0.01
+              and ca.date between ($3::date - 45) and ($3::date + 7)
+              and not exists (
+                select 1
+                  from public.bank_reconciliation_matches brm
+                 where brm.candidate_type = 'cash_advance'
+                   and brm.candidate_id = ca.id
+                   and brm.candidate_source = 'public.cash_advances'
+                   and brm.status in ('approved','posted')
+              )
+            order by abs($3::date - ca.date), ca.id
+            limit 30`,
+          [mutation.company_id, amount, date],
+        );
+
+        for (const advance of advances.rows) {
+          const nameMatch = tokenOverlap(mutation.description, advance.party_name);
+          if (!nameMatch) continue;
+          const dateDistanceDays = Number(advance.date_distance_days);
+          candidates.push({
+            candidateType: "cash_advance",
+            candidateId: advance.id,
+            score: dateDistanceDays <= 7 ? 100 : 95,
+            amountMatch: true,
+            dateMatch: true,
+            referenceMatch: false,
+            nameMatch: true,
+            reason: dateDistanceDays <= 7
+              ? "Kasbon karyawan: nominal, nama, dan tanggal pengajuan cocok."
+              : "Kasbon karyawan: nominal dan nama cocok; pengajuan masih dalam rentang 45 hari.",
+            customerName: advance.party_name,
+            orderRef: advance.advance_number,
+          });
+        }
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "42P01" && code !== "42703") throw error;
+      }
+    }
+
+    if (!vendorInvoiceMatchBlocked) {
+      try {
+        const invoices = await client.query<{
         id: number;
         invoice_number: string;
         vendor_invoice_ref: string | null;
@@ -1188,9 +1390,10 @@ async function loadLocalMatchCandidates(
             : "Nominal invoice cocok; konfirmasi supplier sebelum approve.",
         });
       }
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "42P01" && code !== "42703") throw error;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "42P01" && code !== "42703") throw error;
+      }
     }
   }
 
@@ -1228,9 +1431,12 @@ async function matchLocalMutation(
   if(ruleResult.documentRequired){await client.query("update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='RULE_DOCUMENT_REQUIRED',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",['Rule '+ruleResult.documentRequired.ruleName+' mewajibkan dokumen.',mutation.id]);return 'manual_review';}
   if (ruleResult.matched && ruleResult.ruleId != null) {
     const matchedRule = rules.find((r) => r.id === ruleResult.ruleId)!;
-    const realCandidate = candidates[0];
+    const ruleCandidates = candidates.filter((candidate) =>
+      candidateRelevantToRule(matchedRule, candidate),
+    );
+    const realCandidate = ruleCandidates[0];
     const competitiveRealCandidates = realCandidate
-      ? candidates.filter((candidate) => candidate.score >= realCandidate.score - 5)
+      ? ruleCandidates.filter((candidate) => candidate.score >= realCandidate.score - 5)
       : [];
     const ambiguousRequiredCandidates =
       matchedRule.candidateRequirement === "required" &&
@@ -2493,8 +2699,9 @@ async function resolveApprovalContraAccount(
     ar_account_id: number | null;
     ap_account_id: number | null;
     purchase_expense_account_id: number | null;
+    salary_payable_account_id: number | null;
   }>(
-    `select ar_account_id, ap_account_id, purchase_expense_account_id
+    `select ar_account_id, ap_account_id, purchase_expense_account_id, salary_payable_account_id
        from public.accounting_settings
       where company_id = $1
       limit 1`,
@@ -2522,6 +2729,29 @@ async function resolveApprovalContraAccount(
     configuredId = undefined;
   } else if (type === "vendor_invoice") {
     configuredId = configured?.ap_account_id;
+  } else if (type === "payroll_item") {
+    configuredId = configured?.salary_payable_account_id;
+  } else if (type === "cash_advance") {
+    const employeeAdvance = await client.query<{ id: number; code: string; name: string }>(
+      `select id, code, name
+         from public.chart_of_accounts
+        where company_id = $1
+          and code = '1-1032-CST'
+          and coalesce(is_active, true) = true
+          and coalesce(is_header, false) = false
+          and coalesce(is_postable, true) = true
+        limit 1`,
+      [companyId],
+    );
+    const account = employeeAdvance.rows[0];
+    if (!account) {
+      throw new ApprovalError(
+        "COA Piutang Karyawan (Kasbon) 1-1032-CST belum tersedia.",
+        422,
+        "JOURNAL_MAPPING_REQUIRED",
+      );
+    }
+    return account;
   } else {
     configuredId = configured?.purchase_expense_account_id;
   }
@@ -2758,6 +2988,41 @@ async function assertApprovalCandidateExists(
           and reconciliation_status = 'reconciled'
           and coalesce(accounting_posted, false) = true
           and journal_entry_id is not null
+        limit 1
+        for update`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "payroll_item") {
+    if (candidateSource !== "public.payroll_items") {
+      throw new ApprovalError("Sumber kandidat payroll tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select pi.id
+         from public.payroll_items pi
+         join public.payroll_runs pr on pr.id = pi.run_id
+        where pi.id = $1
+          and pr.company_id = $2
+          and coalesce(pi.is_paid, false) = false
+          and (
+            lower(coalesce(pr.status, '')) in ('approved','posted','paid')
+            or lower(coalesce(pr.posting_status, '')) = 'posted'
+          )
+        limit 1
+        for update of pi`,
+      [candidateId, companyId],
+    );
+  } else if (candidateType === "cash_advance") {
+    if (candidateSource !== "public.cash_advances") {
+      throw new ApprovalError("Sumber kandidat kasbon tidak valid.", 409, "STALE_CANDIDATE");
+    }
+    result = await client.query(
+      `select id
+         from public.cash_advances
+        where id = $1
+          and company_id = $2
+          and upper(coalesce(advance_type, '')) = 'EMPLOYEE'
+          and lower(coalesce(status, '')) not in ('repaid','void','voided','cancelled','canceled')
+          and lower(coalesce(lifecycle_status, '')) not in ('settled','closed','voided')
         limit 1
         for update`,
       [candidateId, companyId],
@@ -3160,6 +3425,10 @@ async function approveBankMutation(
             ? "public.recon_rules"
           : selectedCandidateType === "internal_transfer"
             ? "public.bank_mutations"
+          : selectedCandidateType === "payroll_item"
+            ? "public.payroll_items"
+          : selectedCandidateType === "cash_advance"
+            ? "public.cash_advances"
             : null;
   }
   await assertApprovalCandidateExists(
@@ -3488,9 +3757,19 @@ async function approveBankMutation(
       entryId,
       actor.email,
       mutationId,
-      sourceReceiptJournal != null,
-      sourceReceiptJournal ? selectedCandidateType : null,
-      sourceReceiptJournal ? selectedCandidateId : null,
+      sourceReceiptJournal != null
+        || selectedCandidateType === "payroll_item"
+        || selectedCandidateType === "cash_advance",
+      sourceReceiptJournal != null
+        || selectedCandidateType === "payroll_item"
+        || selectedCandidateType === "cash_advance"
+        ? selectedCandidateType
+        : null,
+      sourceReceiptJournal != null
+        || selectedCandidateType === "payroll_item"
+        || selectedCandidateType === "cash_advance"
+        ? selectedCandidateId
+        : null,
     ],
   );
 
@@ -3661,6 +3940,104 @@ async function postBankMutationCanonical(
       String(meta.review_code ?? "CANONICAL_POSTED"),
     ],
   );
+  if (matchId != null) {
+    const sourceMatch = await client.query<{
+      candidate_type: string;
+      candidate_id: number;
+      candidate_source: string | null;
+    }>(
+      `select candidate_type,candidate_id,candidate_source
+         from public.bank_reconciliation_matches
+        where id=$1 and mutation_id=$2
+        limit 1`,
+      [matchId, mutationId],
+    );
+    const selected = sourceMatch.rows[0];
+    if (
+      selected?.candidate_type === "payroll_item"
+      && selected.candidate_source === "public.payroll_items"
+    ) {
+      const payrollUpdate = await client.query<{ id: number; net_salary: string }>(
+        `update public.payroll_items
+            set is_paid=true,
+                paid_at=coalesce(paid_at,now()),
+                paid_by=coalesce(paid_by,$2)
+          where id=$1
+            and coalesce(is_paid,false)=false
+          returning id,net_salary::text`,
+        [selected.candidate_id, actor.email],
+      );
+      const payrollItem = payrollUpdate.rows[0];
+      if (!payrollItem) {
+        throw new ApprovalError(
+          "Payroll item sudah berubah atau sudah dibayar sebelum posting.",
+          409,
+          "PAYROLL_SOURCE_CHANGED",
+        );
+      }
+      await client.query(
+        `insert into public.salary_payments
+          (payroll_item_id,amount,payment_method,paid_at,paid_by,notes)
+         select $1,$2::numeric,'bank',now(),$3,$4
+          where not exists (
+            select 1 from public.salary_payments where payroll_item_id=$1
+          )`,
+        [
+          selected.candidate_id,
+          payrollItem.net_salary,
+          actor.email,
+          `Bank reconciliation mutation #${mutationId}`,
+        ],
+      );
+    } else if (
+      selected?.candidate_type === "cash_advance"
+      && selected.candidate_source === "public.cash_advances"
+    ) {
+      const employeeKasbon = await client.query<{ id: number }>(
+        `select id
+           from public.chart_of_accounts
+          where company_id=$1
+            and code='1-1032-CST'
+            and coalesce(is_active,true)=true
+            and coalesce(is_postable,true)=true
+          limit 1`,
+        [mutation.company_id],
+      );
+      const kasbonCoaId = employeeKasbon.rows[0]?.id ?? null;
+      if (kasbonCoaId == null) {
+        throw new ApprovalError(
+          "COA Piutang Karyawan (Kasbon) tidak tersedia saat finalisasi.",
+          422,
+          "JOURNAL_MAPPING_REQUIRED",
+        );
+      }
+      const advanceUpdate = await client.query<{ id: number }>(
+        `update public.cash_advances
+            set status=case when upper(coalesce(status,''))='DRAFT' then 'active' else status end,
+                lifecycle_status='disbursed',
+                disbursed_at=coalesce(disbursed_at,now()),
+                receivable_account_id=coalesce(receivable_account_id,$3),
+                accounting_entry_id=coalesce(accounting_entry_id,$2),
+                entry_id=coalesce(entry_id,$2),
+                posting_status='POSTED',
+                updated_at=now()
+          where id=$1
+            and company_id=$4
+            and upper(coalesce(advance_type,''))='EMPLOYEE'
+            and lower(coalesce(status,'')) not in ('repaid','void','voided','cancelled','canceled')
+          returning id`,
+        [selected.candidate_id, entryId, kasbonCoaId, mutation.company_id],
+      );
+      if (!advanceUpdate.rows[0]) {
+        throw new ApprovalError(
+          "Data kasbon karyawan sudah berubah sebelum posting.",
+          409,
+          "CASH_ADVANCE_SOURCE_CHANGED",
+        );
+      }
+    }
+  }
+
   await client.query(
     `insert into public.bank_reconciliation_audit(mutation_id,action,actor,meta)
       values($1,'CANONICAL_POSTED',$2,$3::jsonb)`,
@@ -4786,6 +5163,8 @@ const mutationListColumns = `
         or (match.candidate_type = 'sport_company_invoice' and match.candidate_source = 'sport_center.company_invoices')
         or (match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments')
         or (match.candidate_type = 'vendor_invoice' and match.candidate_source = 'public.vendor_invoices')
+        or (match.candidate_type = 'payroll_item' and match.candidate_source = 'public.payroll_items')
+        or (match.candidate_type = 'cash_advance' and match.candidate_source = 'public.cash_advances')
         or (match.candidate_type = 'qris_settlement' and match.candidate_source = 'sport_center.payment_settlement_batches')
         or (match.candidate_type = 'recon_rule' and match.candidate_source = 'public.recon_rules')
       )
@@ -5166,6 +5545,76 @@ async function hydrateMutationCandidateDetails(rows: MutationCandidateRow[]): Pr
       }
     } catch {
       // Rule details are additive to the reconciliation list.
+    }
+  }
+
+  const payrollItemIds = idsFor("payroll_item");
+  if (payrollItemIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select pi.id,
+                pi.net_salary as amount,
+                make_date(pr.year,pr.month,1)::text as date,
+                concat_ws(' ',e.first_name,e.last_name) as name,
+                concat('PAYROLL/',pr.year,'-',lpad(pr.month::text,2,'0'),'/ITEM-',pi.id) as reference,
+                case when coalesce(pi.is_paid,false) then 'paid' else pr.status end as status,
+                pr.id as payroll_run_id,
+                pr.month as payroll_month,
+                pr.year as payroll_year
+           from public.payroll_items pi
+           join public.payroll_runs pr on pr.id=pi.run_id
+           left join public.employees e on e.id=pi.employee_id
+          where pi.id = any($1::bigint[])`,
+        [payrollItemIds],
+      );
+      for (const row of result.rows) {
+        details.set(candidateDetailKey("payroll_item", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          status: row.status,
+          sourceType: "payroll",
+          payrollRunId: row.payroll_run_id,
+          payrollMonth: row.payroll_month,
+          payrollYear: row.payroll_year,
+        });
+      }
+    } catch {
+      // Payroll candidate details are additive.
+    }
+  }
+
+  const cashAdvanceIds = idsFor("cash_advance");
+  if (cashAdvanceIds.length > 0) {
+    try {
+      const result = await pool.query<Record<string, unknown>>(
+        `select id,
+                amount,
+                date::text as date,
+                party_name as name,
+                advance_number as reference,
+                lifecycle_status as status,
+                employee_id,
+                remaining_amount
+           from public.cash_advances
+          where id = any($1::bigint[])`,
+        [cashAdvanceIds],
+      );
+      for (const row of result.rows) {
+        details.set(candidateDetailKey("cash_advance", row.id), {
+          amount: row.amount,
+          date: row.date,
+          name: row.name,
+          reference: row.reference,
+          status: row.status,
+          sourceType: "employee_advance",
+          employeeId: row.employee_id,
+          remainingAmount: row.remaining_amount,
+        });
+      }
+    } catch {
+      // Employee advance candidate details are additive.
     }
   }
 
