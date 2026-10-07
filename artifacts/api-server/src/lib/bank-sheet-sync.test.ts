@@ -257,6 +257,23 @@ describe("Google Sheet bank mutation sync", () => {
     expect(insertCalls[1]?.[1]?.[2]).toBe("2026-08-07");
   });
 
+  it("uses DMY for ambiguous cash-ledger dates when the Sheet mixes locale formats", async () => {
+    config.account_type = "cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit"],
+      ["25/09/2026", "Kas keluar September", "0", "100000"],
+      ["09/25/2026", "Legacy US-formatted September row", "0", "200000"],
+      ["01/10/2026", "Kas keluar Oktober", "0", "300000"],
+    ]);
+
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+
+    expect(insertCalls[2]?.[1]?.[2]).toBe("2026-10-01");
+  });
+
   it("keeps US MM/DD/YYYY dates when month-first evidence exists", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit"],
