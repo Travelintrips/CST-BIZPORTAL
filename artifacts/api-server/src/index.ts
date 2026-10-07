@@ -1,7 +1,10 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { runFleetAutoReminderSweep } from "./lib/fleet-wa-reminder";
-import { runQrisAutoCandidateSweep } from "./routes/bank-reconciliation";
+import {
+  runKasScApprovedRuleBackfill,
+  runQrisAutoCandidateSweep,
+} from "./routes/bank-reconciliation";
 import {
   initializeProductionSessionSigning,
   isDevelopmentEnvironment,
@@ -100,6 +103,32 @@ if (fleetReminderTimer) {
   logger.info("Embedded Fleet reminder scheduler disabled; standalone Fleet owns reminder scheduling.");
 }
 
+let kasScRuleBackfillRunning = false;
+const runKasScRuleBackfillTick = async () => {
+  if (kasScRuleBackfillRunning) return;
+  kasScRuleBackfillRunning = true;
+  try {
+    const result = await runKasScApprovedRuleBackfill();
+    if (
+      result.scanned > 0
+      || result.autoPosted > 0
+      || result.failed > 0
+    ) {
+      logger.info({ result }, "Kas Besar SC legacy Rule AI backfill completed");
+    }
+  } catch (error) {
+    logger.error({ error }, "Kas Besar SC legacy Rule AI backfill failed");
+  } finally {
+    kasScRuleBackfillRunning = false;
+  }
+};
+
+const kasScRuleBackfillTimer = setInterval(() => {
+  void runKasScRuleBackfillTick();
+}, 2 * 60 * 1000);
+kasScRuleBackfillTimer.unref();
+setTimeout(() => void runKasScRuleBackfillTick(), 20_000).unref();
+
 let qrisAutoCandidateRunning = false;
 const runQrisAutoCandidateTick = async () => {
   if (qrisAutoCandidateRunning) return;
@@ -140,6 +169,7 @@ server.on("error", (err) => {
 const stopBackgroundTimers = () => {
   if (fleetReminderTimer) clearInterval(fleetReminderTimer);
   clearInterval(qrisAutoCandidateTimer);
+  clearInterval(kasScRuleBackfillTimer);
   if (startupInitializationTimer) {
     clearTimeout(startupInitializationTimer);
     startupInitializationTimer = null;
