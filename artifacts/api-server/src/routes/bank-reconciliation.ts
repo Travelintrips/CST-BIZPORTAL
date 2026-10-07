@@ -1499,9 +1499,6 @@ export interface KasScRuleBackfillResult {
   skipped: boolean;
   scanned: number;
   autoPosted: number;
-  remainedMatched: number;
-  manualReview: number;
-  unmatched: number;
   failed: number;
 }
 
@@ -1510,9 +1507,6 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
     skipped: false,
     scanned: 0,
     autoPosted: 0,
-    remainedMatched: 0,
-    manualReview: 0,
-    unmatched: 0,
     failed: 0,
   };
 
@@ -1529,33 +1523,57 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
       return summary;
     }
 
-    const rows = await client.query<MatchingMutation>(
-      `select bm.id,
-              bm.amount::text as amount,
-              bm.direction,
-              bm.transaction_date::text as transaction_date,
-              bm.description,
-              bm.normalized_description,
-              bm.provider_order_id,
-              bm.company_id,
-              bm.status::text as status,
-              bm.bank_account_id::text as bank_account_id,
-              bm.bank_reference,
-              bm.provider_name,
-              bm.uploaded_proof_url,
-              bm.review_code
+    const rows = await client.query<{
+      mutation_id: number;
+      company_id: number;
+      match_id: number;
+      rule_id: number;
+      rule_name: string;
+      target_coa_code: string;
+    }>(
+      `select bm.id::integer as mutation_id,
+              bm.company_id::integer as company_id,
+              m.id::integer as match_id,
+              r.id::integer as rule_id,
+              r.name::text as rule_name,
+              r.target_coa_code::text as target_coa_code
          from public.bank_mutations bm
          join public.company_bank_accounts cba
            on cba.company_id = bm.company_id
           and cba.id::text = bm.bank_account_id::text
           and coalesce(cba.is_active, true) = true
-         join public.chart_of_accounts coa
-           on coa.id = cba.coa_id
-          and coa.company_id = cba.company_id
-        where upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'
+         join public.chart_of_accounts bank_coa
+           on bank_coa.id = cba.coa_id
+          and bank_coa.company_id = cba.company_id
+         join lateral (
+           select candidate_match.id,
+                  candidate_match.candidate_id
+             from public.bank_reconciliation_matches candidate_match
+            where candidate_match.mutation_id = bm.id
+              and candidate_match.candidate_type = 'recon_rule'
+              and candidate_match.candidate_source = 'public.recon_rules'
+              and lower(coalesce(candidate_match.status::text, '')) = 'candidate'
+            order by candidate_match.id desc
+            limit 1
+         ) m on true
+         join public.recon_rules r
+           on r.id = m.candidate_id
+          and r.company_id = bm.company_id
+          and r.is_active = true
+          and r.bank_account_id::text = bm.bank_account_id::text
+         join public.chart_of_accounts target_coa
+           on target_coa.code = r.target_coa_code
+          and (target_coa.company_id = bm.company_id or target_coa.company_id is null)
+          and coalesce(target_coa.is_active, true) = true
+          and coalesce(target_coa.is_postable, not coalesce(target_coa.is_header, false)) = true
+        where upper(trim(coalesce(bank_coa.code, ''))) = '1-1010-CST'
           and lower(coalesce(bm.status::text, '')) = 'matched'
           and lower(coalesce(bm.reconciliation_status::text, '')) = 'matched'
           and upper(coalesce(bm.review_code, '')) = 'RULE_AI_MATCH'
+          and coalesce(r.candidate_requirement, 'required') = 'not_required'
+          and coalesce(r.requires_document_upload, false) = false
+          and nullif(trim(coalesce(r.target_coa_code, '')), '') is not null
+          and coalesce(r.confidence_score, 0) >= 80
           and not exists (
             select 1
               from public.bank_reconciliation_matches final_match
@@ -1566,22 +1584,55 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
         limit 500`,
     );
 
-    for (const mutation of rows.rows) {
+    for (const row of rows.rows) {
       summary.scanned += 1;
       const actor: ApprovalActor = {
         email: "system:kas-sc-rule-backfill",
-        companyId: mutation.company_id,
+        companyId: row.company_id,
       };
 
       try {
         await client.query("begin");
-        const result = await matchLocalMutation(client, mutation, actor);
-        await client.query("commit");
+        const approval = await approveBankMutation(
+          client,
+          row.mutation_id,
+          {
+            match_id: row.match_id,
+            candidate_type: "recon_rule",
+            candidate_id: row.rule_id,
+            candidate_source: "public.recon_rules",
+            manual_coa_code: row.target_coa_code,
+            note: "Backfill approved Kas Besar SC Rule AI",
+          },
+          actor,
+          `kas-sc-backfill:${row.mutation_id}:${row.rule_id}`,
+        );
+        const entryId = safeInteger(approval.journal_entry_id);
+        if (entryId == null) {
+          throw new ApprovalError(
+            "Backfill Rule AI Kas Besar SC tidak menghasilkan jurnal.",
+            409,
+            "KAS_SC_BACKFILL_JOURNAL_MISSING",
+          );
+        }
 
-        if (result === "auto_posted") summary.autoPosted += 1;
-        else if (result === "manual_review") summary.manualReview += 1;
-        else if (result === "unmatched") summary.unmatched += 1;
-        else summary.remainedMatched += 1;
+        await postBankMutationCanonical(
+          client,
+          row.mutation_id,
+          entryId,
+          row.match_id,
+          actor,
+          {
+            engine: "bizportal-kas-sc-rule-backfill",
+            rule_id: row.rule_id,
+            rule_name: row.rule_name,
+            coa_code: row.target_coa_code,
+            reason: "Legacy Kas Besar SC Rule AI auto-approved dan auto-posted: " + row.rule_name,
+            review_code: "RULE_AI_AUTO_POSTED",
+          },
+        );
+        await client.query("commit");
+        summary.autoPosted += 1;
       } catch (error) {
         await client.query("rollback").catch(() => undefined);
         summary.failed += 1;
