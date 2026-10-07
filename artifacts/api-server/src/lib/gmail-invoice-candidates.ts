@@ -298,11 +298,10 @@ export async function syncGmailInvoiceCandidates(args: {
     existing: 0,
   };
 
-  for (const message of messages) {
-    if (counts.attachmentsSeen >= GMAIL_MAX_ATTACHMENTS) break;
+  let newWork = 0;
 
+  scan: for (const message of messages) {
     for (const attachment of message.attachments) {
-      if (counts.attachmentsSeen >= GMAIL_MAX_ATTACHMENTS) break;
       counts.attachmentsSeen += 1;
 
       const status = await processAttachment({
@@ -316,6 +315,11 @@ export async function syncGmailInvoiceCandidates(args: {
       else if (status === "duplicate") counts.duplicates += 1;
       else if (status === "failed") counts.failed += 1;
       else counts.existing += 1;
+
+      if (status !== "existing") {
+        newWork += 1;
+        if (newWork >= GMAIL_MAX_ATTACHMENTS) break scan;
+      }
     }
   }
 
