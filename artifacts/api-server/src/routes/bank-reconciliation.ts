@@ -388,6 +388,35 @@ function tokenOverlap(left: unknown, right: unknown): boolean {
   return false;
 }
 
+async function isKasBesarScReconciliationAccount(
+  client: ApprovalClient,
+  companyId: number,
+  bankAccountId: string | null,
+): Promise<boolean> {
+  if (!bankAccountId) return false;
+  const result = await client.query<{ blocked: boolean }>(
+    `select exists (
+       select 1
+         from public.company_bank_accounts cba
+         join public.chart_of_accounts coa
+           on coa.id = cba.coa_id
+          and coa.company_id = cba.company_id
+        where cba.company_id = $1
+          and (
+            cba.id::text = $2::text
+            or (
+              nullif(regexp_replace(coalesce(cba.account_number, ''), '[^0-9]', '', 'g'), '') is not null
+              and regexp_replace(coalesce(cba.account_number, ''), '[^0-9]', '', 'g') =
+                  regexp_replace(coalesce($2::text, ''), '[^0-9]', '', 'g')
+            )
+          )
+          and upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'
+     ) as blocked`,
+    [companyId, bankAccountId],
+  );
+  return result.rows[0]?.blocked === true;
+}
+
 async function loadLocalMatchCandidates(
   client: ApprovalClient,
   mutation: MatchingMutation,
@@ -400,6 +429,13 @@ async function loadLocalMatchCandidates(
   if (!date) return [];
   const direction = String(mutation.direction ?? "").toUpperCase();
   const candidates: LocalMatchCandidate[] = [];
+  const vendorInvoiceMatchBlocked =
+    direction === "OUT"
+    && await isKasBesarScReconciliationAccount(
+      client,
+      mutation.company_id,
+      mutation.bank_account_id,
+    );
 
   if (direction === "IN") {
     // Pair incoming cash/bank mutations with an already-posted outgoing mutation
@@ -1080,7 +1116,7 @@ async function loadLocalMatchCandidates(
       const code = (error as { code?: string }).code;
       if (code !== "42P01" && code !== "42703") throw error;
     }
-  } else if (direction === "OUT") {
+  } else if (direction === "OUT" && !vendorInvoiceMatchBlocked) {
     try {
       const invoices = await client.query<{
         id: number;
@@ -4437,6 +4473,24 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
 const mutationListColumns = `
   bm.id,
   bm.company_id,
+  bm.bank_account_id,
+  not exists (
+    select 1
+      from public.company_bank_accounts vendor_policy_account
+      join public.chart_of_accounts vendor_policy_coa
+        on vendor_policy_coa.id = vendor_policy_account.coa_id
+       and vendor_policy_coa.company_id = vendor_policy_account.company_id
+     where vendor_policy_account.company_id = bm.company_id
+       and (
+         vendor_policy_account.id::text = bm.bank_account_id::text
+         or (
+           nullif(regexp_replace(coalesce(vendor_policy_account.account_number, ''), '[^0-9]', '', 'g'), '') is not null
+           and regexp_replace(coalesce(vendor_policy_account.account_number, ''), '[^0-9]', '', 'g') =
+               regexp_replace(coalesce(bm.bank_account_id::text, ''), '[^0-9]', '', 'g')
+         )
+       )
+       and upper(trim(coalesce(vendor_policy_coa.code, ''))) = '1-1010-CST'
+  ) as vendor_invoice_match_allowed,
   bm.transaction_date,
   bm.description,
   bm.credit_amount,
@@ -7715,6 +7769,13 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
       throw new ApprovalError("Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor", 422, "INVALID_DIRECTION");
     }
+    if (await isKasBesarScReconciliationAccount(client, companyId, mutation.bank_account_id)) {
+      throw new ApprovalError(
+        "Match Invoice Vendor dinonaktifkan untuk rekonsiliasi Kas Besar SC.",
+        422,
+        "VENDOR_INVOICE_MATCH_DISABLED_KAS_BESAR_SC",
+      );
+    }
     if (!Number.isFinite(mutationAmount) || mutationAmount <= 0) {
       throw new ApprovalError("Nominal mutasi tidak valid", 422, "INVALID_AMOUNT");
     }
@@ -8122,6 +8183,31 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
   }
 
   try {
+    const mutationScope = await pool.query<{ bank_account_id: string | null }>(
+      `select bank_account_id
+         from public.bank_mutations
+        where id = $1
+          and company_id = $2
+        limit 1`,
+      [mutationId, companyId],
+    );
+    const scopedMutation = mutationScope.rows[0];
+    if (!scopedMutation) {
+      res.status(404).json({ error: "Mutasi bank tidak ditemukan" });
+      return;
+    }
+    const policyClient: ApprovalClient = {
+      query: (text, values) => pool.query(text, values) as any,
+    };
+    if (await isKasBesarScReconciliationAccount(policyClient, companyId, scopedMutation.bank_account_id)) {
+      res.json({
+        invoices: [],
+        disabled: true,
+        reason: "Match Invoice Vendor dinonaktifkan untuk rekonsiliasi Kas Besar SC.",
+      });
+      return;
+    }
+
     const result = await pool.query<{
       id: number;
       invoice_number: string;
