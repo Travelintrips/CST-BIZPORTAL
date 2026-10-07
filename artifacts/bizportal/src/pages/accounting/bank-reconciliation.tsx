@@ -1198,6 +1198,8 @@ const fmtDateTime = (d: string | null) => {
 
 const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   accounting_payment: "Pembayaran",
+  payroll_item: "Payroll Karyawan",
+  cash_advance: "Kasbon Karyawan",
   logistic_order: "Logistik",
   invoice: "Invoice",
   expense: "Expense",
@@ -1803,6 +1805,8 @@ const REAL_TRANSACTION_CANDIDATE_TYPES = new Set([
   "qris_settlement",
   "tenant_invoice",
   "vendor_invoice",
+  "payroll_item",
+  "cash_advance",
 ]);
 
 function isRealTransactionCandidate(candidate: Candidate): boolean {
@@ -1812,7 +1816,12 @@ function isRealTransactionCandidate(candidate: Candidate): boolean {
 }
 
 function requiresRealTransactionCandidate(m: BankMutation): boolean {
-  return m.review_code === "RULE_CANDIDATE_REQUIRED";
+  return m.review_code === "RULE_CANDIDATE_REQUIRED"
+    || (m.candidates ?? []).some(candidate =>
+      candidate.candidate_type === "recon_rule"
+      && candidate.candidate_source === "public.recon_rules"
+      && candidate.details?.candidateRequirement === "required"
+    );
 }
 
 function isUiApprovalEligible(m: BankMutation): boolean {
@@ -1830,12 +1839,19 @@ function isUiApprovalEligible(m: BankMutation): boolean {
 
   // This is deliberately stricter than the backend action guard for ordinary
   // transaction candidates. The server remains the final authority.
-  const requiredCandidateAvailable = !requiresRealTransactionCandidate(m)
-    || visibleCandidates(m).some(isRealTransactionCandidate);
+  const requiredCandidate = requiresRealTransactionCandidate(m);
+  const realCandidate = visibleCandidates(m).find(isRealTransactionCandidate);
+  if (requiredCandidate) {
+    return canApprove(m)
+      && realCandidate != null
+      && realCandidate.amount_match
+      && realCandidate.date_match
+      && realCandidate.name_match
+      && !isSettlementOwnedQrisMutation(m);
+  }
   return canApprove(m)
     && isExactMatch(m)
-    && !isSettlementOwnedQrisMutation(m)
-    && requiredCandidateAvailable;
+    && !isSettlementOwnedQrisMutation(m);
 }
 
 /**

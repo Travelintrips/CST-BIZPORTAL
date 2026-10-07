@@ -129,8 +129,40 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("async function isKasBesarScReconciliationAccount");
     expect(source).toContain("1-1010-CST");
     expect(source).toContain("VENDOR_INVOICE_MATCH_DISABLED_KAS_BESAR_SC");
-    expect(source).toContain('direction === "OUT" && !vendorInvoiceMatchBlocked');
+    expect(source).toContain("if (!vendorInvoiceMatchBlocked)");
     expect(source).toContain("vendor_invoice_match_allowed");
+  });
+
+  it("requires source-backed payroll candidates for salary Rule AI", () => {
+    expect(source).toContain('candidateType: "payroll_item"');
+    expect(source).toContain('return "public.payroll_items"');
+    expect(source).toContain('candidate.candidateType === "payroll_item"');
+    expect(source).toContain("abs(pi.net_salary::numeric - $2::numeric) < 0.01");
+    expect(source).toContain("coalesce(pi.is_paid, false) = false");
+    expect(source).toContain('selectedCandidateType === "payroll_item"');
+    expect(source).toContain("configured?.salary_payable_account_id");
+    expect(source).toContain("set is_paid=true");
+    expect(source).toContain("insert into public.salary_payments");
+  });
+
+  it("requires source-backed employee cash-advance candidates for kasbon Rule AI", () => {
+    expect(source).toContain('candidateType: "cash_advance"');
+    expect(source).toContain('return "public.cash_advances"');
+    expect(source).toContain('candidate.candidateType === "cash_advance"');
+    expect(source).toContain("upper(coalesce(ca.advance_type, '')) = 'EMPLOYEE'");
+    expect(source).toContain("abs(ca.amount::numeric - $2::numeric) < 0.01");
+    expect(source).toContain("code = '1-1032-CST'");
+    expect(source).toContain('selectedCandidateType === "cash_advance"');
+    expect(source).toContain("lifecycle_status='disbursed'");
+    expect(source).toContain("posting_status='POSTED'");
+  });
+
+  it("does not let an unrelated candidate satisfy a required payroll or kasbon rule", () => {
+    expect(source).toContain("function candidateRelevantToRule(");
+    expect(source).toContain('case "payroll":');
+    expect(source).toContain('case "employee_advance":');
+    expect(source).toContain("const ruleCandidates = candidates.filter");
+    expect(source).toContain("candidateRelevantToRule(matchedRule, candidate)");
   });
 
   it("releases vendor invoice allocations when an approved draft is unmatched", () => {
