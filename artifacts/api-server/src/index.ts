@@ -112,9 +112,6 @@ const runKasScRuleBackfillTick = async () => {
     if (
       result.scanned > 0
       || result.autoPosted > 0
-      || result.remainedMatched > 0
-      || result.manualReview > 0
-      || result.unmatched > 0
       || result.failed > 0
     ) {
       logger.info({ result }, "Kas Besar SC legacy Rule AI backfill completed");
