@@ -161,7 +161,12 @@ function formatCalendarDate(year: number, month: number, day: number): string | 
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function inferSlashDateOrder(rows: string[][], dateColumn: number, start: number): SlashDateOrder {
+function inferSlashDateOrder(
+  rows: string[][],
+  dateColumn: number,
+  start: number,
+  fallbackOrder: SlashDateOrder = "MDY",
+): SlashDateOrder {
   let sawDmyEvidence = false;
   let sawMdyEvidence = false;
   for (const row of rows.slice(start)) {
@@ -173,7 +178,12 @@ function inferSlashDateOrder(rows: string[][], dateColumn: number, start: number
     if (second > 12 && first >= 1 && first <= 12) sawMdyEvidence = true;
   }
   if (sawDmyEvidence && !sawMdyEvidence) return "DMY";
-  return "MDY";
+  if (sawMdyEvidence && !sawDmyEvidence) return "MDY";
+  // Some cash-ledger Sheets contain a mixture of locale-formatted values
+  // (for example 25/09/2026 and 09/25/2026) plus ambiguous rows such as
+  // 01/10/2026. In that mixed case, use the account-type fallback instead
+  // of silently defaulting every ambiguous row to US month-first order.
+  return fallbackOrder;
 }
 
 function parseDate(raw: string, slashOrder: SlashDateOrder = "MDY"): string | null {
@@ -382,7 +392,12 @@ function parseRows(rows: string[][], accountType: string | null = null): {
     }
   }
 
-  const slashDateOrder = inferSlashDateOrder(rows, dateColumn, start);
+  const slashDateOrder = inferSlashDateOrder(
+    rows,
+    dateColumn,
+    start,
+    accountType?.trim().toLowerCase() === "cash" ? "DMY" : "MDY",
+  );
   const result: ParsedMutation[] = [];
   for (const [offset, row] of rows.slice(start).entries()) {
     if (!row?.some((cell) => String(cell ?? "").trim())) continue;
