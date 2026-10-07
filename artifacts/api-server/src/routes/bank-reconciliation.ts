@@ -1340,10 +1340,25 @@ async function matchLocalMutation(
     );
 
     const confidence = Number(ruleResult.confidence ?? matchedRule.confidenceScore);
+    const matchedRuleBankAccountId = matchedRule.bankAccountId;
+    const kasScApprovedRuleAutoPost =
+      confidence >= 80
+      && matchedRuleBankAccountId != null
+      && Number(mutation.bank_account_id) === matchedRuleBankAccountId
+      && await isKasBesarScReconciliationAccount(
+        client,
+        mutation.company_id,
+        String(matchedRuleBankAccountId),
+      );
+
+    // Owner policy: approved & active Rule AI for Kas Besar SC may finish
+    // directly once the rule is an unambiguous no-candidate allocation with
+    // a valid target COA. Other reconciliation accounts keep the existing
+    // deterministic 100% auto-post threshold.
     // Only inbound QRIS belongs to the Sport Center settlement flow.
     // Outbound QRIS is an ordinary company payment rail (merchant expense,
     // vendor payment, etc.) and may be auto-posted by a deterministic Rule AI.
-    const autoPostEligible = confidence === 100
+    const autoPostEligible = (confidence === 100 || kasScApprovedRuleAutoPost)
       && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
       && !matchedRule.requiresDocumentUpload
@@ -1366,7 +1381,9 @@ async function matchLocalMutation(
             candidate_id: ruleResult.ruleId,
             candidate_source: 'public.recon_rules',
             manual_coa_code: matchedRule.targetCoaCode,
-            note: "Auto-approved by Rule AI 100%",
+            note: kasScApprovedRuleAutoPost
+              ? "Auto-approved by approved Kas Besar SC Rule AI"
+              : "Auto-approved by Rule AI 100%",
           },
           actor,
           `rule-ai:${mutation.id}:${ruleResult.ruleId}`,
@@ -1385,7 +1402,9 @@ async function matchLocalMutation(
           rule_name: matchedRule.name,
           confidence,
           coa_code: matchedRule.targetCoaCode,
-          reason: "Rule AI 100% auto-approved dan auto-posted: " + matchedRule.name,
+          reason: (kasScApprovedRuleAutoPost
+            ? "Approved Kas Besar SC Rule AI auto-approved dan auto-posted: "
+            : "Rule AI 100% auto-approved dan auto-posted: ") + matchedRule.name,
           review_code: 'RULE_AI_AUTO_POSTED',
         });
         return "auto_posted";

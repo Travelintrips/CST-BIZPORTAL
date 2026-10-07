@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 const route = readFileSync(fileURLToPath(new URL("../routes/bank-reconciliation.ts", import.meta.url)), "utf8");
 
 describe("Rule AI deterministic auto posting", () => {
-  it("only auto posts deterministic 100 percent rules with COA", () => {
-    expect(route).toContain("confidence === 100");
+  it("auto posts deterministic rules and approved Kas Besar SC rules with COA", () => {
+    expect(route).toContain("confidence === 100 || kasScApprovedRuleAutoPost");
+    expect(route).toContain("confidence >= 80");
+    expect(route).toContain("isKasBesarScReconciliationAccount");
+    expect(route).toContain("upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'");
     expect(route).toContain("matchedRule.candidateRequirement !== 'required'");
     expect(route).toContain("Boolean(matchedRule.targetCoaCode)");
     expect(route).toContain("!ruleResult.ambiguityCode");
