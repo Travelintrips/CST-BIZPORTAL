@@ -56,6 +56,7 @@ export type TargetType =
   | "customer_payment"
   | "vendor_payment"
   | "payroll"
+  | "employee_advance"
   | "bank_fee"
   | "internal_transfer"
   | "intercompany_transfer"
