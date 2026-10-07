@@ -139,7 +139,15 @@ function ruleConditions(row: any): any[] {
 function conditionSummary(row: any): string {
   const conditions = ruleConditions(row);
   const logic = row?.logic === "OR" ? " OR " : " AND ";
-  return conditions.map((c: any) => `${c?.negate ? "NOT " : ""}${c?.value ?? ""}`).join(logic) || "—";
+  return conditions.map((c: any) => {
+    const operator = String(c?.operator ?? "").toLowerCase();
+    const isNegative =
+      Boolean(c?.negate)
+      || operator === "not_contains"
+      || operator === "not_equals"
+      || operator === "neq";
+    return `${isNegative ? "NOT " : ""}${c?.value ?? ""}`;
+  }).join(logic) || "—";
 }
 
 function flowBadge(flow: string) {
