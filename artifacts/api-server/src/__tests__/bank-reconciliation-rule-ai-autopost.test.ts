@@ -41,7 +41,9 @@ describe("Rule AI deterministic auto posting", () => {
     expect(route).toContain("bizportal:kas-sc-approved-rule-backfill");
     expect(route).toContain("upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'");
     expect(route).toContain("upper(coalesce(bm.review_code, '')) = 'RULE_AI_MATCH'");
-    expect(route).toContain("await matchLocalMutation(client, mutation, actor)");
+    expect(route).toContain("const approval = await approveBankMutation(");
+    expect(route).toContain("await postBankMutationCanonical(");
+    expect(route).toContain('review_code: "RULE_AI_AUTO_POSTED"');
   });
 
   it("rejects source override and source-less stored matches", () => {
