@@ -125,6 +125,14 @@ describe("bank reconciliation candidate source integrity", () => {
     expect(source).toContain("status = 'approved_pending_posting'");
   });
 
+  it("disables vendor invoice matching for Kas Besar SC without changing other reconciliation accounts", () => {
+    expect(source).toContain("async function isKasBesarScReconciliationAccount");
+    expect(source).toContain("1-1010-CST");
+    expect(source).toContain("VENDOR_INVOICE_MATCH_DISABLED_KAS_BESAR_SC");
+    expect(source).toContain('direction === "OUT" && !vendorInvoiceMatchBlocked');
+    expect(source).toContain("vendor_invoice_match_allowed");
+  });
+
   it("releases vendor invoice allocations when an approved draft is unmatched", () => {
     expect(source).toContain("update public.payment_allocations");
     expect(source).toContain("set is_active = false");

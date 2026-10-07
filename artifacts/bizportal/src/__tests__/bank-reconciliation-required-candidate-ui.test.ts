@@ -68,6 +68,11 @@ describe("Rule AI required-candidate approval UI", () => {
       "Approve baru tersedia setelah ditemukan",
     );
   });
+  it("hides vendor invoice matching when the backend disables it for Kas Besar SC", () => {
+    expect(componentSource).toContain("m.vendor_invoice_match_allowed !== false");
+    expect(componentSource).toContain('candidate.candidate_type !== "vendor_invoice"');
+  });
+
   it("does not offer approval for unsupported legacy transaction candidates", () => {
     const candidates = [
       { candidate_type: "logistic_order" },

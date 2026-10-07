@@ -756,6 +756,8 @@ interface JournalLine {
 interface BankMutation {
   id: number;
   company_id: number | null;
+  bank_account_id?: string | null;
+  vendor_invoice_match_allowed?: boolean | null;
   transaction_date: string;
   description: string;
   credit_amount: string;
@@ -5754,7 +5756,11 @@ function MutationCard({
   retryMatchingPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
-  const cands  = visibleCandidates(m);
+  const cands  = visibleCandidates(m).filter(
+    candidate =>
+      m.vendor_invoice_match_allowed !== false
+      || candidate.candidate_type !== "vendor_invoice",
+  );
   const qrisAudits = qrisAuditsForMutation(m);
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
@@ -6202,6 +6208,7 @@ function MutationCard({
           <div className="flex gap-1.5 flex-wrap">
             {!isQris
               && m.direction === "OUT"
+              && m.vendor_invoice_match_allowed !== false
               && onMatchVendorInvoice
               && !hasApprovedMatch
               && !["approved", "posted", "approved_pending_posting"].includes(m.status)
