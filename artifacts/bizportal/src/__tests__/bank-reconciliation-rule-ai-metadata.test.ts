@@ -91,6 +91,13 @@ describe("COA picker Rule AI metadata", () => {
     });
   });
 
+  it("renders negative Rule AI operators as NOT in the configuration summary", () => {
+    expect(ruleConfigSource).toContain('operator === "not_contains"');
+    expect(ruleConfigSource).toContain('operator === "not_equals"');
+    expect(ruleConfigSource).toContain('operator === "neq"');
+    expect(ruleConfigSource).toContain('isNegative ? "NOT " : ""');
+  });
+
   it("wires the dialog serializer and edit-form loader into the rendered pages", () => {
     // Rule configuration is owned by the dedicated recon-config page. The\n    // reconciliation page must not carry a second, stale serializer/form.\n    expect(reconciliationSource).not.toContain("buildManualRuleAiPayload(");\n    expect(reconciliationSource).not.toContain("setRuleMetadata(");
     expect(ruleConfigSource).toContain("const editableMetadata = editableRuleAiFieldsFromRow(row);");
