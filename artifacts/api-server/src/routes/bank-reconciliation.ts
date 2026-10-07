@@ -1202,32 +1202,6 @@ async function loadActiveRuleAi(client: ApprovalClient, companyId: number): Prom
   return result.rows.map((r:any)=>({id:Number(r.id),companyId:Number(r.company_id),name:String(r.name),description:r.description??null,priority:Number(r.priority??0),isActive:Boolean(r.is_active),direction:r.direction==='IN'||r.direction==='OUT'?r.direction:null,bankAccountId:r.bank_account_id==null?null:Number(r.bank_account_id),conditionType:String(r.condition_type??'single'),conditionField:r.condition_field,conditionOperator:r.condition_operator,conditionValue:String(r.condition_value??''),conditionsJson:Array.isArray(r.conditions_json)?r.conditions_json:null,logic:String(r.logic??'AND').toUpperCase()==='OR'?'OR':'AND',specificity:Number(r.specificity??1),amountTolerance:r.amount_tolerance==null?null:Number(r.amount_tolerance),referenceAmount:r.reference_amount==null?null:Number(r.reference_amount),candidateRequirement:r.candidate_requirement==='not_required'?'not_required':'required',requiresDocumentUpload:Boolean(r.requires_document_upload),taxType:r.tax_type==='ppn_input'||r.tax_type==='ppn_output'?r.tax_type:'none',aiClassificationRuleId:r.ai_classification_rule_id==null?null:Number(r.ai_classification_rule_id),targetType:r.target_type,targetId:r.target_id==null?null:Number(r.target_id),targetCoaCode:r.target_coa_code??null,confidenceScore:Number(r.confidence_score??100),stopProcessing:Boolean(r.stop_processing),matchCount:Number(r.match_count??0),lastMatchedAt:r.last_matched_at??null,createdBy:r.created_by??null,createdAt:String(r.created_at??''),updatedAt:String(r.updated_at??'')})) as ReconRule[];
 }
 
-async function isKasBesarScReconciliationAccount(
-  client: ApprovalClient,
-  companyId: number,
-  bankAccountId: number,
-): Promise<boolean> {
-  const result = await client.query<{ is_kas_sc: boolean }>(
-    `select exists (
-       select 1
-         from public.company_bank_accounts account
-         left join public.bank_sheet_configs config
-           on config.company_id = account.company_id
-          and config.bank_account_id = account.id
-        where account.company_id = $1
-          and account.id = $2
-          and coalesce(account.is_active, true) = true
-          and (
-            lower(trim(coalesce(account.name, ''))) in ('kas besar sc', 'kas besar sport center')
-            or lower(trim(coalesce(config.label, ''))) in ('kas besar sc', 'kas besar sport center')
-            or lower(trim(coalesce(config.tab_name, ''))) in ('kas besar sc', 'kas besar sport center')
-          )
-     ) as is_kas_sc`,
-    [companyId, bankAccountId],
-  );
-  return result.rows[0]?.is_kas_sc === true;
-}
-
 async function matchLocalMutation(
   client: ApprovalClient,
   mutation: MatchingMutation,
@@ -1374,7 +1348,7 @@ async function matchLocalMutation(
       && await isKasBesarScReconciliationAccount(
         client,
         mutation.company_id,
-        matchedRuleBankAccountId,
+        String(matchedRuleBankAccountId),
       );
 
     // Owner policy: approved & active Rule AI for Kas Besar SC may finish
