@@ -9,7 +9,7 @@ describe("Rule AI deterministic auto posting", () => {
     expect(route).toContain("confidence === 100 || kasScApprovedRuleAutoPost");
     expect(route).toContain("confidence >= 80");
     expect(route).toContain("isKasBesarScReconciliationAccount");
-    expect(route).toContain("'kas besar sc', 'kas besar sport center'");
+    expect(route).toContain("upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'");
     expect(route).toContain("matchedRule.candidateRequirement !== 'required'");
     expect(route).toContain("Boolean(matchedRule.targetCoaCode)");
     expect(route).toContain("!ruleResult.ambiguityCode");
