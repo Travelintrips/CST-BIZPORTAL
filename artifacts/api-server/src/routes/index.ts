@@ -15,6 +15,7 @@ import cashBankReadParityRouter from "./cash-bank-read-parity";
 import accountingSettingsReadParityRouter from "./accounting-settings-read-parity";
 import fleetIntelligenceRouter from "./fleet-intelligence";
 import fleetFinanceIntegrationRouter from "./fleet-finance-integration";
+import gmailInvoiceSourceRouter from "./gmail-invoice-source";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -45,6 +46,7 @@ router.post("/auth/email-login", (_request, response) => {
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(reconClassificationRouter);
+router.use(gmailInvoiceSourceRouter);
 router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
 router.use(businessDashboardRouter);
