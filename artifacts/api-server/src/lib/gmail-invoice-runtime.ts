@@ -5,7 +5,7 @@ const cache = new Map<string, { value: string; expiresAt: number }>();
 export const GMAIL_SEARCH_QUERY =
   "newer_than:365d has:attachment {filename:pdf filename:jpg filename:jpeg filename:png filename:webp} {invoice tagihan faktur billing}";
 export const GMAIL_MAX_MESSAGES = 30;
-export const GMAIL_MAX_ATTACHMENTS = 30;
+export const GMAIL_MAX_ATTACHMENTS = 6;
 export const GMAIL_MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 
 export async function getRuntimeConfig(key: string): Promise<string> {
