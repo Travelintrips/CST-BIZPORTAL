@@ -1495,6 +1495,111 @@ async function matchLocalMutation(
 
 }
 
+export interface KasScRuleBackfillResult {
+  skipped: boolean;
+  scanned: number;
+  autoPosted: number;
+  remainedMatched: number;
+  manualReview: number;
+  unmatched: number;
+  failed: number;
+}
+
+export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillResult> {
+  const summary: KasScRuleBackfillResult = {
+    skipped: false,
+    scanned: 0,
+    autoPosted: 0,
+    remainedMatched: 0,
+    manualReview: 0,
+    unmatched: 0,
+    failed: 0,
+  };
+
+  const client = await pool.connect();
+  let lockAcquired = false;
+  try {
+    const lock = await client.query<{ acquired: boolean }>(
+      "select pg_try_advisory_lock(hashtext($1)) as acquired",
+      ["bizportal:kas-sc-approved-rule-backfill"],
+    );
+    lockAcquired = lock.rows[0]?.acquired === true;
+    if (!lockAcquired) {
+      summary.skipped = true;
+      return summary;
+    }
+
+    const rows = await client.query<MatchingMutation>(
+      `select bm.id,
+              bm.amount::text as amount,
+              bm.direction,
+              bm.transaction_date::text as transaction_date,
+              bm.description,
+              bm.normalized_description,
+              bm.provider_order_id,
+              bm.company_id,
+              bm.status::text as status,
+              bm.bank_account_id::text as bank_account_id,
+              bm.bank_reference,
+              bm.provider_name,
+              bm.uploaded_proof_url,
+              bm.review_code
+         from public.bank_mutations bm
+         join public.company_bank_accounts cba
+           on cba.company_id = bm.company_id
+          and cba.id::text = bm.bank_account_id::text
+          and coalesce(cba.is_active, true) = true
+         join public.chart_of_accounts coa
+           on coa.id = cba.coa_id
+          and coa.company_id = cba.company_id
+        where upper(trim(coalesce(coa.code, ''))) = '1-1010-CST'
+          and lower(coalesce(bm.status::text, '')) = 'matched'
+          and lower(coalesce(bm.reconciliation_status::text, '')) = 'matched'
+          and upper(coalesce(bm.review_code, '')) = 'RULE_AI_MATCH'
+          and not exists (
+            select 1
+              from public.bank_reconciliation_matches final_match
+             where final_match.mutation_id = bm.id
+               and lower(coalesce(final_match.status::text, '')) in ('approved', 'posted')
+          )
+        order by bm.transaction_date, bm.id
+        limit 500`,
+    );
+
+    for (const mutation of rows.rows) {
+      summary.scanned += 1;
+      const actor: ApprovalActor = {
+        email: "system:kas-sc-rule-backfill",
+        companyId: mutation.company_id,
+      };
+
+      try {
+        await client.query("begin");
+        const result = await matchLocalMutation(client, mutation, actor);
+        await client.query("commit");
+
+        if (result === "auto_posted") summary.autoPosted += 1;
+        else if (result === "manual_review") summary.manualReview += 1;
+        else if (result === "unmatched") summary.unmatched += 1;
+        else summary.remainedMatched += 1;
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        summary.failed += 1;
+      }
+    }
+
+    return summary;
+  } finally {
+    if (lockAcquired) {
+      await client.query(
+        "select pg_advisory_unlock(hashtext($1))",
+        ["bizportal:kas-sc-approved-rule-backfill"],
+      ).catch(() => undefined);
+    }
+    client.release();
+  }
+}
+
 router.get("/bank-reconciliation/qris-reset-history", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
   if (!actor) {
