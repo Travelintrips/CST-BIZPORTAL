@@ -46,6 +46,28 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function requireCompanyScope(
+  response: Response,
+  actor: DevAuthUser,
+  value: unknown,
+): number | null {
+  const companyId = parsePositiveInt(value);
+  if (!companyId) {
+    response.status(400).json({ error: "company_id wajib" });
+    return null;
+  }
+
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    response.status(403).json({
+      error: "Perusahaan yang dipilih tidak sesuai dengan akses pengguna.",
+      code: "COMPANY_SCOPE_FORBIDDEN",
+    });
+    return null;
+  }
+
+  return companyId;
+}
+
 function sourceEmail(): string {
   return (
     process.env.GMAIL_INVOICE_SOURCE_EMAIL ||
@@ -526,16 +548,12 @@ router.get(
         return;
       }
 
-      const companyId = parsePositiveInt(
+      const companyId = requireCompanyScope(
+        res,
+        actor,
         req.query.company_id,
       );
-
-      if (!companyId) {
-        res
-          .status(400)
-          .json({ error: "company_id wajib" });
-        return;
-      }
+      if (!companyId) return;
 
       res.json(await readStatus(req, companyId));
     } catch (error) {
@@ -561,16 +579,12 @@ router.get(
         return;
       }
 
-      const companyId = parsePositiveInt(
+      const companyId = requireCompanyScope(
+        res,
+        actor,
         req.query.company_id,
       );
-
-      if (!companyId) {
-        res
-          .status(400)
-          .json({ error: "company_id wajib" });
-        return;
-      }
+      if (!companyId) return;
 
       const limit = Math.min(
         Math.max(Number(req.query.limit) || 50, 1),
@@ -606,16 +620,12 @@ router.post(
         return;
       }
 
-      const companyId = parsePositiveInt(
+      const companyId = requireCompanyScope(
+        res,
+        actor,
         req.body?.company_id,
       );
-
-      if (!companyId) {
-        res
-          .status(400)
-          .json({ error: "company_id wajib" });
-        return;
-      }
+      if (!companyId) return;
 
       const [clientId, clientSecret] =
         await Promise.all([
@@ -887,16 +897,12 @@ router.post(
         return;
       }
 
-      const companyId = parsePositiveInt(
+      const companyId = requireCompanyScope(
+        res,
+        actor,
         req.body?.company_id,
       );
-
-      if (!companyId) {
-        res
-          .status(400)
-          .json({ error: "company_id wajib" });
-        return;
-      }
+      if (!companyId) return;
 
       const encryptedToken = await getConfig(
         companyId,
@@ -1006,17 +1012,19 @@ router.post(
       return;
     }
 
-    const companyId = parsePositiveInt(
+    const companyId = requireCompanyScope(
+      res,
+      actor,
       req.body?.company_id,
     );
+    if (!companyId) return;
+
     const candidateId = parsePositiveInt(
       req.params.id,
     );
-
-    if (!companyId || !candidateId) {
+    if (!candidateId) {
       res.status(400).json({
-        error:
-          "company_id dan candidate id wajib",
+        error: "candidate id wajib",
       });
       return;
     }
@@ -1084,16 +1092,12 @@ router.post(
         return;
       }
 
-      const companyId = parsePositiveInt(
+      const companyId = requireCompanyScope(
+        res,
+        actor,
         req.body?.company_id,
       );
-
-      if (!companyId) {
-        res
-          .status(400)
-          .json({ error: "company_id wajib" });
-        return;
-      }
+      if (!companyId) return;
 
       await Promise.all([
         setConfig(
