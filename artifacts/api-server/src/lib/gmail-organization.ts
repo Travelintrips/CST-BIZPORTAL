@@ -249,6 +249,7 @@ export async function provisionGmailOrganizationRules(args: {
   companyId: number;
   accessToken: string;
   actorEmail: string;
+  senderScanLimit?: number;
 }): Promise<{
   total: number;
   active: number;
@@ -319,6 +320,7 @@ export async function provisionGmailOrganizationRules(args: {
     const senderResult =
       await autoOrganizeGmailInboxBySender({
         accessToken: args.accessToken,
+        scanLimit: args.senderScanLimit,
       });
 
     senderScannedMessages =
