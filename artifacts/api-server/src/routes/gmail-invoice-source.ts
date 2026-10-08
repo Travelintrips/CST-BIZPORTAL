@@ -750,6 +750,21 @@ router.get(
         return;
       }
 
+      if (
+        actor.companyId != null &&
+        actor.companyId !== parsedState.companyId
+      ) {
+        redirectWithResult(
+          res,
+          parsedState.returnPath,
+          {
+            gmail: "error",
+            reason: "company_scope_mismatch",
+          },
+        );
+        return;
+      }
+
       if (typeof req.query.error === "string") {
         redirectWithResult(
           res,
