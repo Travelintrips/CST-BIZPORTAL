@@ -40,11 +40,13 @@ describe("Rule AI config API", () => {
     expect(api).toContain("and bank_account_id=$23");
   });
 
-  it("derives a non-null operational target type from the selected action flow", () => {
+  it("uses edited action flow before stale target_type metadata", () => {
     expect(api).toContain("const targetTypeForInput");
+    expect(api).toContain('switch (String(body?.action_flow ?? "").trim().toUpperCase())');
     expect(api).toContain('case "INTERNAL_TRANSFER"');
-    expect(api).toContain('case "INCOME_ALLOCATION"');
-    expect(api).toContain('case "ROUTINE_EXPENSE_ALLOCATION"');
+    expect(api).toContain('return "internal_transfer"');
+    expect(api.indexOf('switch (String(body?.action_flow ?? "").trim().toUpperCase())'))
+      .toBeLessThan(api.indexOf('const explicit = String(body?.target_type ?? "").trim().toLowerCase()'));
     expect(api).toContain("targetTypeForInput(b)");
     expect(api).toContain("action_flow: r.action_flow ?? actionFlowForTargetType(r.target_type)");
   });
