@@ -14,9 +14,18 @@ import {
   syncGmailInvoiceCandidates,
 } from "../lib/gmail-invoice-candidates";
 import { getRuntimeConfig } from "../lib/gmail-invoice-runtime";
+import {
+  listGmailOrganizationRules,
+  provisionGmailOrganizationRules,
+} from "../lib/gmail-organization";
 
 const router = Router();
-const OAUTH_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const OAUTH_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.labels",
+  "https://www.googleapis.com/auth/gmail.settings.basic",
+] as const;
+const OAUTH_SCOPE = OAUTH_SCOPES.join(" ");
 const DEFAULT_SOURCE_EMAIL = "travelincars01@gmail.com";
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -31,6 +40,9 @@ type GmailSourceStatus = {
   lastSyncStatus: string | null;
   redirectUri: string;
   scope: string;
+  organizerRuleCount: number;
+  organizerActiveCount: number;
+  organizerErrorCount: number;
 };
 
 type SignedState = {
@@ -508,6 +520,7 @@ async function readStatus(
     clientId,
     clientSecret,
     aiKey,
+    organizationRules,
   ] = await Promise.all([
     getConfig(companyId, "REFRESH_TOKEN"),
     getConfig(companyId, "EMAIL"),
@@ -517,7 +530,15 @@ async function readStatus(
     googleClientId(),
     googleClientSecret(),
     getRuntimeConfig("OPENAI_API_KEY"),
+    listGmailOrganizationRules(companyId),
   ]);
+
+  const activeOrganizerRules = organizationRules.filter(
+    (rule) => rule.isActive && rule.status === "active",
+  ).length;
+  const organizerErrors = organizationRules.filter(
+    (rule) => rule.isActive && rule.status === "error",
+  ).length;
 
   return {
     oauthConfigured: Boolean(
@@ -535,6 +556,11 @@ async function readStatus(
     lastSyncStatus: lastSyncStatus || null,
     redirectUri: getRedirectUri(request),
     scope: OAUTH_SCOPE,
+    organizerRuleCount: organizationRules.filter(
+      (rule) => rule.isActive,
+    ).length,
+    organizerActiveCount: activeOrganizerRules,
+    organizerErrorCount: organizerErrors,
   };
 }
 
@@ -605,6 +631,105 @@ router.get(
       res.status(503).json({
         error:
           "Kandidat invoice Gmail belum dapat dimuat.",
+      });
+    }
+  },
+);
+
+router.get(
+  "/recon-classification/invoice-sources/gmail/organization-rules",
+  async (req, res) => {
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const companyId = requireCompanyScope(
+        res,
+        actor,
+        req.query.company_id,
+      );
+      if (!companyId) return;
+
+      res.json({
+        data: await listGmailOrganizationRules(companyId),
+      });
+    } catch (error) {
+      req.log.error(
+        { error },
+        "Failed to list Gmail organization rules",
+      );
+      res.status(503).json({
+        error: "Rule pengelompokan Gmail belum dapat dimuat.",
+      });
+    }
+  },
+);
+
+router.post(
+  "/recon-classification/invoice-sources/gmail/organization-rules/apply",
+  async (req, res) => {
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const companyId = requireCompanyScope(
+        res,
+        actor,
+        req.body?.company_id,
+      );
+      if (!companyId) return;
+
+      const encryptedToken = await getConfig(
+        companyId,
+        "REFRESH_TOKEN",
+      );
+      if (!encryptedToken) {
+        res.status(409).json({
+          error: "Gmail belum terhubung.",
+          code: "GMAIL_NOT_CONNECTED",
+        });
+        return;
+      }
+
+      const accessToken = await refreshAccessToken(
+        await decryptRefreshToken(encryptedToken),
+      );
+      const profile = await gmailProfile(accessToken);
+      if (profile.emailAddress !== sourceEmail()) {
+        res.status(409).json({
+          error: `Akun Gmail terhubung bukan ${sourceEmail()}.`,
+          code: "GMAIL_ACCOUNT_MISMATCH",
+        });
+        return;
+      }
+
+      const result = await provisionGmailOrganizationRules({
+        companyId,
+        accessToken,
+        actorEmail: actor.email,
+      });
+
+      res.status(result.failed > 0 ? 207 : 200).json({
+        ok: result.failed === 0,
+        ...result,
+      });
+    } catch (error) {
+      req.log.error(
+        { error },
+        "Failed to provision Gmail organization rules",
+      );
+      res.status(503).json({
+        error:
+          error instanceof Error
+            ? `Auto-label Gmail gagal: ${error.message}`
+            : "Auto-label Gmail belum dapat diterapkan.",
+        code: "GMAIL_ORGANIZER_FAILED",
       });
     }
   },
@@ -876,10 +1001,23 @@ router.get(
         },
       );
 
+      const organizer =
+        await provisionGmailOrganizationRules({
+          companyId: parsedState.companyId,
+          accessToken: tokens.access_token,
+          actorEmail: actor.email,
+        });
+
       redirectWithResult(
         res,
         parsedState.returnPath,
-        { gmail: "connected" },
+        {
+          gmail: "connected",
+          organizer:
+            organizer.failed > 0
+              ? "partial"
+              : "ready",
+        },
       );
     } catch (error) {
       req.log.error(
