@@ -235,6 +235,8 @@ export default function InvoiceSourcesTab() {
           "Sesi BizPortal sudah berakhir. Login ulang lalu hubungkan kembali.",
         actor_mismatch:
           "Akun BizPortal yang menyelesaikan koneksi berbeda dari akun yang memulainya.",
+        company_scope_mismatch:
+          "Perusahaan aktif tidak lagi sesuai dengan koneksi Gmail yang dimulai. Pilih perusahaan yang benar lalu hubungkan ulang.",
         access_denied:
           "Akses Gmail dibatalkan.",
         wrong_account:
