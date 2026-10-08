@@ -524,12 +524,17 @@ export default function InvoiceSourcesTab() {
         createdLabels: number;
         createdFilters: number;
         failed: number;
+        senderScannedMessages?: number;
+        senderGroups?: number;
+        senderCreatedLabels?: number;
+        senderCreatedFilters?: number;
+        senderLabeledMessages?: number;
       }>(response);
 
       setNotice(
         result.failed > 0
-          ? `Auto-label diterapkan sebagian: ${result.active}/${result.total} rule aktif.`
-          : `Auto-label Gmail aktif: ${result.active} rule. Label/filter baru: ${result.createdLabels}/${result.createdFilters}.`,
+          ? `Auto-label diterapkan sebagian. Pengirim terdeteksi: ${result.senderGroups ?? 0}; periksa rule yang gagal.`
+          : `Auto-label selesai: ${result.senderGroups ?? 0} kelompok pengirim, ${result.senderLabeledMessages ?? 0} email lama diberi label, ${result.senderCreatedLabels ?? 0} label baru, dan ${result.senderCreatedFilters ?? 0} filter baru.`,
       );
       await loadData();
     } catch (err) {
@@ -645,8 +650,9 @@ export default function InvoiceSourcesTab() {
 
               <p className="mt-1 text-sm text-slate-400">
                 Baca email dan attachment invoice
-                secara read-only untuk proses Match
-                INV.
+                untuk Match INV, serta kelola label
+                Gmail tanpa mengirim atau menghapus
+                email.
               </p>
             </div>
 
@@ -781,6 +787,23 @@ export default function InvoiceSourcesTab() {
 
                     <Button
                       variant="outline"
+                      onClick={() => void connect()}
+                      disabled={
+                        action !== null ||
+                        !status.oauthConfigured
+                      }
+                      className="gap-2 border-slate-600"
+                    >
+                      {action === "connect" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="h-4 w-4" />
+                      )}
+                      Reconnect Gmail
+                    </Button>
+
+                    <Button
+                      variant="outline"
                       onClick={() =>
                         void disconnect()
                       }
@@ -819,8 +842,9 @@ export default function InvoiceSourcesTab() {
                 Koneksi tidak meminta password Gmail
                 dan tidak dapat mengirim atau menghapus
                 email. BizPortal dapat membaca email,
-                membuat label, dan membuat filter Gmail
-                untuk merapikan email masuk. Attachment
+                membuat label, menempelkan label pada
+                email yang sudah ada, dan membuat filter
+                Gmail untuk merapikan email masuk. Attachment
                 invoice tetap melalui OCR, kandidat,
                 review, dan tidak pernah langsung
                 memposting jurnal.
@@ -839,7 +863,7 @@ export default function InvoiceSourcesTab() {
                 Pengelompokan Gmail Otomatis
               </CardTitle>
               <p className="mt-1 text-sm text-slate-400">
-                Email baru otomatis diberi label sesuai rule tanpa dipindahkan dari Inbox.
+                Email dikelompokkan berdasarkan nama pengirim. Email lama dibackfill dan email baru dari pengirim yang sama otomatis masuk ke label yang sesuai, tanpa dipindahkan dari Inbox.
               </p>
             </div>
             <Badge
@@ -915,9 +939,9 @@ export default function InvoiceSourcesTab() {
           </div>
 
           <p className="text-xs leading-5 text-slate-500">
-            Rule awal: email dari domain Hostinger akan otomatis mendapat label
+            Contoh: email dari Hostinger akan masuk ke label
             <span className="font-semibold text-slate-300"> Hostinger</span>.
-            Email tetap berada di Inbox.
+            BizPortal juga membuat label untuk pengirim lain yang ditemukan. Pengirim baru akan dideteksi otomatis secara berkala.
           </p>
         </CardContent>
       </Card>

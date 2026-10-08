@@ -1,4 +1,5 @@
 import { pool } from "@workspace/db";
+import { autoOrganizeGmailInboxBySender } from "./gmail-sender-organizer";
 
 type GmailLabel = {
   id?: string;
@@ -248,12 +249,19 @@ export async function provisionGmailOrganizationRules(args: {
   companyId: number;
   accessToken: string;
   actorEmail: string;
+  senderScanLimit?: number;
 }): Promise<{
   total: number;
   active: number;
   createdLabels: number;
   createdFilters: number;
   failed: number;
+  senderScannedMessages: number;
+  senderGroups: number;
+  senderCreatedLabels: number;
+  senderCreatedFilters: number;
+  senderLabeledMessages: number;
+  senderOrganizerError: string | null;
   rules: GmailOrganizationRule[];
 }> {
   const rules = (
@@ -301,12 +309,49 @@ export async function provisionGmailOrganizationRules(args: {
     }
   }
 
+  let senderScannedMessages = 0;
+  let senderGroups = 0;
+  let senderCreatedLabels = 0;
+  let senderCreatedFilters = 0;
+  let senderLabeledMessages = 0;
+  let senderOrganizerError: string | null = null;
+
+  try {
+    const senderResult =
+      await autoOrganizeGmailInboxBySender({
+        accessToken: args.accessToken,
+        scanLimit: args.senderScanLimit,
+      });
+
+    senderScannedMessages =
+      senderResult.scannedMessages;
+    senderGroups = senderResult.senderGroups;
+    senderCreatedLabels =
+      senderResult.createdLabels;
+    senderCreatedFilters =
+      senderResult.createdFilters;
+    senderLabeledMessages =
+      senderResult.labeledMessages;
+  } catch (error) {
+    senderOrganizerError =
+      error instanceof Error
+        ? error.message.slice(0, 1000)
+        : String(error).slice(0, 1000);
+    failed += 1;
+  }
+
   return {
     total: rules.length,
     active,
     createdLabels,
     createdFilters,
     failed,
+    senderScannedMessages,
+    senderGroups,
+    senderCreatedLabels,
+    senderCreatedFilters,
+    senderLabeledMessages,
+    senderOrganizerError,
     rules: await listGmailOrganizationRules(args.companyId),
   };
 }

@@ -23,6 +23,7 @@ const router = Router();
 const OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.labels",
+  "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.settings.basic",
 ] as const;
 const OAUTH_SCOPE = OAUTH_SCOPES.join(" ");
@@ -570,6 +571,85 @@ async function readStatus(
   };
 }
 
+const GMAIL_ORGANIZER_POLL_MS = 10 * 60 * 1000;
+let gmailOrganizerTickActive = false;
+
+async function runGmailOrganizerTick(): Promise<void> {
+  if (
+    isDevelopmentEnvironment() ||
+    gmailOrganizerTickActive
+  ) {
+    return;
+  }
+
+  gmailOrganizerTickActive = true;
+
+  try {
+    const result = await pool.query<{ key: string }>(
+      `select key
+         from public.app_config
+        where key like 'GMAIL_INVOICE_SOURCE_%_REFRESH_TOKEN'
+          and coalesce(value,'') <> ''
+        order by key`,
+    );
+
+    for (const row of result.rows) {
+      const match = row.key.match(
+        /^GMAIL_INVOICE_SOURCE_(\d+)_REFRESH_TOKEN$/,
+      );
+      const companyId = match
+        ? Number(match[1])
+        : 0;
+
+      if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+        continue;
+      }
+
+      try {
+        const encryptedToken = await getConfig(
+          companyId,
+          "REFRESH_TOKEN",
+        );
+        if (!encryptedToken) continue;
+
+        const accessToken = await refreshAccessToken(
+          await decryptRefreshToken(encryptedToken),
+        );
+        const profile = await gmailProfile(accessToken);
+
+        if (profile.emailAddress !== sourceEmail()) {
+          continue;
+        }
+
+        await provisionGmailOrganizationRules({
+          companyId,
+          accessToken,
+          actorEmail: "system:gmail-organizer",
+          senderScanLimit: 100,
+        });
+      } catch (error) {
+        console.warn(
+          "[gmail-organizer] background pass failed",
+          {
+            companyId,
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error),
+          },
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[gmail-organizer] background scan failed",
+      error,
+    );
+  } finally {
+    gmailOrganizerTickActive = false;
+  }
+}
+
 router.get(
   "/recon-classification/invoice-sources/gmail/status",
   async (req, res) => {
@@ -1101,6 +1181,29 @@ router.post(
           actorEmail: actor.email,
         });
 
+      let organizer:
+        | Awaited<
+            ReturnType<
+              typeof provisionGmailOrganizationRules
+            >
+          >
+        | null = null;
+
+      try {
+        organizer =
+          await provisionGmailOrganizationRules({
+            companyId,
+            accessToken,
+            actorEmail: actor.email,
+            senderScanLimit: 250,
+          });
+      } catch (organizerError) {
+        req.log.warn(
+          { organizerError, companyId },
+          "Gmail sender auto-label refresh failed",
+        );
+      }
+
       const now = new Date().toISOString();
 
       await Promise.all([
@@ -1142,6 +1245,7 @@ router.post(
         ok: true,
         email: profile.emailAddress,
         ...result,
+        organizer,
         syncedAt: now,
       });
     } catch (error) {
@@ -1305,5 +1409,15 @@ router.post(
     }
   },
 );
+
+if (!isDevelopmentEnvironment()) {
+  setTimeout(() => {
+    void runGmailOrganizerTick();
+  }, 60_000).unref();
+
+  setInterval(() => {
+    void runGmailOrganizerTick();
+  }, GMAIL_ORGANIZER_POLL_MS).unref();
+}
 
 export default router;
