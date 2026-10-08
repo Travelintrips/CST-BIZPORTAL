@@ -37,6 +37,23 @@ type GmailSourceStatus = {
   lastSyncStatus: string | null;
   redirectUri: string;
   scope: string;
+  organizerRuleCount: number;
+  organizerActiveCount: number;
+  organizerErrorCount: number;
+};
+
+type GmailOrganizationRule = {
+  id: number;
+  companyId: number;
+  labelName: string;
+  fromPattern: string | null;
+  subjectPattern: string | null;
+  isActive: boolean;
+  gmailLabelId: string | null;
+  gmailFilterId: string | null;
+  status: string;
+  lastAppliedAt: string | null;
+  lastError: string | null;
 };
 
 type GmailCandidate = {
@@ -195,6 +212,8 @@ export default function InvoiceSourcesTab() {
     useState<GmailSourceStatus | null>(null);
   const [candidates, setCandidates] =
     useState<GmailCandidate[]>([]);
+  const [organizationRules, setOrganizationRules] =
+    useState<GmailOrganizationRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [action, setAction] =
     useState<string | null>(null);
@@ -218,12 +237,15 @@ export default function InvoiceSourcesTab() {
     );
     const gmail = params.get("gmail");
     const reason = params.get("reason");
+    const organizer = params.get("organizer");
 
     if (gmail === "connected") {
       return {
         type: "success" as const,
         message:
-          "Gmail berhasil dihubungkan. Jalankan Sync Now untuk membaca attachment invoice.",
+          organizer === "partial"
+            ? "Gmail berhasil dihubungkan, tetapi sebagian auto-label perlu diperiksa."
+            : "Gmail berhasil dihubungkan. Auto-label aktif dan Sync Now siap membaca attachment invoice.",
       };
     }
 
@@ -264,6 +286,7 @@ export default function InvoiceSourcesTab() {
     if (!companyId) {
       setStatus(null);
       setCandidates([]);
+      setOrganizationRules([]);
       return;
     }
 
@@ -271,17 +294,24 @@ export default function InvoiceSourcesTab() {
     setError(null);
 
     try {
-      const [statusResponse, candidateResponse] =
-        await Promise.all([
-          fetch(
-            `/api/recon-classification/invoice-sources/gmail/status?company_id=${companyId}`,
-            { credentials: "include" },
-          ),
-          fetch(
-            `/api/recon-classification/invoice-sources/gmail/candidates?company_id=${companyId}&limit=50`,
-            { credentials: "include" },
-          ),
-        ]);
+      const [
+        statusResponse,
+        candidateResponse,
+        organizationResponse,
+      ] = await Promise.all([
+        fetch(
+          `/api/recon-classification/invoice-sources/gmail/status?company_id=${companyId}`,
+          { credentials: "include" },
+        ),
+        fetch(
+          `/api/recon-classification/invoice-sources/gmail/candidates?company_id=${companyId}&limit=50`,
+          { credentials: "include" },
+        ),
+        fetch(
+          `/api/recon-classification/invoice-sources/gmail/organization-rules?company_id=${companyId}`,
+          { credentials: "include" },
+        ),
+      ]);
 
       const nextStatus =
         await readJson<GmailSourceStatus>(
@@ -293,15 +323,26 @@ export default function InvoiceSourcesTab() {
           data: GmailCandidate[];
         }>(candidateResponse);
 
+      const organizationPayload =
+        await readJson<{
+          data: GmailOrganizationRule[];
+        }>(organizationResponse);
+
       setStatus(nextStatus);
       setCandidates(
         Array.isArray(candidatePayload.data)
           ? candidatePayload.data
           : [],
       );
+      setOrganizationRules(
+        Array.isArray(organizationPayload.data)
+          ? organizationPayload.data
+          : [],
+      );
     } catch (err) {
       setStatus(null);
       setCandidates([]);
+      setOrganizationRules([]);
       setError(
         err instanceof Error
           ? err.message
@@ -448,6 +489,54 @@ export default function InvoiceSourcesTab() {
         err instanceof Error
           ? err.message
           : "Gagal membuat draft Vendor Invoice.",
+      );
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const applyOrganizer = async () => {
+    if (!companyId) return;
+
+    setAction("organizer");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const response = await fetch(
+        "/api/recon-classification/invoice-sources/gmail/organization-rules/apply",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            company_id: companyId,
+          }),
+        },
+      );
+
+      const result = await readJson<{
+        ok: boolean;
+        total: number;
+        active: number;
+        createdLabels: number;
+        createdFilters: number;
+        failed: number;
+      }>(response);
+
+      setNotice(
+        result.failed > 0
+          ? `Auto-label diterapkan sebagian: ${result.active}/${result.total} rule aktif.`
+          : `Auto-label Gmail aktif: ${result.active} rule. Label/filter baru: ${result.createdLabels}/${result.createdFilters}.`,
+      );
+      await loadData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Gagal menerapkan auto-label Gmail.",
       );
     } finally {
       setAction(null);
@@ -602,7 +691,7 @@ export default function InvoiceSourcesTab() {
                   </p>
                   <p className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-white">
                     <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                    Gmail read-only
+                    Baca email + kelola label/filter
                   </p>
                 </div>
 
@@ -728,14 +817,108 @@ export default function InvoiceSourcesTab() {
 
               <div className="border-t border-slate-800 pt-4 text-xs leading-5 text-slate-500">
                 Koneksi tidak meminta password Gmail
-                dan tidak dapat menghapus atau
-                mengirim email. Attachment invoice
-                dibaca untuk OCR dan dibuat sebagai
-                kandidat. Tidak ada jurnal yang
-                diposting otomatis.
+                dan tidak dapat mengirim atau menghapus
+                email. BizPortal dapat membaca email,
+                membuat label, dan membuat filter Gmail
+                untuk merapikan email masuk. Attachment
+                invoice tetap melalui OCR, kandidat,
+                review, dan tidak pernah langsung
+                memposting jurnal.
               </div>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-700 bg-slate-900/70">
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base text-white">
+                <Mail className="h-4 w-4 text-orange-400" />
+                Pengelompokan Gmail Otomatis
+              </CardTitle>
+              <p className="mt-1 text-sm text-slate-400">
+                Email baru otomatis diberi label sesuai rule tanpa dipindahkan dari Inbox.
+              </p>
+            </div>
+            <Badge
+              variant="outline"
+              className="border-slate-600 text-slate-300"
+            >
+              {status?.organizerActiveCount ?? 0}/{status?.organizerRuleCount ?? 0} aktif
+            </Badge>
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-3">
+          {organizationRules.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-700 p-4 text-sm text-slate-400">
+              Belum ada rule pengelompokan Gmail.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {organizationRules.map((rule) => (
+                <div
+                  key={rule.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      {rule.labelName}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Pengirim: {rule.fromPattern || "—"}
+                      {rule.subjectPattern
+                        ? ` · Subject: ${rule.subjectPattern}`
+                        : ""}
+                    </p>
+                    {rule.lastError && (
+                      <p className="mt-1 text-xs text-red-400">
+                        {rule.lastError}
+                      </p>
+                    )}
+                  </div>
+                  <Badge
+                    className={
+                      rule.status === "active"
+                        ? "border-emerald-700 bg-emerald-950/40 text-emerald-300"
+                        : rule.status === "error"
+                          ? "border-red-700 bg-red-950/40 text-red-300"
+                          : "border-slate-600 bg-slate-900 text-slate-300"
+                    }
+                  >
+                    {rule.status === "active"
+                      ? "Aktif"
+                      : rule.status === "error"
+                        ? "Error"
+                        : "Menunggu Connect"}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => void applyOrganizer()}
+              disabled={!status?.connected || action !== null}
+              className="gap-2"
+            >
+              {action === "organizer" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Terapkan Auto Label
+            </Button>
+          </div>
+
+          <p className="text-xs leading-5 text-slate-500">
+            Rule awal: email dari domain Hostinger akan otomatis mendapat label
+            <span className="font-semibold text-slate-300"> Hostinger</span>.
+            Email tetap berada di Inbox.
+          </p>
         </CardContent>
       </Card>
 
