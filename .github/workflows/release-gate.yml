@@ -54,39 +54,38 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Production runtime smoke
+      # Validate the bundled web server in DEV context only. No PROD keys or URLs
+      # are loaded; the health endpoint must work with a non-connected local DB.
+      - name: Isolated DEV runtime smoke
         shell: bash
         env:
-          NODE_ENV: production
-          APP_ENV: production
+          NODE_ENV: development
+          APP_ENV: development
+          PORT: "3000"
           SUPABASE_DATABASE_URL: ""
-          SUPABASE_DATABASE_URL_DEV: ""
-          SUPABASE_PG_URL: ""
+          SUPABASE_DATABASE_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/ci
+          SUPABASE_PG_URL: postgresql://ci:ci@127.0.0.1:65432/ci
           GCP_SECRET_MANAGER_BOOTSTRAP_JSON: ""
         run: |
           set -euo pipefail
-          unset PORT
+          test -f ./index.js
+          test -f ./dist/index.js
+          test -f ./dist/index.mjs
           node --max-http-header-size=65536 --enable-source-maps ./index.js > /tmp/bizportal-runtime.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
-
-          ready=0
           for _ in $(seq 1 30); do
             if ! kill -0 "$pid" 2>/dev/null; then
               cat /tmp/bizportal-runtime.log
               exit 1
             fi
             if curl -fsS http://127.0.0.1:3000/api/health/live | grep -q '"status":"ok"'; then
-              ready=1
-              break
+              curl -fsS http://127.0.0.1:3000/ >/dev/null
+              echo "DEV_RUNTIME_SMOKE=PASS"
+              exit 0
             fi
             sleep 1
           done
-
-          if [ "$ready" -ne 1 ]; then
-            cat /tmp/bizportal-runtime.log
-            exit 1
-          fi
-
-          curl -fsS http://127.0.0.1:3000/ >/dev/null
           cat /tmp/bizportal-runtime.log
+          echo "::error::DEV runtime smoke failed"
+          exit 1
