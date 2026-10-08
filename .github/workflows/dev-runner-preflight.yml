@@ -1,0 +1,16 @@
+name: DEV Runner Preflight
+on:
+  push:
+    branches: [ci/runner-preflight-*]
+  workflow_dispatch:
+jobs:
+  verify-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm hosted runner availability without secrets
+        run: |
+          set -euo pipefail
+          echo "HOSTED_RUNNER_PRECHECK=PASS"
