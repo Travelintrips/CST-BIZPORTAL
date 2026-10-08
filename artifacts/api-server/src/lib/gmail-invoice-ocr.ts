@@ -47,6 +47,62 @@ export type InvoiceExtraction = {
   flags: string[];
 };
 
+const INVOICE_EXTRACTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    vendor_name: { type: ["string", "null"] },
+    invoice_number: { type: ["string", "null"] },
+    invoice_date: { type: ["string", "null"] },
+    due_date: { type: ["string", "null"] },
+    currency: { type: ["string", "null"] },
+    subtotal: { type: ["number", "null"] },
+    tax: { type: ["number", "null"] },
+    total_amount: { type: ["number", "null"] },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    line_items: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          description: { type: ["string", "null"] },
+          quantity: { type: ["number", "null"] },
+          unit_price: { type: ["number", "null"] },
+          total: { type: ["number", "null"] },
+          tax: { type: ["number", "null"] },
+          coa_hint: { type: ["string", "null"] },
+        },
+        required: [
+          "description",
+          "quantity",
+          "unit_price",
+          "total",
+          "tax",
+          "coa_hint",
+        ],
+      },
+    },
+    flags: {
+      type: "array",
+      items: { type: "string" },
+    },
+  },
+  required: [
+    "vendor_name",
+    "invoice_number",
+    "invoice_date",
+    "due_date",
+    "currency",
+    "subtotal",
+    "tax",
+    "total_amount",
+    "confidence",
+    "line_items",
+    "flags",
+  ],
+} as const;
+
 type Header = { name?: string; value?: string };
 type Part = {
   partId?: string;
@@ -347,7 +403,7 @@ export async function extractInvoiceDocument(
     "subtotal/DPP is pre-VAT, tax is PPN/VAT, total_amount is gross.",
     `Email subject: ${context.subject || "(none)"}`,
     `Email sender: ${context.sender || "(none)"}`,
-    'JSON schema: {"vendor_name":string|null,"invoice_number":string|null,"invoice_date":string|null,"due_date":string|null,"currency":string|null,"subtotal":number|null,"tax":number|null,"total_amount":number|null,"confidence":number,"line_items":[{"description":string|null,"quantity":number|null,"unit_price":number|null,"total":number|null,"tax":number|null,"coa_hint":string|null}],"flags":[string]}',
+    "Follow the enforced response schema exactly.",
   ].join("\n");
 
   const encoded = bytes.toString("base64");
@@ -359,6 +415,7 @@ export async function extractInvoiceDocument(
             type: "input_file",
             filename: attachment.fileName,
             file_data: `data:application/pdf;base64,${encoded}`,
+            detail: "high",
           },
         ]
       : [
@@ -378,8 +435,16 @@ export async function extractInvoiceDocument(
     },
     body: JSON.stringify({
       model:
-        (await getRuntimeConfig("GMAIL_INVOICE_OCR_MODEL")) || "gpt-4o",
+        (await getRuntimeConfig("GMAIL_INVOICE_OCR_MODEL")) || "gpt-6-luna",
       input: [{ role: "user", content }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "gmail_invoice_extraction",
+          strict: true,
+          schema: INVOICE_EXTRACTION_SCHEMA,
+        },
+      },
       max_output_tokens: 2200,
     }),
   });
