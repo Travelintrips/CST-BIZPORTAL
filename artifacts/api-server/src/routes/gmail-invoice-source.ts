@@ -90,11 +90,17 @@ function sourceEmail(): string {
 }
 
 async function googleClientId(): Promise<string> {
-  return getRuntimeConfig("GOOGLE_CLIENT_ID");
+  return (
+    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_ID")) ||
+    (await getRuntimeConfig("GOOGLE_CLIENT_ID"))
+  );
 }
 
 async function googleClientSecret(): Promise<string> {
-  return getRuntimeConfig("GOOGLE_CLIENT_SECRET");
+  return (
+    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_SECRET")) ||
+    (await getRuntimeConfig("GOOGLE_CLIENT_SECRET"))
+  );
 }
 
 function safeReturnPath(value: unknown): string {
