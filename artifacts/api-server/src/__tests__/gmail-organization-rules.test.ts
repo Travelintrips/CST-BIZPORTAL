@@ -11,7 +11,7 @@ const organizerSource = readFileSync(
 );
 
 describe("Gmail organization rules", () => {
-  it("requests only the scopes needed to read mail and manage labels/filters", () => {
+  it("requests the scopes needed to read mail, backfill labels, and manage filters", () => {
     expect(routeSource).toContain(
       '"https://www.googleapis.com/auth/gmail.readonly"',
     );
@@ -21,7 +21,7 @@ describe("Gmail organization rules", () => {
     expect(routeSource).toContain(
       '"https://www.googleapis.com/auth/gmail.settings.basic"',
     );
-    expect(routeSource).not.toContain(
+    expect(routeSource).toContain(
       '"https://www.googleapis.com/auth/gmail.modify"',
     );
     expect(routeSource).not.toContain(
@@ -38,15 +38,29 @@ describe("Gmail organization rules", () => {
     );
   });
 
-  it("creates labels and filters without archiving or deleting mail", () => {
+  it("keeps the organizer non-destructive while sender labels are backfilled", () => {
     expect(organizerSource).toContain(
       "https://gmail.googleapis.com/gmail/v1/users/me/labels",
     );
     expect(organizerSource).toContain(
       "https://gmail.googleapis.com/gmail/v1/users/me/settings/filters",
     );
-    expect(organizerSource).toContain("addLabelIds: [labelId]");
+    expect(organizerSource).toContain(
+      "autoOrganizeGmailInboxBySender",
+    );
     expect(organizerSource).not.toContain("removeLabelIds");
     expect(organizerSource).not.toContain('"DELETE"');
+  });
+
+  it("runs sender organization during sync and in the production background worker", () => {
+    expect(routeSource).toContain(
+      "senderScanLimit: 250",
+    );
+    expect(routeSource).toContain(
+      "runGmailOrganizerTick",
+    );
+    expect(routeSource).toContain(
+      "GMAIL_ORGANIZER_POLL_MS",
+    );
   });
 });
