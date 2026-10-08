@@ -29,9 +29,10 @@ const actionFlowForTargetType = (targetType: unknown): string | null => {
 };
 
 const targetTypeForInput = (body: any): string => {
-  const explicit = String(body?.target_type ?? "").trim().toLowerCase();
-  if (explicit) return explicit;
-
+  // Action Flow is the editable UI source of truth. When editing an existing
+  // rule, the form also carries the previous target_type. If that stale value
+  // wins here, changing Routine Expense -> Internal Transfer appears to save
+  // but reloads as Routine Expense again.
   switch (String(body?.action_flow ?? "").trim().toUpperCase()) {
     case "INTERNAL_TRANSFER":
       return "internal_transfer";
@@ -39,11 +40,16 @@ const targetTypeForInput = (body: any): string => {
       return "income";
     case "ROUTINE_EXPENSE_ALLOCATION":
       return "expense";
-    default:
-      return String(body?.direction ?? "").trim().toUpperCase() === "IN"
-        ? "income"
-        : "expense";
   }
+
+  // Preserve specialized canonical target types (payroll, employee_advance,
+  // etc.) for forms that do not expose a generic Action Flow.
+  const explicit = String(body?.target_type ?? "").trim().toLowerCase();
+  if (explicit) return explicit;
+
+  return String(body?.direction ?? "").trim().toUpperCase() === "IN"
+    ? "income"
+    : "expense";
 };
 
 const mapRule = (r: any) => ({
