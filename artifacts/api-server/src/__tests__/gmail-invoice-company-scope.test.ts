@@ -15,6 +15,11 @@ describe("Gmail invoice source company isolation", () => {
 
   it("uses the company scope guard on every Gmail source operation", () => {
     const matches = source.match(/requireCompanyScope\(/g) ?? [];
-    expect(matches.length).toBe(6);
+    expect(matches.length).toBe(7);
+  });
+
+  it("revalidates the signed OAuth callback against the actor company", () => {
+    expect(source).toContain("actor.companyId !== parsedState.companyId");
+    expect(source).toContain('reason: "company_scope_mismatch"');
   });
 });
