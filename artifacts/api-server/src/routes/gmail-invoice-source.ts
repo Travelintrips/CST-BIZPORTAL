@@ -571,7 +571,9 @@ async function readStatus(
   };
 }
 
-const GMAIL_ORGANIZER_POLL_MS = 10 * 60 * 1000;
+// Temporary quota protection: do not repeatedly rescan the Gmail inbox every 10 minutes.
+// Full incremental cursor and cross-instance lock will be handled separately.
+const GMAIL_ORGANIZER_POLL_MS = 60 * 60 * 1000;
 let gmailOrganizerTickActive = false;
 
 async function runGmailOrganizerTick(): Promise<void> {
@@ -625,7 +627,7 @@ async function runGmailOrganizerTick(): Promise<void> {
           companyId,
           accessToken,
           actorEmail: "system:gmail-organizer",
-          senderScanLimit: 100,
+          senderScanLimit: 20,
         });
       } catch (error) {
         console.warn(
