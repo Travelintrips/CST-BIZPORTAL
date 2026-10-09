@@ -3,7 +3,6 @@ import type { GmailAttachment, InvoiceExtraction } from "./gmail-invoice-ocr";
 
 const require_ = createRequire(import.meta.url);
 type PdfParseFn = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
-const pdfParse = require_("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
 
 function parseAmount(raw: string): number | null {
   const cleaned = raw.replace(/\b(?:idr|rp|usd)\b/gi, "").replace(/[^\d.,-]/g, "").trim();
@@ -102,6 +101,8 @@ export async function fallbackInvoiceExtraction(
   let text = "";
   if (attachment.mimeType === "application/pdf") {
     try {
+      // Resolve only on PDF extraction: missing optional parser must never crash the API at startup.
+      const pdfParse = require_("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
       const parsed = await pdfParse(bytes);
       text = String(parsed.text ?? "").replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, 50000);
     } catch { text = ""; }
