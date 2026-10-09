@@ -621,6 +621,51 @@ async function runGmailOrganizerTick(): Promise<void> {
           continue;
         }
 
+        const syncResult =
+          await syncGmailInvoiceCandidates({
+            companyId,
+            accessToken,
+            sourceEmail: profile.emailAddress,
+            actorEmail: "system:gmail-invoice-sync",
+          });
+
+        const syncedAt = new Date().toISOString();
+
+        await Promise.all([
+          setConfig(
+            companyId,
+            "LAST_SYNC_AT",
+            syncedAt,
+            {
+              description:
+                "Last successful automatic Gmail invoice source sync time",
+              actor: "system:gmail-invoice-sync",
+            },
+          ),
+          setConfig(
+            companyId,
+            "LAST_SYNC_COUNT",
+            String(syncResult.attachmentsSeen),
+            {
+              description:
+                "Invoice attachments processed in latest automatic Gmail sync",
+              actor: "system:gmail-invoice-sync",
+            },
+          ),
+          setConfig(
+            companyId,
+            "LAST_SYNC_STATUS",
+            syncResult.failed > 0
+              ? "partial"
+              : "ok",
+            {
+              description:
+                "Last automatic Gmail invoice source synchronization status",
+              actor: "system:gmail-invoice-sync",
+            },
+          ),
+        ]);
+
         await provisionGmailOrganizationRules({
           companyId,
           accessToken,
