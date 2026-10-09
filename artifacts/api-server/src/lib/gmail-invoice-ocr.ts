@@ -1,4 +1,5 @@
 import { getRuntimeConfig, GMAIL_SEARCH_QUERY, GMAIL_MAX_MESSAGES } from "./gmail-invoice-runtime";
+import { fallbackInvoiceExtraction } from "./gmail-invoice-fallback";
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -393,7 +394,12 @@ export async function extractInvoiceDocument(
 ): Promise<InvoiceExtraction> {
   const apiKey = await getRuntimeConfig("OPENAI_API_KEY");
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY belum tersedia di konfigurasi BizPortal.");
+    return fallbackInvoiceExtraction(
+      bytes,
+      attachment,
+      context,
+      new Error("OPENAI_API_KEY belum tersedia di konfigurasi BizPortal."),
+    );
   }
 
   const prompt = [
@@ -457,10 +463,15 @@ export async function extractInvoiceDocument(
       !Array.isArray(payload.error)
         ? (payload.error as Record<string, unknown>)
         : {};
-    throw new Error(
-      typeof error.message === "string"
-        ? error.message
-        : `OpenAI OCR gagal: HTTP ${response.status}`,
+    return fallbackInvoiceExtraction(
+      bytes,
+      attachment,
+      context,
+      new Error(
+        typeof error.message === "string"
+          ? error.message
+          : `OpenAI OCR gagal: HTTP ${response.status}`,
+      ),
     );
   }
 
@@ -469,12 +480,24 @@ export async function extractInvoiceDocument(
     .replace(/\s*```\s*$/i, "")
     .trim();
 
-  if (!text) throw new Error("OCR AI tidak mengembalikan hasil.");
+  if (!text) {
+    return fallbackInvoiceExtraction(
+      bytes,
+      attachment,
+      context,
+      new Error("OCR AI tidak mengembalikan hasil."),
+    );
+  }
 
   try {
     return sanitizeExtraction(JSON.parse(text));
   } catch {
-    throw new Error("OCR AI mengembalikan JSON yang tidak valid.");
+    return fallbackInvoiceExtraction(
+      bytes,
+      attachment,
+      context,
+      new Error("OCR AI mengembalikan JSON yang tidak valid."),
+    );
   }
 }
 
