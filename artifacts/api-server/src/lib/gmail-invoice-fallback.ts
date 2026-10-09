@@ -1,9 +1,11 @@
-import { createRequire } from "node:module";
+// Bundle the parser into dist/index.mjs. A runtime createRequire() fails on
+// Hostinger deployments where the internal package path is not shipped.
+// @ts-ignore pdf-parse v1 does not publish declarations for its internal entry.
+import pdfParseModule from "pdf-parse/lib/pdf-parse.js";
 import type { GmailAttachment, InvoiceExtraction } from "./gmail-invoice-ocr";
 
-const require_ = createRequire(import.meta.url);
 type PdfParseFn = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
-const pdfParse = require_("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
+const pdfParse = pdfParseModule as PdfParseFn;
 
 function parseAmount(raw: string): number | null {
   const cleaned = raw.replace(/\b(?:idr|rp|usd)\b/gi, "").replace(/[^\d.,-]/g, "").trim();
