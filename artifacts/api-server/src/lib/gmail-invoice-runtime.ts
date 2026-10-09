@@ -76,9 +76,6 @@ export const GMAIL_MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 export async function getRuntimeConfig(
   key: string,
 ): Promise<string> {
-  const direct = process.env[key]?.trim();
-  if (direct) return direct;
-
   const cached = cache.get(key);
   if (
     cached &&
@@ -107,6 +104,9 @@ export async function getRuntimeConfig(
       // Secret Manager outage.
     }
   }
+
+  const direct = process.env[key]?.trim();
+  if (direct) return direct;
 
   try {
     const result =
