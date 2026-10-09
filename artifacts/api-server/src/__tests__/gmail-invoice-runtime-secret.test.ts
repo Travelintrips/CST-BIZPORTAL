@@ -7,11 +7,16 @@ const source = readFileSync(
 );
 
 describe("Gmail invoice runtime secret source", () => {
-  it("prefers the managed production bundle for OPENAI_API_KEY", () => {
+  it("prefers the managed production bundle for OPENAI_API_KEY before process env", () => {
     expect(source).toContain("readManagedProductionConfig");
     expect(source).toContain("getDatabaseSecretName(true)");
     expect(source).toContain('"OPENAI_API_KEY"');
     expect(source).toContain("readSecret");
+    expect(
+      source.indexOf("readManagedProductionConfig"),
+    ).toBeLessThan(
+      source.indexOf("process.env[key]"),
+    );
   });
 
   it("keeps app_config as a fallback if managed secret access is unavailable", () => {
