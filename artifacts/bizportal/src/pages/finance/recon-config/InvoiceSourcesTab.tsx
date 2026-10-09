@@ -73,6 +73,7 @@ type GmailCandidate = {
   currency: string | null;
   subtotal: number | null;
   tax: number | null;
+  withholdingTax: number | null;
   total: number | null;
   confidence: number | null;
   breakdown?: { lineItems: Array<{ description?: string; quantity?: number | string; unit_price?: number | string; total?: number | string; tax?: number | string }> };
@@ -1072,9 +1073,15 @@ export default function InvoiceSourcesTab() {
                                 ) : (
                                   <p className="text-amber-300">Rincian per item belum terbaca OCR. Verifikasi dokumen asli sebelum membuat draft.</p>
                                 )}
-                                <div className="pt-1">Subtotal: {formatMoney(candidate.subtotal, candidate.currency || "IDR")}</div>
-                                <div>Pajak: {formatMoney(candidate.tax, candidate.currency || "IDR")}</div>
-                                <div className="font-semibold text-white">Total: {formatMoney(candidate.total, candidate.currency || "IDR")}</div>
+                                <div className="pt-1">DPP: {formatMoney(candidate.subtotal, candidate.currency || "IDR")}</div>
+                                <div>PPN: {formatMoney(candidate.tax, candidate.currency || "IDR")}</div>
+                                <div>PPh dipotong: {formatMoney(candidate.withholdingTax, candidate.currency || "IDR")}</div>
+                                <div className="font-semibold text-white">Total tagihan bruto: {formatMoney(candidate.total, candidate.currency || "IDR")}</div>
+                                <div>Estimasi dibayar setelah PPh: {candidate.total != null && candidate.withholdingTax != null ? formatMoney(candidate.total - candidate.withholdingTax, candidate.currency || "IDR") : "— (PPh belum diketahui)"}</div>
+                                {candidate.subtotal != null && candidate.tax != null && candidate.total != null && Math.abs(candidate.subtotal + candidate.tax - candidate.total) > 1 && (
+                                  <p className="text-red-300">Selisih DPP + PPN dengan total invoice. Periksa dokumen sebelum membuat draft.</p>
+                                )}
+                                <p className="text-slate-500">Tanda — berarti nilai tidak terbaca, bukan Rp 0.</p>
                               </div>
                             </details>
                             {candidate.error && (
