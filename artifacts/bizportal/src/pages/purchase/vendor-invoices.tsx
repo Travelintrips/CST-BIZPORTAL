@@ -829,8 +829,14 @@ export function VendorInvoiceEditorPage() {
         return {
           ...l,
           quantity: String(l.quantity),
-          unitCost: String(l.unitCost),
-          subtotal: String(l.subtotal),
+          // Existing OCR drafts may have a line subtotal but no unit price.
+          // Compute the unit price only when the subtotal and quantity are known.
+          unitCost: l.unitCost != null && String(l.unitCost).trim() !== ""
+            ? String(l.unitCost)
+            : l.subtotal != null && String(l.subtotal).trim() !== "" && Number(l.quantity) > 0
+              ? String(Number(l.subtotal) / Number(l.quantity))
+              : "",
+          subtotal: l.subtotal == null ? "" : String(l.subtotal),
           taxAmount: String(l.taxAmount),
           coaAccountId: l.coaAccountId ? String(l.coaAccountId) : "",
            taxType: tax?.taxType ?? breakdownTax?.withholding_tax_type ?? "",
