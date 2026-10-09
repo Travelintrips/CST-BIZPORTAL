@@ -350,6 +350,14 @@ function candidateView(row: CandidateRow) {
       row.extracted_tax == null ? null : Number(row.extracted_tax),
     total:
       row.extracted_total == null ? null : Number(row.extracted_total),
+    breakdown:
+      row.extracted_json && typeof row.extracted_json === "object" && !Array.isArray(row.extracted_json)
+        ? {
+            lineItems: Array.isArray((row.extracted_json as Record<string, unknown>).line_items)
+              ? (row.extracted_json as Record<string, unknown>).line_items
+              : [],
+          }
+        : { lineItems: [] },
     confidence:
       row.extracted_confidence == null
         ? null
