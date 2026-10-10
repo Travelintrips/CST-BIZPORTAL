@@ -46,6 +46,12 @@ type CandidateRow = {
   updated_at: string | Date;
 };
 
+// SRT letters are not invoice/faktur documents. Keep historical rows for
+// auditing, but exclude them from invoice candidates and future OCR sync.
+function isSrtAttachment(fileName: string): boolean {
+  return /^srt(?:[\s_.-]|$)/i.test(fileName.trim());
+}
+
 async function upsertShell(args: {
   companyId: number;
   message: GmailInvoiceMessage;
@@ -302,6 +308,7 @@ export async function syncGmailInvoiceCandidates(args: {
 
   scan: for (const message of messages) {
     for (const attachment of message.attachments) {
+      if (isSrtAttachment(attachment.fileName)) continue;
       counts.attachmentsSeen += 1;
 
       const status = await processAttachment({
@@ -371,6 +378,7 @@ export async function listGmailInvoiceCandidates(
     `select *
        from public.gmail_invoice_candidates
       where company_id=$1
+        and attachment_file_name !~* '^srt([[:space:]_.-]|$)'
       order by received_at desc nulls last,id desc
       limit $2`,
     [companyId, Math.min(Math.max(limit, 1), 100)],
