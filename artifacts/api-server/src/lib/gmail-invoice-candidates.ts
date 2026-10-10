@@ -665,7 +665,28 @@ export async function importGmailInvoiceCandidate(args: {
       );
     }
 
+    // Only use approved COA mappings. Parenthetical OCR tax annotations
+    // must not change the expense-category matching key.
+    const approvedMappings = await client.query<{
+      mapping_key: string;
+      coa_account_id: number;
+      supplier_id: number | null;
+    }>(
+      `select mapping_key, coa_account_id, supplier_id
+         from public.vendor_invoice_coa_mappings
+        where company_id=$1 and status='approved'
+          and (supplier_id=$2 or supplier_id is null)
+        order by (supplier_id=$2) desc, id desc`,
+      [args.companyId, supplier.rows[0]?.id ?? null],
+    );
+    const normalizeCoaKey = (name: string) =>
+      name.replace(/\\s*\\([^)]*\\)/g, "").trim().toLowerCase().replace(/\\s+/g, " ");
+
     for (const line of lines) {
+      const coaKey = normalizeCoaKey(line.name);
+      const approvedCoa = approvedMappings.rows.find(
+        (mapping) => normalizeCoaKey(mapping.mapping_key) === coaKey,
+      );
       await client.query(
         `insert into public.vendor_invoice_lines(
            invoice_id,
@@ -676,9 +697,11 @@ export async function importGmailInvoiceCandidate(args: {
            subtotal,
            tax_amount,
            coa_hint,
-           coa_resolution_status
+           coa_resolution_status,
+           coa_account_id,
+           coa_mapping_key
          )
-         values($1,$2,$3,'pcs',$4,$5,$6,$7,'unresolved')`,
+         values($1,$2,$3,'pcs',$4,$5,$6,$7,$8,$9)`,
         [
           vendorInvoiceId,
           line.name,
@@ -687,6 +710,9 @@ export async function importGmailInvoiceCandidate(args: {
           line.subtotal,
           line.tax,
           line.coaHint,
+          approvedCoa ? "confirmed" : "unresolved",
+          approvedCoa?.coa_account_id ?? null,
+          approvedCoa ? coaKey : null,
         ],
       );
     }
