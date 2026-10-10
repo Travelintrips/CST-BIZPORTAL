@@ -577,6 +577,20 @@ export async function importGmailInvoiceCandidate(args: {
       ? extraction.line_items
       : [];
 
+    // OCR may return inclusive line totals while Vendor Invoice stores
+    // unit_cost/subtotal EXCLUSIVE of tax. Detect at invoice level to avoid
+    // subtracting tax twice when OCR already returns net line totals.
+    const extractedLineTotals = rawLines.reduce((sum: number, value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return sum;
+      const amount = numericAmount((value as Record<string, unknown>).total);
+      return sum + (amount ?? 0);
+    }, 0);
+    const expectedNet = Math.max(0, gross - tax);
+    const totalsAreGross =
+      tax > 0 &&
+      Math.abs(extractedLineTotals - gross) <= 1 &&
+      Math.abs(extractedLineTotals - expectedNet) > 1;
+
     const lines = rawLines.flatMap((value) => {
       if (
         !value ||
@@ -592,11 +606,15 @@ export async function importGmailInvoiceCandidate(args: {
         numericAmount(line.quantity) ?? 1,
       );
       const lineTotal = numericAmount(line.total);
-      const unitCost =
-        numericAmount(line.unit_price) ??
-        (lineTotal == null ? null : lineTotal / quantity);
+      const lineTax = Math.max(0, numericAmount(line.tax) ?? 0);
+      const lineNet = lineTotal == null
+        ? null
+        : totalsAreGross ? lineTotal - lineTax : lineTotal;
+      const unitCost = lineNet == null
+        ? numericAmount(line.unit_price)
+        : lineNet / quantity;
 
-      if (unitCost == null || !Number.isFinite(unitCost)) {
+      if (unitCost == null || !Number.isFinite(unitCost) || unitCost < 0 || (lineNet != null && lineNet < 0)) {
         return [];
       }
 
@@ -609,8 +627,8 @@ export async function importGmailInvoiceCandidate(args: {
               : `Invoice ${vendorReference}`,
           quantity,
           unitCost,
-          subtotal: lineTotal ?? quantity * unitCost,
-          tax: Math.max(0, numericAmount(line.tax) ?? 0),
+          subtotal: lineNet ?? quantity * unitCost,
+          tax: lineTax,
           coaHint:
             typeof line.coa_hint === "string"
               ? line.coa_hint.trim() || null
@@ -632,6 +650,19 @@ export async function importGmailInvoiceCandidate(args: {
         tax,
         coaHint: null,
       });
+    }
+
+    // Reject inconsistent OCR breakdown instead of creating a draft that
+    // cannot be posted or matched safely. The user can review OCR first.
+    const lineNetTotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
+    const lineTaxTotal = lines.reduce((sum, line) => sum + line.tax, 0);
+    if (Math.abs(lineNetTotal - expectedNet) > 1 ||
+        Math.abs(lineTaxTotal - tax) > 1 ||
+        Math.abs(net + tax - gross) > 1) {
+      throw Object.assign(
+        new Error("Rincian OCR tidak cocok dengan DPP, PPN, dan grand total. Periksa invoice sebelum impor."),
+        { status: 409 },
+      );
     }
 
     for (const line of lines) {
