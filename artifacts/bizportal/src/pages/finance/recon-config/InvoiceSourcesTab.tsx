@@ -115,6 +115,17 @@ function formatDateTime(value: string | null): string {
   });
 }
 
+function formatInvoiceDate(value: string | null): string {
+  if (!value) return "—";
+  const datePart = value.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return "—";
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (date.getFullYear() !== Number(year) || date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day)) return "—";
+  return date.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 function formatMoney(
   value: number | null,
   currency = "IDR",
@@ -995,7 +1006,10 @@ export default function InvoiceSourcesTab() {
                 <thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-3 py-3 text-left font-medium">
-                      Diterima
+                      Tanggal Invoice
+                    </th>
+                    <th className="px-3 py-3 text-left font-medium">
+                      Jatuh Tempo
                     </th>
                     <th className="px-3 py-3 text-left font-medium">
                       Pengirim / File
@@ -1037,9 +1051,10 @@ export default function InvoiceSourcesTab() {
                           className="bg-slate-900/20 text-slate-300 hover:bg-slate-800/30"
                         >
                           <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-400">
-                            {formatDateTime(
-                              candidate.receivedAt,
-                            )}
+                            {formatInvoiceDate(candidate.invoiceDate)}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-400">
+                            {formatInvoiceDate(candidate.dueDate)}
                           </td>
 
                           <td className="max-w-[260px] px-3 py-3">
