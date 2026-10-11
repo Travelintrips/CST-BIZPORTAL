@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "node:path";
@@ -31,6 +31,46 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+type JsonBodyParseError = SyntaxError & {
+  status?: number;
+  type?: string;
+};
+
+function isJsonBodyParseError(error: unknown): error is JsonBodyParseError {
+  if (!(error instanceof SyntaxError)) return false;
+  const candidate = error as JsonBodyParseError;
+  return candidate.status === 400 && candidate.type === "entity.parse.failed";
+}
+
+app.use(
+  (
+    error: unknown,
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    if (!isJsonBodyParseError(error)) {
+      next(error);
+      return;
+    }
+
+    logger.warn(
+      {
+        method: req.method,
+        path: req.path,
+        contentType: req.get("content-type") ?? null,
+        contentLength: req.get("content-length") ?? null,
+      },
+      "Rejected malformed JSON request body",
+    );
+
+    res.status(400).json({
+      error: "INVALID_JSON",
+      message: "Request body must be valid JSON.",
+    });
+  },
+);
 
 app.use("/api", router);
 
