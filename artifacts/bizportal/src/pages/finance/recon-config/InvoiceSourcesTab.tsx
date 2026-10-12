@@ -223,6 +223,8 @@ export default function InvoiceSourcesTab() {
     useState<GmailSourceStatus | null>(null);
   const [candidates, setCandidates] =
     useState<GmailCandidate[]>([]);
+  const [candidateFilter, setCandidateFilter] =
+    useState<"ready" | "review" | "duplicate" | "imported" | "all">("ready");
   const [organizationRules, setOrganizationRules] =
     useState<GmailOrganizationRule[]>([]);
   const [loading, setLoading] = useState(false);
@@ -315,7 +317,7 @@ export default function InvoiceSourcesTab() {
           { credentials: "include" },
         ),
         fetch(
-          `/api/recon-classification/invoice-sources/gmail/candidates?company_id=${companyId}&limit=50`,
+          `/api/recon-classification/invoice-sources/gmail/candidates?company_id=${companyId}&limit=50&status=${candidateFilter}`,
           { credentials: "include" },
         ),
         fetch(
@@ -362,7 +364,7 @@ export default function InvoiceSourcesTab() {
     } finally {
       setLoading(false);
     }
-  }, [companyId]);
+  }, [companyId, candidateFilter]);
 
   useEffect(() => {
     void loadData();
@@ -976,12 +978,32 @@ export default function InvoiceSourcesTab() {
               variant="outline"
               className="border-slate-600 text-slate-300"
             >
-              {candidates.length} kandidat
+              {candidates.length} kandidat pada filter
             </Badge>
           </div>
         </CardHeader>
 
         <CardContent>
+          <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Filter kandidat Gmail">
+            {([
+              ["ready", "Siap Diproses"],
+              ["review", "Perlu Review"],
+              ["duplicate", "Duplikat"],
+              ["imported", "Sudah Diimpor"],
+              ["all", "Semua"],
+            ] as const).map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={candidateFilter === value ? "default" : "outline"}
+                aria-pressed={candidateFilter === value}
+                onClick={() => setCandidateFilter(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
           {loading &&
           candidates.length === 0 ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
@@ -992,12 +1014,10 @@ export default function InvoiceSourcesTab() {
             <div className="rounded-lg border border-dashed border-slate-700 px-4 py-10 text-center">
               <FileText className="mx-auto mb-3 h-7 w-7 text-slate-600" />
               <p className="text-sm font-medium text-slate-300">
-                Belum ada kandidat invoice Gmail
+                Tidak ada kandidat pada filter ini
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                Setelah Gmail terhubung, klik Sync
-                Now untuk membaca email invoice dan
-                attachment PDF/gambar.
+                Pilih filter lain untuk melihat riwayat, atau klik Sync Now untuk memeriksa invoice terbaru.
               </p>
             </div>
           ) : (
@@ -1135,7 +1155,9 @@ export default function InvoiceSourcesTab() {
                                 }
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
-                                Buka Invoice
+                                {candidate.status === "duplicate"
+                                  ? "Lihat Invoice Asli"
+                                  : "Buka Invoice"}
                               </Button>
                             ) : canImport ? (
                               <Button
