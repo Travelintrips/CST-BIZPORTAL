@@ -459,6 +459,13 @@ export async function importGmailInvoiceCandidate(args: {
       );
     }
 
+    // Serialize the final duplicate check and invoice creation together.
+    // Checking before acquiring the lock allows two concurrent imports of
+    // the same vendor reference to both pass and create duplicate AP drafts.
+    await client.query(
+      "select pg_advisory_xact_lock(hashtext('vendor_invoices:invoice_number'))",
+    );
+
     const existing = await client.query<{ id: number }>(
       `select id
          from public.vendor_invoices
@@ -483,10 +490,6 @@ export async function importGmailInvoiceCandidate(args: {
         { status: 409 },
       );
     }
-
-    await client.query(
-      "select pg_advisory_xact_lock(hashtext('vendor_invoices:invoice_number'))",
-    );
 
     const year = new Date().getFullYear();
     const sequence = await client.query<{ seq: string | number }>(
