@@ -599,12 +599,17 @@ export async function importGmailInvoiceCandidate(args: {
         0.0001,
         numericAmount(line.quantity) ?? 1,
       );
+      // OCR line.total is a gross (tax-inclusive) amount. Persist net
+      // subtotal so invoice lines sum to the header's net + VAT exactly.
       const lineTotal = numericAmount(line.total);
-      const unitCost =
-        numericAmount(line.unit_price) ??
-        (lineTotal == null ? null : lineTotal / quantity);
+      const lineTax = Math.max(0, numericAmount(line.tax) ?? 0);
+      const explicitUnitPrice = numericAmount(line.unit_price);
+      const netSubtotal = lineTotal == null
+        ? (explicitUnitPrice == null ? null : explicitUnitPrice * quantity)
+        : lineTotal - lineTax;
+      const unitCost = netSubtotal == null ? null : netSubtotal / quantity;
 
-      if (unitCost == null || !Number.isFinite(unitCost)) {
+      if (unitCost == null || !Number.isFinite(unitCost) || netSubtotal == null || netSubtotal < 0) {
         return [];
       }
 
@@ -617,8 +622,8 @@ export async function importGmailInvoiceCandidate(args: {
               : `Invoice ${vendorReference}`,
           quantity,
           unitCost,
-          subtotal: lineTotal ?? quantity * unitCost,
-          tax: Math.max(0, numericAmount(line.tax) ?? 0),
+          subtotal: netSubtotal,
+          tax: lineTax,
           coaHint:
             typeof line.coa_hint === "string"
               ? line.coa_hint.trim() || null
