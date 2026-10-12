@@ -748,10 +748,18 @@ router.get(
         100,
       );
 
+      const requestedStatus = String(req.query.status ?? "ready");
+      const allowedStatuses = ["ready", "review", "duplicate", "imported", "all"] as const;
+      if (!allowedStatuses.some((value) => value === requestedStatus)) {
+        res.status(400).json({ error: "Filter status invoice tidak valid." });
+        return;
+      }
+
       res.json({
         data: await listGmailInvoiceCandidates(
           companyId,
           limit,
+          requestedStatus as (typeof allowedStatuses)[number],
         ),
       });
     } catch (error) {
