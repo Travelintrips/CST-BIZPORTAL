@@ -566,7 +566,7 @@ export async function importGmailInvoiceCandidate(args: {
          created_by
        )
        values(
-         $1,$2,$3,$4,$5,'draft',$6,$7,30,$8,
+         $1,$2,$3,$4,$5,'draft',$6,$7,$18,$8,
          $9,$10,$11,0,$12,$13::jsonb,$14,$15,$16,$17
        )
        returning id`,
@@ -595,6 +595,7 @@ export async function importGmailInvoiceCandidate(args: {
         candidate.attachment_mime_type,
         candidate.attachment_size,
         args.actorEmail,
+        dueDate ? Math.max(0, Math.round((dueDate.getTime() - invoiceDate.getTime()) / 86400000)) : null,
       ],
     );
 
