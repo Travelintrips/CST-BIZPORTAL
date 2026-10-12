@@ -602,6 +602,20 @@ export async function importGmailInvoiceCandidate(args: {
       ? extraction.line_items
       : [];
 
+    // OCR may return inclusive line totals while Vendor Invoice stores
+    // unit_cost/subtotal EXCLUSIVE of tax. Detect at invoice level to avoid
+    // subtracting tax twice when OCR already returns net line totals.
+    const extractedLineTotals = rawLines.reduce((sum: number, value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return sum;
+      const amount = numericAmount((value as Record<string, unknown>).total);
+      return sum + (amount ?? 0);
+    }, 0);
+    const expectedNet = Math.max(0, gross - tax);
+    const totalsAreGross =
+      tax > 0 &&
+      Math.abs(extractedLineTotals - gross) <= 1 &&
+      Math.abs(extractedLineTotals - expectedNet) > 1;
+
     const lines = rawLines.flatMap((value) => {
       if (
         !value ||
@@ -617,11 +631,15 @@ export async function importGmailInvoiceCandidate(args: {
         numericAmount(line.quantity) ?? 1,
       );
       const lineTotal = numericAmount(line.total);
-      const unitCost =
-        numericAmount(line.unit_price) ??
-        (lineTotal == null ? null : lineTotal / quantity);
+      const lineTax = Math.max(0, numericAmount(line.tax) ?? 0);
+      const lineNet = lineTotal == null
+        ? null
+        : totalsAreGross ? lineTotal - lineTax : lineTotal;
+      const unitCost = lineNet == null
+        ? numericAmount(line.unit_price)
+        : lineNet / quantity;
 
-      if (unitCost == null || !Number.isFinite(unitCost)) {
+      if (unitCost == null || !Number.isFinite(unitCost) || unitCost < 0 || (lineNet != null && lineNet < 0)) {
         return [];
       }
 
@@ -634,8 +652,8 @@ export async function importGmailInvoiceCandidate(args: {
               : `Invoice ${vendorReference}`,
           quantity,
           unitCost,
-          subtotal: lineTotal ?? quantity * unitCost,
-          tax: Math.max(0, numericAmount(line.tax) ?? 0),
+          subtotal: lineNet ?? quantity * unitCost,
+          tax: lineTax,
           coaHint:
             typeof line.coa_hint === "string"
               ? line.coa_hint.trim() || null
@@ -659,7 +677,41 @@ export async function importGmailInvoiceCandidate(args: {
       });
     }
 
+    // Reject inconsistent OCR breakdown instead of creating a draft that
+    // cannot be posted or matched safely. The user can review OCR first.
+    const lineNetTotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
+    const lineTaxTotal = lines.reduce((sum, line) => sum + line.tax, 0);
+    if (Math.abs(lineNetTotal - expectedNet) > 1 ||
+        Math.abs(lineTaxTotal - tax) > 1 ||
+        Math.abs(net + tax - gross) > 1) {
+      throw Object.assign(
+        new Error("Rincian OCR tidak cocok dengan DPP, PPN, dan grand total. Periksa invoice sebelum impor."),
+        { status: 409 },
+      );
+    }
+
+    // Only use approved COA mappings. Parenthetical OCR tax annotations
+    // must not change the expense-category matching key.
+    const approvedMappings = await client.query<{
+      mapping_key: string;
+      coa_account_id: number;
+      supplier_id: number | null;
+    }>(
+      `select mapping_key, coa_account_id, supplier_id
+         from public.vendor_invoice_coa_mappings
+        where company_id=$1 and status='approved'
+          and (supplier_id=$2 or supplier_id is null)
+        order by (supplier_id=$2) desc, id desc`,
+      [args.companyId, supplier.rows[0]?.id ?? null],
+    );
+    const normalizeCoaKey = (name: string) =>
+      name.replace(/\\s*\\([^)]*\\)/g, "").trim().toLowerCase().replace(/\\s+/g, " ");
+
     for (const line of lines) {
+      const coaKey = normalizeCoaKey(line.name);
+      const approvedCoa = approvedMappings.rows.find(
+        (mapping) => normalizeCoaKey(mapping.mapping_key) === coaKey,
+      );
       await client.query(
         `insert into public.vendor_invoice_lines(
            invoice_id,
@@ -670,9 +722,11 @@ export async function importGmailInvoiceCandidate(args: {
            subtotal,
            tax_amount,
            coa_hint,
-           coa_resolution_status
+           coa_resolution_status,
+           coa_account_id,
+           coa_mapping_key
          )
-         values($1,$2,$3,'pcs',$4,$5,$6,$7,'unresolved')`,
+         values($1,$2,$3,'pcs',$4,$5,$6,$7,$8,$9)`,
         [
           vendorInvoiceId,
           line.name,
@@ -681,6 +735,9 @@ export async function importGmailInvoiceCandidate(args: {
           line.subtotal,
           line.tax,
           line.coaHint,
+          approvedCoa ? "confirmed" : "unresolved",
+          approvedCoa?.coa_account_id ?? null,
+          approvedCoa ? coaKey : null,
         ],
       );
     }
