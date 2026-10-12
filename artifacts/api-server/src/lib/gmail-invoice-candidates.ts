@@ -644,6 +644,23 @@ export async function importGmailInvoiceCandidate(args: {
       ];
     });
 
+    // OCR providers sometimes call a tax-inclusive line amount "total".
+    // If sum(line.total) is equal to invoice gross, treat line totals as gross
+    // and subtract each extracted PPN; do not charge tax twice.
+    // Use integer-rupiah tolerance for rounding, and do not guess per-line PPh.
+    if (lines.length > 0 && Math.abs(lines.reduce((sum, item) => sum + item.subtotal, 0) - gross) <= 1
+      && tax > 0
+      && Math.abs(lines.reduce((sum, item) => sum + item.tax, 0) - tax) <= 1) {
+      for (const item of lines) {
+        const exclusive = item.subtotal - item.tax;
+        if (exclusive < 0) {
+          throw Object.assign(new Error("Nilai pajak item melebihi total item; perlu review manual."), { status: 409 });
+        }
+        item.subtotal = exclusive;
+        item.unitCost = exclusive / item.quantity;
+      }
+    }
+
     if (lines.length === 0) {
       const fallbackNet = Math.max(
         0,
