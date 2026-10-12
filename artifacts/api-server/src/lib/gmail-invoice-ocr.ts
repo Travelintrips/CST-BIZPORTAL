@@ -35,6 +35,7 @@ export type InvoiceExtraction = {
   currency: string | null;
   subtotal: number | null;
   tax: number | null;
+  withholding_tax: number | null;
   total_amount: number | null;
   confidence: number;
   line_items: Array<{
@@ -59,6 +60,7 @@ const INVOICE_EXTRACTION_SCHEMA = {
     currency: { type: ["string", "null"] },
     subtotal: { type: ["number", "null"] },
     tax: { type: ["number", "null"] },
+    withholding_tax: { type: ["number", "null"] },
     total_amount: { type: ["number", "null"] },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     line_items: {
@@ -97,7 +99,8 @@ const INVOICE_EXTRACTION_SCHEMA = {
     "currency",
     "subtotal",
     "tax",
-    "total_amount",
+    "withholding_tax",
+    "total_amount", 
     "confidence",
     "line_items",
     "flags",
@@ -301,12 +304,13 @@ function sanitizeExtraction(raw: unknown): InvoiceExtraction {
 
   let subtotal = amount(row.subtotal);
   let tax = amount(row.tax);
+  const withholdingTax = amount(row.withholding_tax);
   let total = amount(row.total_amount);
 
-  if (total == null && subtotal != null) total = subtotal + (tax ?? 0);
-  if (subtotal == null && total != null && tax != null) {
-    subtotal = Math.max(0, total - tax);
-  }
+  // Preserve missing amounts as unknown; especially do not mistake PPh deductions for VAT.
+  // OCR total_amount means gross invoice; PPh is a separate withholding and does not change gross.
+  if (total == null && subtotal != null && tax != null) total = subtotal + tax;
+  if (subtotal == null && total != null && tax != null) subtotal = total - tax;
 
   const confidenceValue = Number(row.confidence ?? 0);
   const lineItems = Array.isArray(row.line_items)
@@ -351,6 +355,7 @@ function sanitizeExtraction(raw: unknown): InvoiceExtraction {
         : "IDR",
     subtotal,
     tax,
+    withholding_tax: withholdingTax,
     total_amount: total,
     confidence: Number.isFinite(confidenceValue)
       ? Math.max(0, Math.min(1, confidenceValue))
@@ -406,7 +411,9 @@ export async function extractInvoiceDocument(
     "Extract vendor invoice data from this document and return JSON only.",
     "Do not guess missing data. Vendor is the issuer, not the recipient.",
     "Use ISO dates YYYY-MM-DD. Amounts must be numeric.",
-    "subtotal/DPP is pre-VAT, tax is PPN/VAT, total_amount is gross.",
+    "subtotal is DPP before VAT; tax is PPN/VAT; withholding_tax is PPh withheld, NOT VAT.",
+    "total_amount is gross invoice (DPP + PPN); do not subtract PPh from total_amount. PPh affects net cash payable only.",
+    "Return null for missing DPP, PPN or PPh; never assume an absent tax is zero or invent a percentage.",
     `Email subject: ${context.subject || "(none)"}`,
     `Email sender: ${context.sender || "(none)"}`,
     "Follow the enforced response schema exactly.",

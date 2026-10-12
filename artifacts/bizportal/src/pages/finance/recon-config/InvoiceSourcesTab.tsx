@@ -73,8 +73,10 @@ type GmailCandidate = {
   currency: string | null;
   subtotal: number | null;
   tax: number | null;
+  withholdingTax: number | null;
   total: number | null;
   confidence: number | null;
+  breakdown?: { lineItems: Array<{ description?: string; quantity?: number | string; unit_price?: number | string; total?: number | string; tax?: number | string }> };
   extractionStatus: string;
   status: string;
   vendorInvoiceId: number | null;
@@ -1093,6 +1095,30 @@ export default function InvoiceSourcesTab() {
                               {candidate.vendorName ||
                                 "—"}
                             </p>
+                            <details className="mt-2 text-xs text-slate-300">
+                              <summary className="cursor-pointer text-sky-300 hover:text-sky-200">Periksa rincian nominal</summary>
+                              <div className="mt-2 min-w-[260px] space-y-1 rounded-md border border-slate-700 bg-slate-950/70 p-2">
+                                {(candidate.breakdown?.lineItems ?? []).length > 0 ? (
+                                  candidate.breakdown!.lineItems.map((line, idx) => (
+                                    <div key={idx} className="border-b border-slate-800 pb-1 last:border-0">
+                                      <div className="break-words">{line.description || `Item ${idx + 1}`}</div>
+                                      <div className="text-slate-400">Qty: {line.quantity ?? "—"} · Harga: {formatMoney(Number(line.unit_price ?? 0), candidate.currency || "IDR")} · Jumlah: {formatMoney(Number(line.total ?? 0), candidate.currency || "IDR")}</div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="text-amber-300">Rincian per item belum terbaca OCR. Verifikasi dokumen asli sebelum membuat draft.</p>
+                                )}
+                                <div className="pt-1">DPP: {formatMoney(candidate.subtotal, candidate.currency || "IDR")}</div>
+                                <div>PPN: {formatMoney(candidate.tax, candidate.currency || "IDR")}</div>
+                                <div>PPh dipotong: {formatMoney(candidate.withholdingTax, candidate.currency || "IDR")}</div>
+                                <div className="font-semibold text-white">Total tagihan bruto: {formatMoney(candidate.total, candidate.currency || "IDR")}</div>
+                                <div>Estimasi dibayar setelah PPh: {candidate.total != null && candidate.withholdingTax != null ? formatMoney(candidate.total - candidate.withholdingTax, candidate.currency || "IDR") : "— (PPh belum diketahui)"}</div>
+                                {candidate.subtotal != null && candidate.tax != null && candidate.total != null && Math.abs(candidate.subtotal + candidate.tax - candidate.total) > 1 && (
+                                  <p className="text-red-300">Selisih DPP + PPN dengan total invoice. Periksa dokumen sebelum membuat draft.</p>
+                                )}
+                                <p className="text-slate-500">Tanda — berarti nilai tidak terbaca, bukan Rp 0.</p>
+                              </div>
+                            </details>
                             {candidate.error && (
                               <p
                                 className="mt-1 max-w-[220px] truncate text-xs text-red-400"
