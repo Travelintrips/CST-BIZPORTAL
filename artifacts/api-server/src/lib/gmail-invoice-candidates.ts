@@ -412,6 +412,15 @@ export async function importGmailInvoiceCandidate(args: {
       );
     }
 
+    // Never import an attachment already classified as a duplicate.
+    // Its source row remains visible for audit, but it cannot create an AP invoice.
+    if (candidate.status === "duplicate") {
+      throw Object.assign(
+        new Error("Invoice duplikat hanya disimpan di Sumber INV dan tidak dapat diimpor ke INV Vendor."),
+        { status: 409 },
+      );
+    }
+
     if (candidate.vendor_invoice_id) {
       await client.query("commit");
       return {
@@ -469,10 +478,10 @@ export async function importGmailInvoiceCandidate(args: {
         [existing.rows[0].id, candidate.id],
       );
       await client.query("commit");
-      return {
-        vendorInvoiceId: existing.rows[0].id,
-        existing: true,
-      };
+      throw Object.assign(
+        new Error("Invoice sudah ada di INV Vendor. Duplikat tetap berada di Sumber INV."),
+        { status: 409 },
+      );
     }
 
     await client.query(
