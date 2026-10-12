@@ -373,15 +373,20 @@ function candidateView(row: CandidateRow) {
 export async function listGmailInvoiceCandidates(
   companyId: number,
   limit = 50,
+  statusFilter: "ready" | "review" | "duplicate" | "imported" | "all" = "ready",
 ) {
+  const statuses = statusFilter === "review"
+    ? ["manual_review", "failed"]
+    : statusFilter === "all" ? null : [statusFilter];
   const result = await pool.query<CandidateRow>(
     `select *
        from public.gmail_invoice_candidates
       where company_id=$1
         and attachment_file_name !~* '^srt([[:space:]_.-]|$)'
+        and ($3::text[] is null or status = any($3::text[]))
       order by received_at desc nulls last,id desc
       limit $2`,
-    [companyId, Math.min(Math.max(limit, 1), 100)],
+    [companyId, Math.min(Math.max(limit, 1), 100), statuses],
   );
   return result.rows.map(candidateView);
 }
