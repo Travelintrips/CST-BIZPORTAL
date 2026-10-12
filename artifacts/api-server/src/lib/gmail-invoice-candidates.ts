@@ -524,6 +524,12 @@ export async function importGmailInvoiceCandidate(args: {
         ? (candidate.extracted_json as Record<string, unknown>)
         : {};
 
+    // OCR can identify withholding-tax language, but cannot determine the
+    // legally correct tax object/rate without document and COA review.
+    const needsWithholdingReview = Array.isArray(extraction.line_items) &&
+      extraction.line_items.some((item) => item && typeof item === "object" &&
+        /\\b(?:pph|pajak\\s+penghasilan)\\b/i.test(String((item as Record<string, unknown>).description ?? "")));
+
     const created = await client.query<{ id: number }>(
       `insert into public.vendor_invoices(
          invoice_number,
@@ -545,11 +551,15 @@ export async function importGmailInvoiceCandidate(args: {
          attachment_file_name,
          attachment_content_type,
          attachment_size,
-         created_by
+         created_by,
+         withholding_review_status,
+         tax_review_status
        )
        values(
          $1,$2,$3,$4,$5,'draft',$6,$7,30,$8,
-         $9,$10,$11,0,$12,$13::jsonb,$14,$15,$16,$17
+         $9,$10,$11,0,$12,$13::jsonb,$14,$15,$16,$17,
+         case when $18 then 'required' else 'not_required' end,
+         case when $18 then 'required' else 'not_required' end
        )
        returning id`,
       [
@@ -577,6 +587,7 @@ export async function importGmailInvoiceCandidate(args: {
         candidate.attachment_mime_type,
         candidate.attachment_size,
         args.actorEmail,
+        needsWithholdingReview,
       ],
     );
 
