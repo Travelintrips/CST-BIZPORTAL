@@ -531,9 +531,10 @@ export async function importGmailInvoiceCandidate(args: {
         ? new Date(candidate.received_at)
         : new Date();
 
+    // Do not invent a payment due date when OCR did not find one.
     const dueDate = candidate.extracted_due_date
       ? new Date(String(candidate.extracted_due_date))
-      : new Date(invoiceDate.getTime() + 30 * 86400000);
+      : null;
 
     const extraction =
       candidate.extracted_json &&
