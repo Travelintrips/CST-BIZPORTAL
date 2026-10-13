@@ -305,7 +305,9 @@ async function loadLiveQrisPayments(
        sb.booking_date::text as booking_date,
        sb.start_time::text as start_time,
        sb.end_time::text as end_time,
-       coalesce(config.mdr_rate, 0.007)::numeric as mdr_rate
+       -- The per-payment rate is the source evidence; a stored zero must not be
+       -- overwritten by the provider default (e.g. exempt QRIS payments).
+       coalesce(sp.mdr_rate, config.mdr_rate, 0.007)::numeric as mdr_rate
      from sport_center.sport_payments sp
      join sport_center.sport_bookings sb on sb.id = sp.booking_id
      left join sport_center.facilities facility on facility.id = sb.facility_id
