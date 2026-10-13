@@ -132,7 +132,7 @@ function getStoredInterval(): IntervalValue {
   } catch {
     /* ignore */
   }
-  return "60000";
+  return "300000";
 }
 
 // ── Dashboard Summary Types ───────────────────────────────────────────────────
@@ -201,6 +201,7 @@ export default function DashboardPage() {
     },
     staleTime: 60_000,
     refetchInterval,
+    refetchOnWindowFocus: false,
   });
 
   const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
@@ -278,7 +279,8 @@ export default function DashboardPage() {
   const companyBreakdown = summary?.companyBreakdown ?? [];
 
   const { data: portalOrders = [], isLoading: portalLoading, refetch: refetchPortal } = useListLogisticOrders(undefined, {
-    query: { queryKey: getListLogisticOrdersQueryKey(), refetchInterval, enabled: secondaryReady },
+    query: { queryKey: getListLogisticOrdersQueryKey(), refetchInterval,
+    refetchOnWindowFocus: false, enabled: secondaryReady },
   });
 
   interface DashDriver { id: number; name: string; phone: string | null; vehiclePlate: string | null; vehicleType: string | null; isActive: boolean; }
@@ -291,6 +293,7 @@ export default function DashboardPage() {
     },
     staleTime: 30_000,
     refetchInterval,
+    refetchOnWindowFocus: false,
     enabled: secondaryReady,
   });
   const { data: dashJobs = [] } = useQuery<DashActiveJob[]>({
@@ -301,6 +304,7 @@ export default function DashboardPage() {
     },
     staleTime: 30_000,
     refetchInterval,
+    refetchOnWindowFocus: false,
     enabled: secondaryReady,
   });
   const activeJobByDriver = dashJobs.reduce<Record<number, DashActiveJob>>((acc, job) => {
