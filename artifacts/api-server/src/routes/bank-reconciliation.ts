@@ -7274,6 +7274,25 @@ export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSwee
               }),
             ],
           );
+          if (!ambiguous) {
+            const soleSettlementId = exactSettlements.rows[0]!.id;
+            const match = await client.query<{ id: number }>(
+              `select id from public.bank_reconciliation_matches
+                where mutation_id = $1 and candidate_type = 'qris_settlement'
+                  and candidate_id = $2
+                  and candidate_source = 'sport_center.payment_settlement_batches'
+                  and status = 'candidate'
+                order by id desc limit 1 for update`,
+              [mutation.id, soleSettlementId],
+            );
+            if (!match.rows[0]) {
+              throw new ApprovalError('QRIS canonical candidate missing after recovery.', 409, 'CANONICAL_MATCH_PERSIST_FAILED');
+            }
+            await approveCanonicalSettlementLink(
+              client, mutation.id, soleSettlementId, match.rows[0].id,
+              actor, `qris-auto-${mutation.id}`,
+            );
+          }
           await client.query("commit");
           if (ambiguous) summary.ambiguousExistingSettlements += 1;
           else summary.recoveredExistingSettlement += 1;
@@ -7288,7 +7307,13 @@ export async function runQrisAutoCandidateSweep(): Promise<QrisAutoCandidateSwee
 
       try {
         await client.query("begin");
-        await prepareCanonicalQrisSettlement(client, mutation.id, actor);
+        const prepared = await prepareCanonicalQrisSettlement(client, mutation.id, actor);
+        // Only exact, canonical, uniquely selected settlements reach this point.
+        // Approve in the same transaction so matching cannot remain half-complete.
+        await approveCanonicalSettlementLink(
+          client, mutation.id, prepared.settlementId as number,
+          prepared.matchId as number, actor, `qris-auto-${mutation.id}`,
+        );
         await client.query("commit");
         summary.preparedFromLivePayments += 1;
       } catch (error) {
