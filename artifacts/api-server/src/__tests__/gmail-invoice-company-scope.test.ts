@@ -13,9 +13,33 @@ describe("Gmail invoice source company isolation", () => {
     expect(source).toContain('"COMPANY_SCOPE_FORBIDDEN"');
   });
 
-  it("uses the company scope guard on every Gmail source operation", () => {
-    const matches = source.match(/requireCompanyScope\(/g) ?? [];
-    expect(matches.length).toBe(7);
+  it("requires a company scope guard in every Gmail source route", () => {
+    const routes = Array.from(
+      source.matchAll(/\brouter\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/g),
+    );
+    // Keep a baseline count so removing a route cannot silently weaken coverage.
+    expect(routes.length).toBeGreaterThanOrEqual(9);
+
+    const callbackPath = "/recon-classification/invoice-sources/gmail/callback";
+    expect(routes.filter((match) => match[2] === callbackPath)).toHaveLength(1);
+
+    for (let index = 0; index < routes.length; index += 1) {
+      const route = routes[index]!;
+      const nextRoute = routes[index + 1];
+      const handler = source.slice(route.index!, nextRoute?.index ?? source.length);
+
+      expect(handler).toContain("const actor = await requireFinanceAdmin(req)");
+      if (route[2] === callbackPath) {
+        // OAuth callback uses signed state and validates the actor's company
+        // rather than accepting a client-provided company ID.
+        expect(handler).toContain("parsedState = await parseState(");
+        expect(handler).toContain("actor.companyId !== parsedState.companyId");
+        expect(handler).toContain('reason: "company_scope_mismatch"');
+      } else {
+        expect(handler).toContain("const companyId = requireCompanyScope(");
+        expect(handler).toContain("if (!companyId) return;");
+      }
+    }
   });
 
   it("revalidates the signed OAuth callback against the actor company", () => {
