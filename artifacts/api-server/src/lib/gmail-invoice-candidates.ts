@@ -158,6 +158,31 @@ async function processAttachment(args: {
     );
 
     if (duplicateByHash.rows[0]) {
+      // Gmail may return a different attachmentId for the same file on each sync.
+      // Keep one source record per message + file content instead of inserting
+      // thousands of duplicate shells. A forwarded email (different message ID)
+      // still gets its own audit record.
+      const alreadyRecordedInMessage = await pool.query<{ id: number }>(
+        `select id
+           from public.gmail_invoice_candidates
+          where company_id=$1
+            and gmail_message_id=$2
+            and attachment_sha256=$3
+            and id<>$4
+            and extraction_status='complete'
+          order by id
+          limit 1`,
+        [args.companyId, args.message.id, hash, candidate.id],
+      );
+      if (alreadyRecordedInMessage.rows[0]) {
+        await pool.query(
+          `delete from public.gmail_invoice_candidates
+            where id=$1 and company_id=$2 and status='new'
+              and extraction_status='pending'`,
+          [candidate.id, args.companyId],
+        );
+        return "existing";
+      }
       const original = duplicateByHash.rows[0];
       await pool.query(
         `update public.gmail_invoice_candidates
