@@ -686,8 +686,34 @@ export async function importGmailInvoiceCandidate(args: {
       });
     }
 
+    // Only record withholding when the source line explicitly identifies its
+    // tax article and printed rate. Never infer PPh from an OCR VAT amount.
+    // These remain under tax_review; no liability account is auto-approved.
+    const withholdingLines: Array<{
+      invoiceLineId: number;
+      taxType: string;
+      taxObject: string;
+      base: number;
+      amount: number;
+    }> = [];
+
     for (const line of lines) {
-      await client.query(
+      const printedPph = /\bPPh\s*(?:Pasal\s*)?(23|4\s*(?:\(\s*2\s*\)|Ayat\s*2))[^\n]*?tarif\s*([0-9]+(?:[.,][0-9]+)?)\s*%/i.exec(line.name);
+      const rate = printedPph ? Number(printedPph[2].replace(",", ".")) : null;
+      const taxType = printedPph?.[1].startsWith("23") ? "PPh 23" : "PPh 4(2)";
+      const taxObject = /konsesi/i.test(line.name)
+        ? "concession"
+        : /listrik/i.test(line.name)
+          ? "electricity"
+          : /(?:pemakaian\s+)?air/i.test(line.name)
+            ? "water"
+            : "other";
+      const base = line.subtotal;
+      const amount = rate != null && Number.isFinite(rate) && rate > 0 && rate <= 100
+        ? Math.round(base * rate) / 100
+        : 0;
+      const savedLine = await client.query<{ id: number }>(
+
         `insert into public.vendor_invoice_lines(
            invoice_id,
            name,
@@ -699,7 +725,7 @@ export async function importGmailInvoiceCandidate(args: {
            coa_hint,
            coa_resolution_status
          )
-         values($1,$2,$3,'pcs',$4,$5,$6,$7,'unresolved')`,
+         values($1,$2,$3,'pcs',$4,$5,$6,$7,'unresolved') returning id`,
         [
           vendorInvoiceId,
           line.name,
@@ -709,6 +735,39 @@ export async function importGmailInvoiceCandidate(args: {
           line.tax,
           line.coaHint,
         ],
+      );
+      if (printedPph && amount > 0 && taxObject !== "other") {
+        // Insert uses RETURNING id on the invoice line created above.
+        // Never mark a tax row confirmed until COA and tax treatment are reviewed.
+        const lineId = savedLine.rows[0]?.id;
+        if (lineId) withholdingLines.push({
+          invoiceLineId: lineId, taxType, taxObject, base, amount,
+        });
+      }
+    }
+
+    if (withholdingLines.length > 0) {
+      for (const taxLine of withholdingLines) {
+        await client.query(
+          `insert into public.vendor_invoice_line_taxes
+             (invoice_line_id, company_id, tax_type, tax_object,
+              base_amount, tax_amount, resolution_status, review_reason)
+           values ($1,$2,$3,$4,$5,$6,'tax_review',
+                   'Imported from source description; verify tax classification and liability COA before posting')`,
+          [taxLine.invoiceLineId, args.companyId, taxLine.taxType,
+            taxLine.taxObject, taxLine.base, taxLine.amount],
+        );
+      }
+      const totalWithholding = Math.round(
+        withholdingLines.reduce((sum, taxLine) => sum + taxLine.amount, 0) * 100,
+      ) / 100;
+      const distinctTypes = [...new Set(withholdingLines.map((row) => row.taxType))];
+      await client.query(
+        `update public.vendor_invoices
+            set withholding_tax_amount=$1, withholding_tax_type=$2,
+                withholding_review_status='required'
+          where id=$3 and company_id=$4 and status='draft'`,
+        [totalWithholding, distinctTypes.join(" + "), vendorInvoiceId, args.companyId],
       );
     }
 
