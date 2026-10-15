@@ -679,9 +679,37 @@ async function runGmailOrganizerTick(): Promise<void> {
           ),
         ]);
 
-        // Sender organization is a separate, costly mailbox scan.
-        // Do not repeat it during every invoice polling pass; the
-        // dedicated "Terapkan Auto Label" action remains available.
+        // Preserve automatic labels, but do the costly sender scan no more
+        // than once per six hours rather than after every invoice poll.
+        const lastOrganizerAt = await getConfig(
+          companyId,
+          "LAST_ORGANIZER_AT",
+        );
+        const lastOrganizerMs = lastOrganizerAt
+          ? Date.parse(lastOrganizerAt)
+          : NaN;
+        if (
+          !Number.isFinite(lastOrganizerMs) ||
+          Date.now() - lastOrganizerMs >= 6 * 60 * 60 * 1000
+        ) {
+          const organized = await provisionGmailOrganizationRules({
+            companyId,
+            accessToken,
+            actorEmail: "system:gmail-organizer",
+            senderScanLimit: 100,
+          });
+          if (organized.failed === 0) {
+            await setConfig(
+              companyId,
+              "LAST_ORGANIZER_AT",
+              new Date().toISOString(),
+              {
+                description: "Last successful automatic Gmail sender organization",
+                actor: "system:gmail-organizer",
+              },
+            );
+          }
+        }
       } catch (error) {
         console.warn(
           "[gmail-organizer] background pass failed",
