@@ -698,7 +698,7 @@ export async function importGmailInvoiceCandidate(args: {
     }> = [];
 
     for (const line of lines) {
-      const printedPph = /\\bPPh\\s*(?:Pasal\\s*)?(23|4\\s*(?:\\(\\s*2\\s*\\)|Ayat\\s*2))\\b[^\\n]*?tarif\\s*([0-9]+(?:[.,][0-9]+)?)\\s*%/i.exec(line.name);
+      const printedPph = /\\bPPh\\s*(?:Pasal\\s*)?(23|4\\s*(?:\\(\\s*2\\s*\\)|Ayat\\s*2))[^\\n]*?tarif\\s*([0-9]+(?:[.,][0-9]+)?)\\s*%/i.exec(line.name);
       const rate = printedPph ? Number(printedPph[2].replace(",", ".")) : null;
       const taxType = printedPph?.[1].startsWith("23") ? "PPh 23" : "PPh 4(2)";
       const taxObject = /konsesi/i.test(line.name)
