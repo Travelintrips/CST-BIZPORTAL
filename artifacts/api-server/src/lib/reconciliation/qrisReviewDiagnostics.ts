@@ -41,6 +41,7 @@ type QrisPaymentRow = {
   start_time: string | null;
   end_time: string | null;
   mdr_rate: string | number | null;
+  mdr_amount: string | number | null;
 };
 
 const HISTORICAL_SOURCE = "historical_qris_review_snapshot";
@@ -94,6 +95,10 @@ function toCents(value: number): number {
 
 function paymentMdr(payment: QrisPaymentRow): number {
   const gross = safeNumber(payment.amount) ?? 0;
+  // Use the payment's persisted MDR evidence, including an explicit zero.
+  // A provider-level rate is only an estimate when the source amount is absent.
+  const recorded = payment.mdr_amount == null ? null : safeNumber(payment.mdr_amount);
+  if (recorded != null && recorded >= 0) return money(recorded);
   const rate = safeNumber(payment.mdr_rate) ?? 0.007;
   return money(gross * rate);
 }
@@ -107,6 +112,7 @@ function paymentItem(payment: QrisPaymentRow): Record<string, unknown> {
   return {
     paymentId: payment.id,
     grossAmount: safeNumber(payment.amount) ?? 0,
+    mdrAmount: paymentMdr(payment),
     providerName: payment.provider_code ?? "mandiri_direct",
     paymentNumber: `SCPAY-SC-${payment.id}`,
     paymentStatus: payment.payment_status,
@@ -305,7 +311,8 @@ async function loadLiveQrisPayments(
        sb.booking_date::text as booking_date,
        sb.start_time::text as start_time,
        sb.end_time::text as end_time,
-       coalesce(config.mdr_rate, 0.007)::numeric as mdr_rate
+       coalesce(sp.mdr_rate, config.mdr_rate, 0.007)::numeric as mdr_rate,
+       sp.mdr_amount as mdr_amount
      from sport_center.sport_payments sp
      join sport_center.sport_bookings sb on sb.id = sp.booking_id
      left join sport_center.facilities facility on facility.id = sb.facility_id
