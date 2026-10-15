@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+// Compare source contracts consistently across Windows CRLF and Linux LF.
 const source = readFileSync(
   resolve(process.cwd(), "src/routes/bank-reconciliation.ts"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 describe("bank reconciliation candidate source integrity", () => {
   it("maps the completed UI filter to final mutation statuses without an array parameter cast", () => {

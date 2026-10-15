@@ -15,8 +15,15 @@ describe("Sport Center reconciliation ambiguity contract", () => {
   });
 
   it("persists every competitive canonical candidate instead of silently keeping the first", () => {
+    // Only rule-relevant candidates may compete; otherwise unrelated receipts
+    // could force a false ambiguity or be persisted as potential matches.
     expect(route).toContain(
-      "candidates.filter((candidate) => candidate.score >= realCandidate.score - 5)",
+      "const ruleCandidates = candidates.filter((candidate) =>",
+    );
+    expect(route).toContain("candidateRelevantToRule(matchedRule, candidate)");
+    expect(route).toContain("const realCandidate = ruleCandidates[0]");
+    expect(route).toContain(
+      "ruleCandidates.filter((candidate) => candidate.score >= realCandidate.score - 5)",
     );
     expect(route).toContain("for (const candidate of competitiveRealCandidates)");
     expect(route).toContain("RULE_MULTIPLE_CANONICAL_CANDIDATES");
