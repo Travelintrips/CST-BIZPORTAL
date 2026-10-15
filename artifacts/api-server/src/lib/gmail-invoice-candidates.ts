@@ -705,7 +705,7 @@ export async function importGmailInvoiceCandidate(args: {
         ? "concession"
         : /listrik/i.test(line.name)
           ? "electricity"
-          : /(?:pemakaian\\s+)?air/i.test(line.name)
+          : /(?:pemakaian\s+)?air/i.test(line.name)
             ? "water"
             : "other";
       const base = line.subtotal;
