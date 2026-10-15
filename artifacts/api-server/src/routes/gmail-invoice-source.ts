@@ -571,7 +571,7 @@ async function readStatus(
   };
 }
 
-const GMAIL_ORGANIZER_POLL_MS = 10 * 60 * 1000;
+const GMAIL_ORGANIZER_POLL_MS = 30 * 60 * 1000;
 let gmailOrganizerTickActive = false;
 
 async function runGmailOrganizerTick(): Promise<void> {
@@ -611,6 +611,19 @@ async function runGmailOrganizerTick(): Promise<void> {
           "REFRESH_TOKEN",
         );
         if (!encryptedToken) continue;
+
+        // Avoid repeatedly scanning the mailbox after another worker or
+        // manual sync has recently completed. This also limits Gmail API
+        // usage when several application instances are deployed.
+        const recentSyncAt = await getConfig(companyId, "LAST_SYNC_AT");
+        const recentSyncMs = recentSyncAt
+          ? Date.parse(recentSyncAt)
+          : NaN;
+        if (
+          Number.isFinite(recentSyncMs) &&
+          Date.now() - recentSyncMs >= 0 &&
+          Date.now() - recentSyncMs < GMAIL_ORGANIZER_POLL_MS
+        ) continue;
 
         const accessToken = await refreshAccessToken(
           await decryptRefreshToken(encryptedToken),
@@ -666,12 +679,9 @@ async function runGmailOrganizerTick(): Promise<void> {
           ),
         ]);
 
-        await provisionGmailOrganizationRules({
-          companyId,
-          accessToken,
-          actorEmail: "system:gmail-organizer",
-          senderScanLimit: 100,
-        });
+        // Sender organization is a separate, costly mailbox scan.
+        // Do not repeat it during every invoice polling pass; the
+        // dedicated "Terapkan Auto Label" action remains available.
       } catch (error) {
         console.warn(
           "[gmail-organizer] background pass failed",
@@ -1242,20 +1252,8 @@ router.post(
           >
         | null = null;
 
-      try {
-        organizer =
-          await provisionGmailOrganizationRules({
-            companyId,
-            accessToken,
-            actorEmail: actor.email,
-            senderScanLimit: 250,
-          });
-      } catch (organizerError) {
-        req.log.warn(
-          { organizerError, companyId },
-          "Gmail sender auto-label refresh failed",
-        );
-      }
+      // Do not run the full sender scan on Sync Now. Users can apply
+      // labeling separately via the dedicated organization-rules action.
 
       const now = new Date().toISOString();
 
