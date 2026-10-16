@@ -15,8 +15,16 @@ describe("QRIS live review visibility", () => {
   });
 
   it("never exposes live review snapshots through QRIS approval selection", () => {
-    expect(source).toContain('"historical_qris_review_snapshot",\n      "live_qris_review_snapshot"');
-    expect(source).toContain("candidate.current_evidence_valid !== false");
+    const eligibility = source.match(
+      /const isQrisCandidateEligible\s*=\s*\(candidate:\s*QrisCandidateAudit\)[\s\S]*?const qrisApprovableCandidates/,
+    )?.[0];
+    expect(eligibility).toBeDefined();
+    expect(eligibility).toMatch(
+      /"historical_qris_review_snapshot"\s*,\s*"live_qris_review_snapshot"/,
+    );
+    expect(eligibility).toContain("candidate.current_evidence_valid !== false");
+    expect(eligibility).toContain("getUnconfirmedQrisPaymentIds(candidate).length === 0");
+    expect(eligibility).toContain("getAvailableQrisPaymentIds(candidate).length > 0");
   });
 
   it("allows one-day-earlier payment evidence only for read-only diagnostics", () => {
