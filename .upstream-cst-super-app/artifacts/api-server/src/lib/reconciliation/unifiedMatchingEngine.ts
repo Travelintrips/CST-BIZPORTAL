@@ -2020,6 +2020,14 @@ export async function runUnifiedMatching(
     isInvalidPaymentCandidateIdentity(c)
   );
   if (invalidPaymentCandidates.length > 0) {
+    // Persist the fail-closed state, not merely a manual_review response.
+    // Do not suppress a database failure and do not approve a placeholder.
+    await db.execute(sql.raw(`
+      UPDATE bank_mutations
+      SET status = 'manual_review',
+          updated_at = NOW()
+      WHERE id = ${mutation.id}
+    `));
     await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
       status: "manual_review",
       review_code: "INVALID_PAYMENT_CANDIDATE_ID",
