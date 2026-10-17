@@ -1,4 +1,4 @@
-import { isInvalidPaymentCandidateIdentity } from "./paymentCandidateIdentity.js";
+import { isInvalidPaymentCandidateIdentity, isPaymentCandidateOutsideCompanyScope } from "./paymentCandidateIdentity.js";
 /**
  * Unified Matching Engine — single source of truth untuk bank reconciliation.
  *
@@ -2017,7 +2017,7 @@ export async function runUnifiedMatching(
   // Never persist/approve placeholder payment #0; keep the mutation for review
   // rather than producing an artificial accounting match.
   const invalidPaymentCandidates = candidates.filter(c =>
-    isInvalidPaymentCandidateIdentity(c)
+    isInvalidPaymentCandidateIdentity(c) || isPaymentCandidateOutsideCompanyScope(c, matchingMutation.company_id)
   );
   if (invalidPaymentCandidates.length > 0) {
     // Persist the fail-closed state, not merely a manual_review response.
@@ -2025,14 +2025,14 @@ export async function runUnifiedMatching(
     await db.execute(sql.raw(`
       UPDATE bank_mutations
       SET status = 'manual_review',
-          review_code = 'INVALID_PAYMENT_CANDIDATE_ID',
+          review_code = 'INVALID_PAYMENT_CANDIDATE_ID_OR_SCOPE',
           updated_at = NOW()
       WHERE id = ${mutation.id}
         AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
     `));
     await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
       status: "manual_review",
-      review_code: "INVALID_PAYMENT_CANDIDATE_ID",
+      review_code: "INVALID_PAYMENT_CANDIDATE_ID_OR_SCOPE",
       invalid_count: invalidPaymentCandidates.length,
     });
     return { status: "manual_review", all: [] };
