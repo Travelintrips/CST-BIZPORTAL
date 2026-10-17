@@ -1,3 +1,4 @@
+import { isInvalidPaymentCandidateIdentity } from "./paymentCandidateIdentity.js";
 /**
  * Unified Matching Engine — single source of truth untuk bank reconciliation.
  *
@@ -2016,7 +2017,7 @@ export async function runUnifiedMatching(
   // Never persist/approve placeholder payment #0; keep the mutation for review
   // rather than producing an artificial accounting match.
   const invalidPaymentCandidates = candidates.filter(c =>
-    c.type === "payment" && (!Number.isSafeInteger(Number(c.id)) || Number(c.id) <= 0)
+    isInvalidPaymentCandidateIdentity(c)
   );
   if (invalidPaymentCandidates.length > 0) {
     await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
