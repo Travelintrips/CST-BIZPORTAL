@@ -2028,6 +2028,7 @@ export async function runUnifiedMatching(
           review_code = 'INVALID_PAYMENT_CANDIDATE_ID',
           updated_at = NOW()
       WHERE id = ${mutation.id}
+        AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
     `));
     await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
       status: "manual_review",
