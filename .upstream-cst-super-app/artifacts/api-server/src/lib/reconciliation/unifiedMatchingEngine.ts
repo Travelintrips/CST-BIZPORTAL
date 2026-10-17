@@ -2024,7 +2024,8 @@ export async function runUnifiedMatching(
     // Do not suppress a database failure and do not approve a placeholder.
     await db.execute(sql.raw(`
       UPDATE bank_mutations
-      SET status = 'need_review',
+      SET status = 'manual_review',
+          review_code = 'INVALID_PAYMENT_CANDIDATE_ID',
           updated_at = NOW()
       WHERE id = ${mutation.id}
     `));
