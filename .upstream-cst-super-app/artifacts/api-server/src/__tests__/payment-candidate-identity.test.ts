@@ -12,6 +12,14 @@ describe("payment reconciliation candidate identity", () => {
     expect(isInvalidPaymentCandidateIdentity({ type: "payment", id })).toBe(false);
   });
 
+  it.each([0, -1, NaN, "0"])("rejects invalid sport_payment id %s", (id) => {
+    expect(isInvalidPaymentCandidateIdentity({ type: "sport_payment", id })).toBe(true);
+  });
+
+  it("allows a valid sport_payment identity", () => {
+    expect(isInvalidPaymentCandidateIdentity({ type: "sport_payment", id: 42 })).toBe(false);
+  });
+
   it("does not treat unrelated candidate types as payment identities", () => {
     expect(isInvalidPaymentCandidateIdentity({ type: "qris_settlement", id: 0 })).toBe(false);
   });
