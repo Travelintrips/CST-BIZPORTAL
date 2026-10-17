@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isInvalidPaymentCandidateIdentity } from "../lib/reconciliation/paymentCandidateIdentity.js";
+import { isInvalidPaymentCandidateIdentity, isPaymentCandidateOutsideCompanyScope } from "../lib/reconciliation/paymentCandidateIdentity.js";
 
 describe("payment reconciliation candidate identity", () => {
   it.each([0, -1, 1.5, NaN, Infinity, "0", "42", null, undefined])(
@@ -22,5 +22,23 @@ describe("payment reconciliation candidate identity", () => {
 
   it("does not treat unrelated candidate types as payment identities", () => {
     expect(isInvalidPaymentCandidateIdentity({ type: "qris_settlement", id: 0 })).toBe(false);
+  });
+});
+
+describe("payment candidate company isolation", () => {
+  it("accepts a payment in the mutation company", () => {
+    expect(isPaymentCandidateOutsideCompanyScope({ type: "sport_payment", company_id: 12 }, 12)).toBe(false);
+  });
+  it("rejects payment belonging to another company", () => {
+    expect(isPaymentCandidateOutsideCompanyScope({ type: "sport_payment", company_id: 14 }, 12)).toBe(true);
+  });
+  it("rejects missing payment company identity", () => {
+    expect(isPaymentCandidateOutsideCompanyScope({ type: "payment", company_id: null }, 12)).toBe(true);
+  });
+  it("rejects missing mutation company identity", () => {
+    expect(isPaymentCandidateOutsideCompanyScope({ type: "payment", company_id: 12 }, null)).toBe(true);
+  });
+  it("leaves non-payment candidate types unchanged", () => {
+    expect(isPaymentCandidateOutsideCompanyScope({ type: "qris_settlement", company_id: null }, 12)).toBe(false);
   });
 });
