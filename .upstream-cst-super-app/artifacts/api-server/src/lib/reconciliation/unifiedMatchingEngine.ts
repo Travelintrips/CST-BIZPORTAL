@@ -2012,6 +2012,21 @@ export async function runUnifiedMatching(
     return { status: "unmatched", all: [] };
   }
 
+  // A payment candidate must point to an actual positive payment identity.
+  // Never persist/approve placeholder payment #0; keep the mutation for review
+  // rather than producing an artificial accounting match.
+  const invalidPaymentCandidates = candidates.filter(c =>
+    c.type === "payment" && (!Number.isSafeInteger(Number(c.id)) || Number(c.id) <= 0)
+  );
+  if (invalidPaymentCandidates.length > 0) {
+    await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
+      status: "manual_review",
+      review_code: "INVALID_PAYMENT_CANDIDATE_ID",
+      invalid_count: invalidPaymentCandidates.length,
+    });
+    return { status: "manual_review", all: [] };
+  }
+
   const scored = dedupeCandidatesByIdentity(candidates)
     .map(c => scoreUnified(matchingMutation, c))
     .sort((a, b) => b.score - a.score);
