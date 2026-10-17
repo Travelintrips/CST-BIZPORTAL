@@ -31,4 +31,25 @@ export function sumQrisSettlementMdr(payments: Array<Parameters<typeof calculate
   return payments.reduce((sum, payment) => sum + calculateQrisMdr(payment), 0);
 }
 
+/** A candidate preview is deliberately not canonical settlement evidence.
+ * Recompute from the current set on every call; a removed or edited payment
+ * must never leave a stale MDR. An incomplete set has no final MDR.
+ */
+export function calculateQrisCandidatePreview(input: {
+  payments: Array<{id: number; amount: number; transactionDate: string; merchantCategory: QrisMerchantCategory}>;
+  candidatesComplete: boolean;
+}) {
+  const unique = new Set(input.payments.map(p => p.id));
+  if (unique.size !== input.payments.length) throw new Error("Duplicate QRIS candidate payment");
+  const gross = input.payments.reduce((sum,p) => sum + p.amount, 0);
+  const mdr = sumQrisSettlementMdr(input.payments);
+  return {
+    grossAmount: gross,
+    provisionalMdrAmount: mdr,
+    mdrAmount: input.candidatesComplete && input.payments.length > 0 ? mdr : null,
+    netAmount: input.candidatesComplete && input.payments.length > 0 ? gross - mdr : null,
+    candidatesComplete: input.candidatesComplete && input.payments.length > 0,
+  };
+}
+
 [executed on device: srv1792369 (0891e23a-6a6b-4f8c-a16a-962e888e2014)]
