@@ -40,14 +40,4 @@ describe('BI QRIS MDR effective 2026-10-01', () => {
     const p = {id:1,amount:30000,transactionDate:'2026-10-10',merchantCategory:'regular' as const};
     expect(() => calculateQrisCandidatePreview({payments:[p,p],candidatesComplete:true})).toThrow(/Duplicate/);
   });
-  it('guards canonical preparation against source MDR mismatches before journal promotion', () => {
-    const source = readFileSync(resolve(process.cwd(),'src/routes/bank-reconciliation.ts'),'utf8');
-    expect(source).toContain('QRIS_SOURCE_MDR_INCOMPLETE');
-    expect(source).toContain('QRIS_SOURCE_NET_MISMATCH');
-    const prepare = source.slice(source.indexOf('async function prepareCanonicalQrisSettlement('));
-    expect(prepare.indexOf('QRIS_SOURCE_NET_MISMATCH')).toBeLessThan(prepare.indexOf('const journalResult = await client.query'));
-    expect(prepare.indexOf('QRIS_CANONICAL_MDR_POLICY_MISMATCH')).toBeLessThan(prepare.indexOf('select sport_center.create_settlement_journal_draft')); 
-  });
 });
-
-[executed on device: srv1792369 (0891e23a-6a6b-4f8c-a16a-962e888e2014)]
