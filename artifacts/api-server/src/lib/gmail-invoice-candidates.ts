@@ -442,6 +442,23 @@ export async function importGmailInvoiceCandidate(args: {
       );
     }
 
+    // The billing period, not the email receipt or invoice issuance date,
+    // governs the July 2026 source invoice cutoff.
+    const periodMarker = candidate.attachment_file_name.match(
+      /Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})/i,
+    );
+    if (periodMarker) {
+      const month = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        .indexOf(periodMarker[1].toUpperCase()) + 1;
+      const year = 2000 + Number(periodMarker[2]);
+      if (year < 2026 || (year === 2026 && month < 7)) {
+        throw Object.assign(
+          new Error("Invoice periode sebelum Juli 2026 disimpan sebagai arsip sumber, tidak diimpor ke Vendor Invoice."),
+          { status: 409, code: "SOURCE_INVOICE_PERIOD_BEFORE_CUTOFF" },
+        );
+      }
+    }
+
     // Never import an attachment already classified as a duplicate.
     // Its source row remains visible for audit, but it cannot create an AP invoice.
     if (candidate.status === "duplicate") {
