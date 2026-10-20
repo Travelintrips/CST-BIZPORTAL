@@ -586,6 +586,13 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
              count(*) over()::int total_count
         from public.vendor_invoices vi
         left join public.accounting_entries ae on ae.id = vi.journal_entry_id
+        left join lateral (
+          select regexp_match(
+            vi.attachment_file_name,
+            'Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)([0-9]{2})',
+            'i'
+          ) as parts
+        ) source_period on true
         ${RECONCILED_PAYMENT_JOIN}
         left join lateral (
           select coalesce(sum(bdi.amount), 0) paid_amount
@@ -597,6 +604,19 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
             and bd.status = 'posted'
         ) pph_payment on true
        where vi.company_id = $1
+         and not (
+           vi.status = 'draft'
+           and vi.invoice_breakdown->>'source' = 'gmail_invoice_source'
+           and source_period.parts is not null
+           and make_date(
+             2000 + source_period.parts[2]::int,
+             array_position(
+               ARRAY['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'],
+               upper(source_period.parts[1])
+             ),
+             1
+           ) < date '2026-07-01'
+         )
        order by vi.created_at desc nulls last, vi.id desc
        limit $2 offset $3
     `, [companyId, pageSize, offset]);

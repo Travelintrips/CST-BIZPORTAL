@@ -1271,9 +1271,9 @@ router.post("/", async (req, res) => {
 
         // ── Path A: vendor_invoice (standalone invoice dari AI Import / direct create) ──
         if (ip.vendorInvoiceId) {
-           const viRows = execRows<{ id: number; grand_total: string; amount_paid: string; invoice_number: string; supplier_name: string }>(
+           const viRows = execRows<{ id: number; grand_total: string; amount_paid: string; invoice_number: string; supplier_name: string; invoice_breakdown: Record<string, unknown> | null }>(
             await db.execute(sql`
-              SELECT id, grand_total, amount_paid, invoice_number, supplier_name
+              SELECT id, grand_total, amount_paid, invoice_number, supplier_name, invoice_breakdown
               FROM vendor_invoices
               WHERE id = ${Number(ip.vendorInvoiceId)}
                 AND company_id = ${companyId}
@@ -1284,6 +1284,14 @@ router.post("/", async (req, res) => {
           const vi = viRows[0];
           if (!vi) {
             return res.status(400).json({ message: `${itemLabel}: Vendor Invoice #${ip.vendorInvoiceId} tidak ditemukan atau belum posted.` });
+          }
+          const relation = vi.invoice_breakdown?.document_relation;
+          if (relation && typeof relation === "object"
+              && (relation as Record<string, unknown>).kind === "supporting_tax_invoice") {
+            return res.status(409).json({
+              code: "SUPPORTING_TAX_INVOICE_NOT_PAYABLE",
+              message: `${itemLabel}: faktur pajak pendukung tidak boleh dibayar terpisah dari invoice utama.`,
+            });
           }
           const viOutstanding = round2(Number(vi.grand_total) - Number(vi.amount_paid ?? 0));
           if (viOutstanding <= 0) {

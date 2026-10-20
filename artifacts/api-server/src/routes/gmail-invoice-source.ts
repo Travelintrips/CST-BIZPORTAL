@@ -726,6 +726,127 @@ router.get(
   },
 );
 
+// Provisional Match INV discovery: read-only evidence, never a payable or an
+// approvable bank-reconciliation match. Actual approval requires a posted VI.
+router.get(
+  "/recon-classification/invoice-sources/gmail/match-proposals",
+  async (req, res) => {
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const companyId = requireCompanyScope(res, actor, req.query.company_id);
+      if (!companyId) return;
+      const mutationId = parsePositiveInt(req.query.mutation_id);
+      if (!mutationId) {
+        res.status(400).json({ error: "mutation_id wajib diisi" });
+        return;
+      }
+      const mutation = await pool.query<{ amount: string; description: string | null }>(
+        `select amount, description from public.bank_mutations
+          where id=$1 and company_id=$2 and direction='OUT' and amount <> 0 limit 1`,
+        [mutationId, companyId],
+      );
+      if (!mutation.rows[0]) {
+        res.status(404).json({ error: "Mutasi pembayaran vendor tidak ditemukan." });
+        return;
+      }
+      const amount = Math.abs(Number(mutation.rows[0].amount));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        res.status(400).json({ error: "Nominal mutasi tidak valid." });
+        return;
+      }
+      const result = await pool.query<{
+        id: number; extracted_vendor_name: string | null;
+        extracted_invoice_number: string | null; extracted_total: string;
+        attachment_file_name: string; source_email: string; extracted_json: unknown;
+      }>(
+        `select s.id, s.extracted_vendor_name, s.extracted_invoice_number,
+                s.extracted_total, s.attachment_file_name, s.source_email, s.extracted_json
+           from public.gmail_invoice_candidates s
+          where s.company_id=$1
+            and s.status='ready' and s.extraction_status='complete'
+            and s.vendor_invoice_id is null
+            and coalesce(s.extracted_total,0) > 0
+            and nullif(trim(s.extracted_vendor_name),'') is not null
+            and nullif(trim(s.extracted_invoice_number),'') is not null
+            and s.attachment_file_name !~* '^srt([[:space:]_.-]|$)'
+            and s.attachment_file_name !~* '(^|[/_])FK[_-]'
+            and exists (
+              select 1
+                from regexp_match(s.attachment_file_name,
+                  'Per[. _-]*Posting(JUL|AUG|SEP|OCT|NOV|DEC)26|Per[. _-]*Posting(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(2[7-9]|[3-9][0-9])',
+                  'i') as detected
+            )
+            and not exists (
+              select 1 from public.vendor_invoices vi
+               where vi.company_id=s.company_id
+                 and lower(coalesce(vi.vendor_invoice_ref,''))=lower(coalesce(s.extracted_invoice_number,''))
+                 and coalesce(s.extracted_invoice_number,'') <> ''
+            )
+          order by s.received_at desc nulls last, s.id desc limit 200`,
+        [companyId],
+      );
+      res.json({
+        mutationId,
+        provisional: true,
+        approvable: false,
+        requires: "Finance Review, verified primary Vendor Invoice, posting and normal Match INV controls",
+        candidates: result.rows.flatMap((row) => {
+          const data = row.extracted_json && typeof row.extracted_json === "object"
+            ? row.extracted_json as Record<string, unknown> : {};
+          const lines = Array.isArray(data.line_items) ? data.line_items : [];
+          const breakdown: Array<{ label: string; dpp: number; rate: number; pph: number }> = [];
+          // Only explicit PPh labels may provide a proposed withholding amount.
+          // The generic OCR "tax" field is VAT and must NOT be treated as PPh.
+          for (const value of lines) {
+            if (!value || typeof value !== "object") continue;
+            const line = value as Record<string, unknown>;
+            const label = String(line.description ?? "");
+            const rate = /konsesi.*pph.*23.*15\s*%/i.test(label) ? 0.15
+              : /pemakaian\s+(?:listrik|air).*pph.*4.*2.*10\s*%/i.test(label) ? 0.10 : null;
+            const total = Number(line.total);
+            const vat = Number(line.tax);
+            if (rate === null || !Number.isFinite(total) || !Number.isFinite(vat)
+              || total <= vat || vat < 0) continue;
+            const dpp = total - vat;
+            breakdown.push({ label, dpp, rate, pph: Math.round(dpp * rate * 100) / 100 });
+          }
+          const pphAmount = breakdown.length && breakdown.length === lines.length
+            ? Math.round(breakdown.reduce((sum, item) => sum + item.pph, 0) * 100) / 100
+            : null;
+          const grossAmount = Number(row.extracted_total);
+          const estimatedNetAmount = pphAmount == null ? null
+            : Math.round((grossAmount - pphAmount) * 100) / 100;
+          const matchesGross = Math.abs(grossAmount - amount) < 0.01;
+          const matchesNet = estimatedNetAmount !== null && Math.abs(estimatedNetAmount - amount) < 0.01;
+          if (!matchesGross && !matchesNet) return [];
+          return [{
+            sourceCandidateId: row.id,
+            source: "gmail_invoice_candidates",
+            vendorName: row.extracted_vendor_name,
+            reference: row.extracted_invoice_number,
+            grossAmount,
+            pphAmount,
+            pphBreakdown: breakdown,
+            pphStatus: pphAmount == null ? "needs_finance_review" : "estimated_from_invoice_labels",
+            estimatedNetAmount,
+            matchBasis: matchesNet ? "net_after_pph" : "gross",
+            attachmentFileName: row.attachment_file_name,
+            sourceEmail: row.source_email,
+            reason: pphAmount === null
+              ? "Nominal bruto cocok; PPh perlu Finance Review."
+              : "PPh dihitung dari label tarif invoice; jenis objek pajak dan seluruh nilai menunggu Finance Review.",
+          }];
+        }).slice(0, 25),
+      });
+    } catch (error) {
+      req.log.error({ error }, "Failed to discover Gmail source invoice proposals");
+      res.status(503).json({ error: "Kandidat sementara Sumber INV belum dapat dimuat." });
+    }
+  },
+);
+
+
 router.get(
   "/recon-classification/invoice-sources/gmail/candidates",
   async (req, res) => {

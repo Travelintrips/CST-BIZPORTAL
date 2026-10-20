@@ -8316,6 +8316,34 @@ export default function BankReconciliationPage() {
   const [selectedQrisPaymentIds, setSelectedQrisPaymentIds] = useState<Record<number, number[]>>({});
   const [selectedCandidateByMutation, setSelectedCandidateByMutation] = useState<Record<number, number | null>>({});
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
+  // Read-only Gmail Source INV proposals are evidence, not approvable candidates.
+  const gmailSourceProposals = useQuery<{
+    provisional: boolean;
+    candidates: Array<{
+      sourceCandidateId: number; vendorName: string | null;
+      reference: string | null; grossAmount: number; reason: string;
+      pphAmount: number | null; pphStatus: string; estimatedNetAmount: number | null;
+      pphBreakdown: Array<{ label: string; dpp: number; rate: number; pph: number }>;
+      matchBasis: "gross" | "net_after_pph";
+    }>;
+  }>({
+    queryKey: ["gmail-match-proposals", activeCompanyId, actionDialog?.mutation.id],
+    enabled: actionDialog?.mode === "approve"
+      && actionDialog.mutation.direction === "OUT"
+      && activeCompanyId != null && activeCompanyId > 0,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        company_id: String(activeCompanyId),
+        mutation_id: String(actionDialog!.mutation.id),
+      });
+      const response = await fetch(
+        `/api/recon-classification/invoice-sources/gmail/match-proposals?${params}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error("Kandidat Sumber INV gagal dibaca.");
+      return response.json();
+    },
+  });
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
   const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
@@ -11618,6 +11646,29 @@ export default function BankReconciliationPage() {
                 </p>
               </div>
 
+              {gmailSourceProposals.data?.candidates.length ? (
+                <div className="rounded-lg border border-amber-300 p-3 space-y-2 text-sm">
+                  <p className="font-semibold">Sumber INV — kandidat sementara (belum diposting)</p>
+                  {gmailSourceProposals.data.candidates.map((source) => (
+                    <div key={source.sourceCandidateId} className="rounded bg-muted/50 p-2">
+                      <p className="font-medium">{source.vendorName || "Vendor belum dikenali"} · {source.reference || "Tanpa nomor invoice"}</p>
+                      <p>Bruto: {idr(source.grossAmount)}</p>
+                      <p>PPh: {source.pphAmount == null ? "Belum tersedia — perlu Finance Review" : idr(source.pphAmount)}</p>
+                      {source.pphBreakdown?.map((line, index) => (
+                        <p key={index} className="text-xs text-muted-foreground">
+                          {line.label}: DPP {idr(line.dpp)} × {line.rate * 100}% = {idr(line.pph)}
+                        </p>
+                      ))}
+                      <p className="text-xs">Pencocokan: {source.matchBasis === "net_after_pph" ? "Neto setelah PPh" : "Bruto"}</p>
+                      <p>Estimasi neto: {source.estimatedNetAmount == null ? "Belum dapat dihitung" : idr(source.estimatedNetAmount)}</p>
+                      <p className="text-xs text-muted-foreground">{source.reason}</p>
+                    </div>
+                  ))}
+                  <p className="text-xs text-amber-700">
+                    Hanya untuk pemeriksaan. Impor sebagai invoice utama, selesaikan Finance Review dan posting sebelum dapat dipilih atau disetujui di Match INV.
+                  </p>
+                </div>
+              ) : null}
               {/* Candidate selection */}
               {approveDialogCands.length > 0 ? (
                 <div className="space-y-2">

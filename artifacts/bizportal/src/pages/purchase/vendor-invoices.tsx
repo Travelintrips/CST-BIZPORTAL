@@ -76,6 +76,7 @@ interface VI {
   withholdingTaxAmount?: string | number | null;
   withholding_tax_amount?: string | number | null;
   invoiceBreakdown?: {
+    document_relation?: { kind?: string; primary_invoice_number?: string };
     components?: VIInvoiceBreakdownComponent[];
     totals?: {
       withholding_tax_amount?: string | number | null;
@@ -1147,6 +1148,8 @@ export function VendorInvoiceEditorPage() {
       estimatedNet: Math.max(0, summaryGrandTotal - summaryWithholding),
       outstanding: 0,
     };
+  const supportingTaxDocument = vi?.invoiceBreakdown?.document_relation?.kind === "supporting_tax_invoice";
+  const primaryInvoiceReference = vi?.invoiceBreakdown?.document_relation?.primary_invoice_number;
   const estimatedNetPayment = paymentSummary.estimatedNet;
   const amountPaid = paymentSummary.amountPaid;
   const outstandingPayment = paymentSummary.outstanding;
@@ -1154,6 +1157,13 @@ export function VendorInvoiceEditorPage() {
   return (
     <AppShell>
       <div className="flex flex-col gap-6 max-w-7xl">
+        {supportingTaxDocument && (
+          <div role="alert" className="rounded-lg border border-amber-500 bg-amber-950/20 px-4 py-3 text-sm">
+            Faktur pajak ini adalah dokumen pendukung untuk {primaryInvoiceReference || "invoice utama"}.
+            Tidak boleh diposting atau dibayar sebagai tagihan vendor kedua.
+          </div>
+        )}
+
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate("/purchase/vendor-invoices")}><ChevronLeft className="h-4 w-4" /></Button>
           <div className="flex-1">
@@ -1167,7 +1177,7 @@ export function VendorInvoiceEditorPage() {
           </div>
           <div className="flex gap-2">
             {isDraft && <Button variant="outline" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>Simpan</Button>}
-            {!isNew && isDraft && (
+            {!isNew && isDraft && !supportingTaxDocument && (
               <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => postMut.mutate()} disabled={postMut.isPending || saveMut.isPending || liabilityAccountsLoading}>
                 <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
               </Button>
@@ -1209,7 +1219,7 @@ export function VendorInvoiceEditorPage() {
         </div>
 
         {/* Banner: draft — perlu dipost sebelum bisa dibayar */}
-        {!isNew && isDraft && (
+        {!isNew && isDraft && !supportingTaxDocument && (
           <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
             <span className="text-lg">⚠️</span>
             <div>
@@ -1275,7 +1285,10 @@ export function VendorInvoiceEditorPage() {
             <CardContent className="space-y-2">
               <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(summarySubtotal)}</span></div>
               <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(summaryTax)}</span></div>
-              <div className="flex justify-between text-amber-600"><span>PPh dipotong saat bayar</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
+              <div className="flex justify-between text-amber-600"><span>{supportingTaxDocument ? "PPh (dicatat di invoice utama)" : "PPh dipotong saat bayar"}</span><span className="font-mono">{supportingTaxDocument ? "—" : idr(summaryWithholding)}</span></div>
+              {!supportingTaxDocument && (vi?.lineTaxes ?? []).some((tax) => Number(tax.taxAmount) > 0 && !["confirmed", "approved"].includes(String(tax.resolutionStatus ?? ""))) && (
+                <p role="status" className="text-xs text-amber-700">Nilai PPh berasal dari rincian pajak yang tersimpan dan masih menunggu Finance Review; belum disahkan untuk posting atau pembayaran.</p>
+              )}
               <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total (bruto)</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
               <div className="flex justify-between font-semibold text-blue-600 border-t pt-2"><span>Estimasi transfer (neto)</span><span className="font-mono">{idr(estimatedNetPayment)}</span></div>
               {vi && (

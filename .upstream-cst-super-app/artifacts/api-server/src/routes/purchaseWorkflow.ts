@@ -921,7 +921,23 @@ router.get("/vendor-invoices", async (req, res) => {
   const rows = await db.select().from(vendorInvoicesTable)
     .where(eq(vendorInvoicesTable.companyId, companyId))
     .orderBy(desc(vendorInvoicesTable.createdAt));
-  res.json(rows);
+  // Hide pre-July Gmail imports from the active working list only.
+  // Keep posted/paid/cancelled entries and all manual invoices in audit history.
+  const visible = rows.filter((invoice) => {
+    if (invoice.status !== "draft") return true;
+    const breakdown = invoice.invoiceBreakdown;
+    if (!breakdown || typeof breakdown !== "object"
+        || (breakdown as Record<string, unknown>).source !== "gmail_invoice_source") return true;
+    const marker = String(invoice.attachmentFileName ?? "").match(
+      /Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})/i,
+    );
+    if (!marker) return true; // Unknown period: preserve visibility for manual review.
+    const month = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+      .indexOf(marker[1].toUpperCase()) + 1;
+    const year = 2000 + Number(marker[2]);
+    return year > 2026 || (year === 2026 && month >= 7);
+  });
+  res.json(visible);
 });
 
 // Static endpoints must precede /:id, otherwise Express treats their names as
@@ -1947,6 +1963,21 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   const id = Number(req.params.id);
   const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
+  // A tax invoice is evidence for the primary payable, never a second payable.
+  // This guard applies to every supplier and every historical supporting document.
+  const relation = vi.invoiceBreakdown && typeof vi.invoiceBreakdown === "object"
+    ? (vi.invoiceBreakdown as Record<string, unknown>).document_relation
+    : null;
+  if (relation && typeof relation === "object"
+      && (relation as Record<string, unknown>).kind === "supporting_tax_invoice") {
+    const primary = (relation as Record<string, unknown>).primary_invoice_number;
+    res.status(409).json({
+      code: "SUPPORTING_TAX_INVOICE_NOT_PAYABLE",
+      error: `Faktur pajak pendukung tidak boleh diposting sebagai utang vendor terpisah. Buka invoice utama ${String(primary || "terkait")}.`,
+      primaryInvoiceNumber: primary ?? null,
+    });
+    return;
+  }
   if (vi.status !== "draft") { res.status(400).json({ error: "Already posted" }); return; }
 
   // 3-way match check
