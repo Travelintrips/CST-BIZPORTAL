@@ -8798,6 +8798,141 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
   }
 });
 
+// Cancel only this provisional review record. Never undo approved financial matching.
+router.delete("/bank-reconciliation/:mutationId/vendor-invoice-draft-link/:invoiceId", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const invoiceId = parsePositiveInt(req.params.invoiceId);
+  const companyId = parsePositiveInt(req.header("x-company-id"));
+  if (mutationId == null || invoiceId == null || companyId == null) {
+    res.status(400).json({ error: "ID mutasi, invoice, atau perusahaan tidak valid" }); return;
+  }
+  const actor = await getApprovalActor(req);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Akses perusahaan tidak sesuai" }); return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = (await client.query<{ status: string; journal_entry_id: number | null }>(
+      "select status, journal_entry_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId, companyId],
+    )).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan", 404, "MUTATION_NOT_FOUND");
+    if (mutation.journal_entry_id != null || ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
+      throw new ApprovalError("Mutasi sudah diproses; link tidak boleh dibatalkan lewat jalur ini", 409, "MUTATION_ALREADY_PROCESSED");
+    }
+    const ownedInvoice = (await client.query<{ id: number }>(
+      "select id from public.vendor_invoices where id=$1 and company_id=$2", [invoiceId, companyId],
+    )).rows[0];
+    if (!ownedInvoice) throw new ApprovalError("Invoice tidak ditemukan dalam perusahaan ini", 404, "INVOICE_NOT_FOUND");
+    const removed = await client.query<{ id: number }>(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and candidate_id=$2
+          and candidate_type='vendor_invoice_draft_review'
+          and candidate_source='public.vendor_invoices'
+          and status='provisional_review'
+        returning id`,
+      [mutationId, invoiceId],
+    );
+    if (removed.rows.length > 0) {
+      await client.query(
+        "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+        [mutationId, "VENDOR_DRAFT_PROVISIONAL_UNLINK", actor.email,
+          JSON.stringify({ invoice_id: invoiceId, company_id: companyId, candidate_ids: removed.rows.map((r) => r.id) })],
+      );
+    }
+    await client.query("commit");
+    res.json({ linked: false, removed: removed.rows.length, invoiceId, mutationId });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code }); return; }
+    req.log.error({ error, mutationId, invoiceId }, "Draft vendor unlink failed");
+    res.status(503).json({ error: "Pembatalan Link Sementara gagal" });
+  } finally { client.release(); }
+});
+
+// Persistent provisional draft-to-bank candidate. Never creates payments or journal entries.
+router.post("/bank-reconciliation/:mutationId/vendor-invoice-draft-link", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const companyId = parsePositiveInt(req.header("x-company-id"));
+  const invoiceId = parsePositiveInt(req.body?.vendor_invoice_id);
+  if (mutationId == null || companyId == null || invoiceId == null) {
+    res.status(400).json({ error: "ID mutasi, perusahaan, atau invoice tidak valid" }); return;
+  }
+  const actor = await getApprovalActor(req);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Akses perusahaan tidak sesuai" }); return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = (await client.query<{
+      status: string; direction: string; journal_entry_id: number | null; bank_account_id: string | null;
+    }>(
+      "select status, direction, journal_entry_id, bank_account_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId, companyId],
+    )).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan", 404, "MUTATION_NOT_FOUND");
+    if (String(mutation.direction).toUpperCase() !== "OUT") {
+      throw new ApprovalError("Hanya mutasi keluar yang bisa dikaitkan dengan INV Vendor", 422, "INVALID_DIRECTION");
+    }
+    if (mutation.journal_entry_id != null || ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
+      throw new ApprovalError("Mutasi sudah diproses; Link Sementara tidak diizinkan", 409, "MUTATION_ALREADY_PROCESSED");
+    }
+    if (await isKasBesarScReconciliationAccount(client, companyId, mutation.bank_account_id)) {
+      throw new ApprovalError("Match INV Vendor nonaktif untuk Kas Besar SC", 422, "MATCH_DISABLED_KAS_BESAR_SC");
+    }
+    const invoice = (await client.query<{
+      status: string; invoice_breakdown: Record<string, unknown> | null;
+      attachment_file_name: string | null;
+    }>(
+      "select status::text status, invoice_breakdown, attachment_file_name from public.vendor_invoices where id=$1 and company_id=$2 for update",
+      [invoiceId, companyId],
+    )).rows[0];
+    if (!invoice || invoice.status !== "draft") {
+      throw new ApprovalError("Kandidat harus invoice Draft milik perusahaan ini", 422, "INVOICE_NOT_ELIGIBLE");
+    }
+    const relation = invoice.invoice_breakdown?.document_relation as Record<string, unknown> | undefined;
+    if (relation?.kind === "supporting_tax_invoice") {
+      throw new ApprovalError("Faktur pajak pendukung bukan invoice utama", 409, "SUPPORTING_DOCUMENT");
+    }
+    // Pre-July 2026 source Gmail documents remain available for audit, not new active links.
+    const period = String(invoice.attachment_file_name ?? "").match(/Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN)(26)/i);
+    if (invoice.invoice_breakdown?.source === "gmail_invoice_source" && period) {
+      throw new ApprovalError("Periode sebelum Juli 2026 hanya untuk histori", 409, "SOURCE_PERIOD_CUTOFF");
+    }
+    await client.query(
+      `insert into public.bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match,
+         status, candidate_source, is_manual)
+       select $1, 'vendor_invoice_draft_review', $2, 0,
+              'Provisional draft link; no payment, posting or journal',
+              false, false, false, false, false,
+              'provisional_review', 'public.vendor_invoices', true
+       where not exists (
+         select 1 from public.bank_reconciliation_matches
+         where mutation_id=$1 and candidate_type='vendor_invoice_draft_review'
+           and candidate_id=$2 and status='provisional_review'
+       )`,
+      [mutationId, invoiceId],
+    );
+    await client.query(
+      "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+      [mutationId, "VENDOR_DRAFT_PROVISIONAL_LINK", actor.email, JSON.stringify({ invoice_id: invoiceId, company_id: companyId })],
+    );
+    await client.query("commit");
+    res.json({ linked: true, provisional: true, invoiceId, mutationId, paymentPosted: false });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code }); return; }
+    req.log.error({ error, mutationId, companyId }, "Draft vendor provisional link failed");
+    res.status(503).json({ error: "Link Sementara tidak berhasil disimpan" });
+  } finally { client.release(); }
+});
+
 router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
   const companyId = parsePositiveInt(req.header("x-company-id") ?? req.query.company);
@@ -8981,6 +9116,13 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
       [draftIds],
     );
 
+    const savedDraftLinks = await pool.query<{ candidate_id: number }>(
+      `select candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and candidate_type='vendor_invoice_draft_review'
+          and status='provisional_review'`,
+      [mutationId],
+    );
+    const savedDraftIds = new Set(savedDraftLinks.rows.map((row) => Number(row.candidate_id)));
     res.json({
       draftInvoices: draftResult.rows.map((row) => ({
         id: row.id,
@@ -8998,6 +9140,7 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         })),
         netPayable: Math.max(0, Number(row.grand_total) - Math.max(0, Number(row.withholding_tax_amount ?? 0))),
         status: "draft",
+        provisionalLinked: savedDraftIds.has(row.id),
         selectable: false,
         reason: "Posting dan Finance Review wajib selesai sebelum invoice dapat dialokasikan ke mutasi.",
       })),
