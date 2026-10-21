@@ -3443,6 +3443,7 @@ function VendorInvoicePaymentDialog({
   const [allocationAmounts, setAllocationAmounts] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
   const [reviewDraftIds, setReviewDraftIds] = useState<number[]>([]);
+  const [savingDraftId, setSavingDraftId] = useState<number | null>(null);
   const companyId = mutation?.company_id ?? null;
   const mutationAmount = Number(mutation?.amount ?? 0);
 
@@ -3464,6 +3465,7 @@ function VendorInvoicePaymentDialog({
           taxReviewStatus: string | null; status: "draft"; selectable: false; reason: string;
           invoiceBreakdown?: OutstandingVendorInvoice["invoiceBreakdown"];
           netPayable: number;
+          provisionalLinked?: boolean;
           withholdingLines: Array<{ taxType: string; taxObject: string; amount: number;
             baseAmount: number; coaCode: string | null; coaName: string | null }>;
         }>,
@@ -3473,6 +3475,23 @@ function VendorInvoicePaymentDialog({
   });
 
   const draftInvoices = invoicesQuery.data?.draftInvoices ?? [];
+  const saveDraftCandidate = async (invoiceId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-draft-link`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ vendor_invoice_id: invoiceId }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal menyimpan kandidat sementara");
+      await invoicesQuery.refetch();
+      toast({ title: "Kandidat invoice tersimpan", description: "Link sementara tercatat tanpa jurnal atau pembayaran." });
+    } catch (error) {
+      toast({ title: "Gagal menyimpan kandidat", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const invoices = (invoicesQuery.data?.invoices ?? []).filter(
     (invoice) =>
       invoice.source === "vendor_invoice"
@@ -3796,7 +3815,13 @@ function VendorInvoicePaymentDialog({
                           <div>{tax.coaCode ? `${tax.coaCode} — ${tax.coaName || "COA"}` : "COA Hutang PPh belum dipetakan"}</div>
                         </div>
                       ))}
-                      <p className="text-amber-700">Kandidat pratinjau saja — tidak termasuk pada tombol Match &amp; Bayar Invoice.</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" variant="outline" disabled={savingDraftId === invoice.id || invoice.provisionalLinked}
+                          onClick={() => saveDraftCandidate(invoice.id)}>
+                          {invoice.provisionalLinked ? "Link sementara tersimpan" : savingDraftId === invoice.id ? "Menyimpan…" : "Simpan sebagai kandidat mutasi"}
+                        </Button>
+                        <span className="text-amber-700">Tidak melakukan Match &amp; Bayar, posting, atau penjurnalan.</span>
+                      </div>
                     </div>
                   )}
                 </div>
