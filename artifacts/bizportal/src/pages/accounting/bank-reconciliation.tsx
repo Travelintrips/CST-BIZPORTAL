@@ -3475,6 +3475,21 @@ function VendorInvoicePaymentDialog({
   });
 
   const draftInvoices = invoicesQuery.data?.draftInvoices ?? [];
+  const removeDraftCandidate = async (invoiceId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-draft-link/${invoiceId}`, {
+        method: "DELETE", credentials: "include", headers: { "x-company-id": String(companyId) },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal membatalkan kandidat");
+      await invoicesQuery.refetch();
+      toast({ title: "Link kandidat dibatalkan", description: "Hanya link sementara yang dibatalkan; tidak ada jurnal yang diubah." });
+    } catch (error) {
+      toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const saveDraftCandidate = async (invoiceId: number) => {
     if (!mutation || !companyId) return;
     setSavingDraftId(invoiceId);
@@ -3820,6 +3835,12 @@ function VendorInvoicePaymentDialog({
                           onClick={() => saveDraftCandidate(invoice.id)}>
                           {invoice.provisionalLinked ? "Link sementara tersimpan" : savingDraftId === invoice.id ? "Menyimpan…" : "Simpan sebagai kandidat mutasi"}
                         </Button>
+                        {invoice.provisionalLinked && (
+                          <Button size="sm" variant="outline" disabled={savingDraftId === invoice.id}
+                            onClick={() => removeDraftCandidate(invoice.id)}>
+                            Batalkan Link Sementara
+                          </Button>
+                        )}
                         <span className="text-amber-700">Tidak melakukan Match &amp; Bayar, posting, atau penjurnalan.</span>
                       </div>
                     </div>
