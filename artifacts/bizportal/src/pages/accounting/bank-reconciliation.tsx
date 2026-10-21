@@ -838,6 +838,9 @@ interface OutstandingVendorInvoice {
   grandTotal: number;
   amountPaid: number;
   outstanding: number;
+  withholdingTotal?: number;
+  netPayable?: number;
+  withholdingReady?: boolean;
   taxReviewStatus?: string | null;
   withholdingTaxAmount?: number;
   dueDate?: string | null;
@@ -3452,12 +3455,20 @@ function VendorInvoicePaymentDialog({
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message ?? body.error ?? "Gagal memuat invoice vendor");
-      return (body.invoices ?? []) as OutstandingVendorInvoice[];
+      return {
+        invoices: (body.invoices ?? []) as OutstandingVendorInvoice[],
+        draftInvoices: (body.draftInvoices ?? []) as Array<{
+          id: number; docNumber: string; billNumber: string | null;
+          supplierName: string; grandTotal: number; withholdingTaxAmount: number | null;
+          taxReviewStatus: string | null; status: "draft"; selectable: false; reason: string;
+        }>,
+      };
     },
     staleTime: 0,
   });
 
-  const invoices = (invoicesQuery.data ?? []).filter(
+  const draftInvoices = invoicesQuery.data?.draftInvoices ?? [];
+  const invoices = (invoicesQuery.data?.invoices ?? []).filter(
     (invoice) =>
       invoice.source === "vendor_invoice"
       && Number(invoice.outstanding) > 0.01,
@@ -3518,7 +3529,10 @@ function VendorInvoicePaymentDialog({
     const allocatedElsewhere = invoices
       .filter((candidate) => selectedWithoutInvoice.includes(candidate.id))
       .reduce((sum, candidate) => sum + Number(allocationAmounts[candidate.id] ?? 0), 0);
-    return Math.max(0, Math.min(Number(invoice.outstanding), mutationAmount - allocatedElsewhere));
+    const netAfterPph = Number(invoice.netPayable);
+    const suggested = Number.isFinite(netAfterPph) && netAfterPph > 0 && invoice.withholdingReady
+      ? netAfterPph : Number(invoice.outstanding);
+    return Math.max(0, Math.min(suggested, mutationAmount - allocatedElsewhere));
   };
   const selectedTotal = selectedInvoices.reduce(
     (sum, invoice) => sum + Number(allocationAmounts[invoice.id] ?? 0),
@@ -3738,6 +3752,24 @@ function VendorInvoicePaymentDialog({
               Tidak ada invoice vendor dengan saldo belum tersettle pada perusahaan aktif.
             </p>
           )}
+          {draftInvoices.length > 0 && (
+            <div className="rounded-md border border-amber-300 p-3 space-y-2 text-sm">
+              <p className="font-semibold">INV Vendor — Draft (belum dapat dipilih)</p>
+              <p className="text-xs text-muted-foreground">Invoice berikut sudah tercatat di INV Vendor. Selesaikan Finance Review dan posting terlebih dahulu agar tersedia sebagai kandidat pembayaran.</p>
+              {draftInvoices.map((invoice) => (
+                <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+                  <div>
+                    <div className="font-medium">{invoice.billNumber || invoice.docNumber}</div>
+                    <div className="text-xs text-muted-foreground">{invoice.supplierName} · Draft · {invoice.taxReviewStatus || "PPh belum direview"}</div>
+                  </div>
+                  <div className="text-right">
+                    <div>{idr(invoice.grandTotal)}</div>
+                    <div className="text-xs text-muted-foreground">PPh tercatat: {invoice.withholdingTaxAmount == null ? "Perlu review" : idr(invoice.withholdingTaxAmount)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {invoices.length > 0 && (
             <div className="overflow-x-auto rounded-md border">
               <Table className="min-w-[1050px]">
@@ -3864,6 +3896,12 @@ function VendorInvoicePaymentDialog({
                                placeholder={checked ? "Masukkan nominal" : "Pilih invoice"}
                                aria-label={`Nominal alokasi ${invoice.billNumber ?? invoice.docNumber}`}
                              />
+                             {Number(invoice.withholdingTotal ?? 0) > 0 && (
+                               <div className="mt-1 text-[11px] text-blue-700">
+                                 PPh {idr(Number(invoice.withholdingTotal))} · Neto {idr(Number(invoice.netPayable ?? 0))}
+                                 {invoice.withholdingReady ? " · Siap dicocokkan" : " · COA PPh perlu Finance Review"}
+                               </div>
+                             )}
                              {checked && withholdingForInvoice(invoice) > 0 && (
                                <div className="mt-1 text-[11px] text-muted-foreground">
                                  Net penuh setelah PPh: {idr(Math.max(0, Number(invoice.outstanding) - withholdingForInvoice(invoice)))}

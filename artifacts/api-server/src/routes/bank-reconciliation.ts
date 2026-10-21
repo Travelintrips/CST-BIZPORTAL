@@ -8943,7 +8943,38 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
       withholdingByInvoice.set(row.invoice_id, rows);
     }
 
+    // Drafts appear for review only; this response never makes them eligible
+    // for payment allocation or accounting posting.
+    const draftResult = await pool.query<{
+      id: number; invoice_number: string; vendor_invoice_ref: string | null;
+      supplier_name: string; grand_total: string; withholding_tax_amount: string | null;
+      tax_review_status: string | null;
+    }>(
+      `select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
+              vi.grand_total, vi.withholding_tax_amount, vi.tax_review_status
+         from public.vendor_invoices vi
+        where vi.company_id = $1
+          and vi.status::text = 'draft'
+          and coalesce(vi.invoice_breakdown->'document_relation'->>'kind', '')
+              <> 'supporting_tax_invoice'
+        order by vi.created_at desc nulls last, vi.id desc
+        limit 100`,
+      [companyId],
+    );
+
     res.json({
+      draftInvoices: draftResult.rows.map((row) => ({
+        id: row.id,
+        docNumber: row.invoice_number,
+        billNumber: row.vendor_invoice_ref,
+        supplierName: row.supplier_name,
+        grandTotal: Number(row.grand_total),
+        withholdingTaxAmount: row.withholding_tax_amount == null ? null : Number(row.withholding_tax_amount),
+        taxReviewStatus: row.tax_review_status,
+        status: "draft",
+        selectable: false,
+        reason: "Posting dan Finance Review wajib selesai sebelum invoice dapat dialokasikan ke mutasi.",
+      })),
       invoices: result.rows.map((row) => ({
         id: row.id,
         docNumber: row.invoice_number,
@@ -8954,6 +8985,9 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         grandTotal: Number(row.grand_total),
         amountPaid: Number(row.canonical_paid),
         outstanding: Number(row.remaining_net),
+        withholdingTotal: Math.round((withholdingByInvoice.get(row.id) ?? []).reduce((sum, tax) => sum + Math.max(0, Number(tax.tax_amount)), 0) * 100) / 100,
+        netPayable: Math.max(0, Math.round((Number(row.remaining_net) - (withholdingByInvoice.get(row.id) ?? []).reduce((sum, tax) => sum + Math.max(0, Number(tax.tax_amount)), 0)) * 100) / 100),
+        withholdingReady: (withholdingByInvoice.get(row.id) ?? []).every((tax) => Number(tax.tax_amount) <= 0 || (tax.liability_account_id != null && Number(tax.liability_account_id) > 0)),
         dueDate: row.due_date,
         withholdingTaxAmount: row.withholding_tax_amount == null ? undefined : Number(row.withholding_tax_amount),
         invoiceBreakdown: row.invoice_breakdown,
