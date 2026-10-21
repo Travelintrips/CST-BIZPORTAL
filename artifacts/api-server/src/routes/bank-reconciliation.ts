@@ -8798,6 +8798,60 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
   }
 });
 
+// Cancel only this provisional review record. Never undo approved financial matching.
+router.delete("/bank-reconciliation/:mutationId/vendor-invoice-draft-link/:invoiceId", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const invoiceId = parsePositiveInt(req.params.invoiceId);
+  const companyId = parsePositiveInt(req.header("x-company-id"));
+  if (mutationId == null || invoiceId == null || companyId == null) {
+    res.status(400).json({ error: "ID mutasi, invoice, atau perusahaan tidak valid" }); return;
+  }
+  const actor = await getApprovalActor(req);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Akses perusahaan tidak sesuai" }); return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = (await client.query<{ status: string; journal_entry_id: number | null }>(
+      "select status, journal_entry_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId, companyId],
+    )).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan", 404, "MUTATION_NOT_FOUND");
+    if (mutation.journal_entry_id != null || ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
+      throw new ApprovalError("Mutasi sudah diproses; link tidak boleh dibatalkan lewat jalur ini", 409, "MUTATION_ALREADY_PROCESSED");
+    }
+    const ownedInvoice = (await client.query<{ id: number }>(
+      "select id from public.vendor_invoices where id=$1 and company_id=$2", [invoiceId, companyId],
+    )).rows[0];
+    if (!ownedInvoice) throw new ApprovalError("Invoice tidak ditemukan dalam perusahaan ini", 404, "INVOICE_NOT_FOUND");
+    const removed = await client.query<{ id: number }>(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and candidate_id=$2
+          and candidate_type='vendor_invoice_draft_review'
+          and candidate_source='public.vendor_invoices'
+          and status='provisional_review'
+        returning id`,
+      [mutationId, invoiceId],
+    );
+    if (removed.rows.length > 0) {
+      await client.query(
+        "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+        [mutationId, "VENDOR_DRAFT_PROVISIONAL_UNLINK", actor.email,
+          JSON.stringify({ invoice_id: invoiceId, company_id: companyId, candidate_ids: removed.rows.map((r) => r.id) })],
+      );
+    }
+    await client.query("commit");
+    res.json({ linked: false, removed: removed.rows.length, invoiceId, mutationId });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error: error.message, code: error.code }); return; }
+    req.log.error({ error, mutationId, invoiceId }, "Draft vendor unlink failed");
+    res.status(503).json({ error: "Pembatalan Link Sementara gagal" });
+  } finally { client.release(); }
+});
+
 // Persistent provisional draft-to-bank candidate. Never creates payments or journal entries.
 router.post("/bank-reconciliation/:mutationId/vendor-invoice-draft-link", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
