@@ -838,6 +838,9 @@ interface OutstandingVendorInvoice {
   grandTotal: number;
   amountPaid: number;
   outstanding: number;
+  withholdingTotal?: number;
+  netPayable?: number;
+  withholdingReady?: boolean;
   taxReviewStatus?: string | null;
   withholdingTaxAmount?: number;
   dueDate?: string | null;
@@ -3526,7 +3529,10 @@ function VendorInvoicePaymentDialog({
     const allocatedElsewhere = invoices
       .filter((candidate) => selectedWithoutInvoice.includes(candidate.id))
       .reduce((sum, candidate) => sum + Number(allocationAmounts[candidate.id] ?? 0), 0);
-    return Math.max(0, Math.min(Number(invoice.outstanding), mutationAmount - allocatedElsewhere));
+    const netAfterPph = Number(invoice.netPayable);
+    const suggested = Number.isFinite(netAfterPph) && netAfterPph > 0 && invoice.withholdingReady
+      ? netAfterPph : Number(invoice.outstanding);
+    return Math.max(0, Math.min(suggested, mutationAmount - allocatedElsewhere));
   };
   const selectedTotal = selectedInvoices.reduce(
     (sum, invoice) => sum + Number(allocationAmounts[invoice.id] ?? 0),
@@ -3890,6 +3896,12 @@ function VendorInvoicePaymentDialog({
                                placeholder={checked ? "Masukkan nominal" : "Pilih invoice"}
                                aria-label={`Nominal alokasi ${invoice.billNumber ?? invoice.docNumber}`}
                              />
+                             {Number(invoice.withholdingTotal ?? 0) > 0 && (
+                               <div className="mt-1 text-[11px] text-blue-700">
+                                 PPh {idr(Number(invoice.withholdingTotal))} · Neto {idr(Number(invoice.netPayable ?? 0))}
+                                 {invoice.withholdingReady ? " · Siap dicocokkan" : " · COA PPh perlu Finance Review"}
+                               </div>
+                             )}
                              {checked && withholdingForInvoice(invoice) > 0 && (
                                <div className="mt-1 text-[11px] text-muted-foreground">
                                  Net penuh setelah PPh: {idr(Math.max(0, Number(invoice.outstanding) - withholdingForInvoice(invoice)))}
