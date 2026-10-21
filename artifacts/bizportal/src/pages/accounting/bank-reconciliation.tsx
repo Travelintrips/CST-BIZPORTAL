@@ -3442,6 +3442,7 @@ function VendorInvoicePaymentDialog({
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [allocationAmounts, setAllocationAmounts] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
+  const [reviewDraftIds, setReviewDraftIds] = useState<number[]>([]);
   const companyId = mutation?.company_id ?? null;
   const mutationAmount = Number(mutation?.amount ?? 0);
 
@@ -3461,6 +3462,10 @@ function VendorInvoicePaymentDialog({
           id: number; docNumber: string; billNumber: string | null;
           supplierName: string; grandTotal: number; withholdingTaxAmount: number | null;
           taxReviewStatus: string | null; status: "draft"; selectable: false; reason: string;
+          invoiceBreakdown?: OutstandingVendorInvoice["invoiceBreakdown"];
+          netPayable: number;
+          withholdingLines: Array<{ taxType: string; taxObject: string; amount: number;
+            baseAmount: number; coaCode: string | null; coaName: string | null }>;
         }>,
       };
     },
@@ -3555,6 +3560,7 @@ function VendorInvoicePaymentDialog({
   useEffect(() => {
     if (!open) {
       setSelectedIds([]);
+      setReviewDraftIds([]);
       setAllocationAmounts({});
       setSaving(false);
     }
@@ -3754,18 +3760,45 @@ function VendorInvoicePaymentDialog({
           )}
           {draftInvoices.length > 0 && (
             <div className="rounded-md border border-amber-300 p-3 space-y-2 text-sm">
-              <p className="font-semibold">INV Vendor — Draft (belum dapat dipilih)</p>
-              <p className="text-xs text-muted-foreground">Invoice berikut sudah tercatat di INV Vendor. Selesaikan Finance Review dan posting terlebih dahulu agar tersedia sebagai kandidat pembayaran.</p>
+              <p className="font-semibold">INV Vendor — Kandidat Draft (pemeriksaan saja)</p>
+              <p className="text-xs text-muted-foreground">Pilih kandidat untuk membandingkan invoice, rincian PPh, dan mutasi. Pilihan ini tidak menyimpan match, tidak memposting invoice, dan tidak membuat jurnal atau pembayaran. Posting dan Finance Review tetap diperlukan sebelum Match &amp; Bayar.</p>
               {draftInvoices.map((invoice) => (
-                <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
-                  <div>
-                    <div className="font-medium">{invoice.billNumber || invoice.docNumber}</div>
-                    <div className="text-xs text-muted-foreground">{invoice.supplierName} · Draft · {invoice.taxReviewStatus || "PPh belum direview"}</div>
+                <div key={invoice.id} className="rounded border p-3 space-y-2">
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      checked={reviewDraftIds.includes(invoice.id)}
+                      onCheckedChange={(value) => setReviewDraftIds((ids) => value === true
+                        ? [...new Set([...ids, invoice.id])]
+                        : ids.filter((id) => id !== invoice.id))}
+                      aria-label={`Tinjau kandidat draft ${invoice.billNumber || invoice.docNumber}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{invoice.billNumber || invoice.docNumber}</div>
+                      <div className="text-xs text-muted-foreground">{invoice.supplierName} · Draft · Review: {invoice.taxReviewStatus || "belum tersedia"}</div>
+                    </div>
+                    <div className="text-right">
+                      <div>{idr(invoice.grandTotal)}</div>
+                      <div className="text-xs">PPh: {idr(Number(invoice.withholdingTaxAmount ?? 0))}</div>
+                      <div className="text-xs font-medium">Neto estimasi: {idr(invoice.netPayable)}</div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <div>{idr(invoice.grandTotal)}</div>
-                    <div className="text-xs text-muted-foreground">PPh tercatat: {invoice.withholdingTaxAmount == null ? "Perlu review" : idr(invoice.withholdingTaxAmount)}</div>
-                  </div>
+                  {reviewDraftIds.includes(invoice.id) && (
+                    <div className="space-y-2 border-t pt-2 text-xs">
+                      {(invoice.invoiceBreakdown?.components ?? []).map((component, i) => (
+                        <div key={i} className="rounded bg-muted/40 p-2">
+                          <div className="font-medium">{component.label ?? component.component ?? `Komponen ${i + 1}`}</div>
+                          <div>DPP {idr(Number(component.dpp ?? 0))} · PPN {idr(Number(component.ppn ?? 0))} · Bruto {idr(Number(component.gross ?? 0))}</div>
+                        </div>
+                      ))}
+                      {(invoice.withholdingLines ?? []).map((tax, i) => (
+                        <div key={i} className="rounded border border-blue-200 p-2">
+                          <div>{tax.taxType} — {tax.taxObject} · Dasar {idr(tax.baseAmount)} · PPh {idr(tax.amount)}</div>
+                          <div>{tax.coaCode ? `${tax.coaCode} — ${tax.coaName || "COA"}` : "COA Hutang PPh belum dipetakan"}</div>
+                        </div>
+                      ))}
+                      <p className="text-amber-700">Kandidat pratinjau saja — tidak termasuk pada tombol Match &amp; Bayar Invoice.</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -8948,10 +8948,11 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
     const draftResult = await pool.query<{
       id: number; invoice_number: string; vendor_invoice_ref: string | null;
       supplier_name: string; grand_total: string; withholding_tax_amount: string | null;
-      tax_review_status: string | null;
+      tax_review_status: string | null; invoice_breakdown: unknown;
     }>(
       `select vi.id, vi.invoice_number, vi.vendor_invoice_ref, vi.supplier_name,
-              vi.grand_total, vi.withholding_tax_amount, vi.tax_review_status
+              vi.grand_total, vi.withholding_tax_amount, vi.tax_review_status,
+              vi.invoice_breakdown
          from public.vendor_invoices vi
         where vi.company_id = $1
           and vi.status::text = 'draft'
@@ -8960,6 +8961,24 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         order by vi.created_at desc nulls last, vi.id desc
         limit 100`,
       [companyId],
+    );
+
+    const draftIds = draftResult.rows.map((row) => row.id);
+    const draftTaxRows = draftIds.length === 0 ? { rows: [] as Array<{
+      invoice_id: number; tax_type: string; tax_object: string; tax_amount: string;
+      base_amount: string; coa_code: string | null; coa_name: string | null;
+    }> } : await pool.query<{
+      invoice_id: number; tax_type: string; tax_object: string; tax_amount: string;
+      base_amount: string; coa_code: string | null; coa_name: string | null;
+    }>(
+      `select vil.invoice_id, vit.tax_type, vit.tax_object, vit.tax_amount,
+              vil.subtotal base_amount, coa.code coa_code, coa.name coa_name
+         from public.vendor_invoice_line_taxes vit
+         join public.vendor_invoice_lines vil on vil.id = vit.invoice_line_id
+         left join public.chart_of_accounts coa on coa.id = vit.liability_account_id
+        where vil.invoice_id = any($1::bigint[])
+        order by vil.invoice_id, vit.id`,
+      [draftIds],
     );
 
     res.json({
@@ -8971,6 +8990,13 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         grandTotal: Number(row.grand_total),
         withholdingTaxAmount: row.withholding_tax_amount == null ? null : Number(row.withholding_tax_amount),
         taxReviewStatus: row.tax_review_status,
+        invoiceBreakdown: row.invoice_breakdown,
+        withholdingLines: draftTaxRows.rows.filter((tax) => tax.invoice_id === row.id).map((tax) => ({
+          taxType: tax.tax_type, taxObject: tax.tax_object,
+          amount: Number(tax.tax_amount), baseAmount: Number(tax.base_amount),
+          coaCode: tax.coa_code, coaName: tax.coa_name,
+        })),
+        netPayable: Math.max(0, Number(row.grand_total) - Math.max(0, Number(row.withholding_tax_amount ?? 0))),
         status: "draft",
         selectable: false,
         reason: "Posting dan Finance Review wajib selesai sebelum invoice dapat dialokasikan ke mutasi.",
