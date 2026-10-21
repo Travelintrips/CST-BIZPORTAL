@@ -3452,12 +3452,20 @@ function VendorInvoicePaymentDialog({
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message ?? body.error ?? "Gagal memuat invoice vendor");
-      return (body.invoices ?? []) as OutstandingVendorInvoice[];
+      return {
+        invoices: (body.invoices ?? []) as OutstandingVendorInvoice[],
+        draftInvoices: (body.draftInvoices ?? []) as Array<{
+          id: number; docNumber: string; billNumber: string | null;
+          supplierName: string; grandTotal: number; withholdingTaxAmount: number | null;
+          taxReviewStatus: string | null; status: "draft"; selectable: false; reason: string;
+        }>,
+      };
     },
     staleTime: 0,
   });
 
-  const invoices = (invoicesQuery.data ?? []).filter(
+  const draftInvoices = invoicesQuery.data?.draftInvoices ?? [];
+  const invoices = (invoicesQuery.data?.invoices ?? []).filter(
     (invoice) =>
       invoice.source === "vendor_invoice"
       && Number(invoice.outstanding) > 0.01,
@@ -3737,6 +3745,24 @@ function VendorInvoicePaymentDialog({
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               Tidak ada invoice vendor dengan saldo belum tersettle pada perusahaan aktif.
             </p>
+          )}
+          {draftInvoices.length > 0 && (
+            <div className="rounded-md border border-amber-300 p-3 space-y-2 text-sm">
+              <p className="font-semibold">INV Vendor — Draft (belum dapat dipilih)</p>
+              <p className="text-xs text-muted-foreground">Invoice berikut sudah tercatat di INV Vendor. Selesaikan Finance Review dan posting terlebih dahulu agar tersedia sebagai kandidat pembayaran.</p>
+              {draftInvoices.map((invoice) => (
+                <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+                  <div>
+                    <div className="font-medium">{invoice.billNumber || invoice.docNumber}</div>
+                    <div className="text-xs text-muted-foreground">{invoice.supplierName} · Draft · {invoice.taxReviewStatus || "PPh belum direview"}</div>
+                  </div>
+                  <div className="text-right">
+                    <div>{idr(invoice.grandTotal)}</div>
+                    <div className="text-xs text-muted-foreground">PPh tercatat: {invoice.withholdingTaxAmount == null ? "Perlu review" : idr(invoice.withholdingTaxAmount)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
           {invoices.length > 0 && (
             <div className="overflow-x-auto rounded-md border">
