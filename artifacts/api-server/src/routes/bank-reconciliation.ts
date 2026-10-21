@@ -9062,6 +9062,13 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
       [draftIds],
     );
 
+    const savedDraftLinks = await pool.query<{ candidate_id: number }>(
+      `select candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and candidate_type='vendor_invoice_draft_review'
+          and status='provisional_review'`,
+      [mutationId],
+    );
+    const savedDraftIds = new Set(savedDraftLinks.rows.map((row) => Number(row.candidate_id)));
     res.json({
       draftInvoices: draftResult.rows.map((row) => ({
         id: row.id,
@@ -9079,6 +9086,7 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
         })),
         netPayable: Math.max(0, Number(row.grand_total) - Math.max(0, Number(row.withholding_tax_amount ?? 0))),
         status: "draft",
+        provisionalLinked: savedDraftIds.has(row.id),
         selectable: false,
         reason: "Posting dan Finance Review wajib selesai sebelum invoice dapat dialokasikan ke mutasi.",
       })),
