@@ -3524,6 +3524,25 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Gagal menyimpan kandidat listrik + air", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     } finally { setSavingDraftId(null); }
   };
+  const settleComponent = async (invoiceId: number, mode: "concession" | "utilities") => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-component-payment`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ invoice_id: invoiceId, mode }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Pembayaran komponen ditolak");
+      await invoicesQuery.refetch();
+      toast({ title: "Pembayaran komponen tercatat", description: "Jurnal menunggu posting sesuai prosedur rekonsiliasi." });
+      onClose();
+      await onSaved();
+    } catch (error) {
+      toast({ title: "Match & Bayar gagal", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const saveDraftLineCandidate = async (lineId: number) => {
     if (!mutation || !companyId) return;
     setSavingDraftId(lineId);
@@ -3960,6 +3979,14 @@ function VendorInvoicePaymentDialog({
                           <div className="font-medium">{invoice.billNumber ?? invoice.docNumber}</div>
                           <div className="text-xs text-muted-foreground">{invoice.supplierName}</div>
                           {invoice.dueDate && <div className="text-xs text-muted-foreground">Jatuh tempo {invoice.dueDate}</div>}
+                          {invoice.invoiceBreakdown?.components?.some((component) => /konsesi|listrik|electricity|\bair\b|water/i.test(String(component.label ?? component.component ?? ""))) && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null || saving}
+                                onClick={() => settleComponent(invoice.id, "concession")}>Match &amp; Bayar Konsesi</Button>
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null || saving}
+                                onClick={() => settleComponent(invoice.id, "utilities")}>Match &amp; Bayar Listrik + Air</Button>
+                            </div>
+                          )}
                           {hasWithholding && (
                             <Badge variant="outline" className="mt-1 border-blue-300 text-blue-700">
                               PPh auto ke COA
