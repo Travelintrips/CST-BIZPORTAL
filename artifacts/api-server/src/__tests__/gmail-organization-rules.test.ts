@@ -52,9 +52,9 @@ describe("Gmail organization rules", () => {
     expect(organizerSource).not.toContain('"DELETE"');
   });
 
-  it("runs sender organization during sync and in the production background worker", () => {
+  it("rate-limits automatic sender organization independently of invoice sync", () => {
     expect(routeSource).toContain(
-      "senderScanLimit: 250",
+      "senderScanLimit: 100",
     );
     expect(routeSource).toContain(
       "runGmailOrganizerTick",
@@ -62,5 +62,7 @@ describe("Gmail organization rules", () => {
     expect(routeSource).toContain(
       "GMAIL_ORGANIZER_POLL_MS",
     );
+    expect(routeSource).toContain('"LAST_ORGANIZER_AT"');
+    expect(routeSource).toContain("6 * 60 * 60 * 1000");
   });
 });
