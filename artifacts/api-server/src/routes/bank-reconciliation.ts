@@ -8410,6 +8410,22 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
       throw new ApprovalError("Mutasi ini sudah memiliki jurnal atau sudah diproses", 409, "MUTATION_ALREADY_PROCESSED");
     }
 
+    // A provisional component-specific reconciliation must never be silently paid as a whole invoice.
+    // The batch endpoint allocates invoice-wide balances and cannot settle individual lines safely.
+    const componentReview = await client.query<{ candidate_id: number }>(
+      `select candidate_id from public.bank_reconciliation_matches
+        where mutation_id = $1 and candidate_type = 'vendor_invoice_line_review'
+          and status = 'provisional_review' for update`,
+      [mutationId],
+    );
+    if (componentReview.rows.length > 0) {
+      throw new ApprovalError(
+        "Mutasi memiliki kandidat komponen invoice. Pembayaran seluruh invoice diblokir agar listrik/air tidak ikut terbayar; gunakan penyelesaian komponen setelah Finance Review.",
+        409,
+        "COMPONENT_SETTLEMENT_REQUIRED",
+      );
+    }
+
     const invoiceResult = await client.query<{
       id: number;
       invoice_number: string;
