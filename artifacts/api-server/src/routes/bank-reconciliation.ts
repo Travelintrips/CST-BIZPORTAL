@@ -8867,6 +8867,73 @@ router.delete("/bank-reconciliation/:mutationId/vendor-invoice-line-link/:lineId
   } finally { client.release(); }
 });
 
+// Combined electricity + water is one provisional reconciliation candidate, never a posted payment.
+router.post("/bank-reconciliation/:mutationId/vendor-invoice-utilities-link", async (req,res): Promise<void> => {
+  const mutationId=parsePositiveInt(req.params.mutationId);
+  const companyId=parsePositiveInt(req.header("x-company-id"));
+  const invoiceId=parsePositiveInt(req.body?.invoice_id);
+  if (!mutationId || !companyId || !invoiceId) { res.status(400).json({error:"ID tidak valid"}); return; }
+  const actor=await getApprovalActor(req);
+  if (!actor) { res.status(401).json({error:"Unauthorized"}); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) { res.status(403).json({error:"Company access denied"}); return; }
+  const client=await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation=(await client.query<{amount:string;direction:string;status:string;journal_entry_id:number|null;bank_account_id:string|null}>(
+      "select amount,direction,status,journal_entry_id,bank_account_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId,companyId])).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan",404,"MUTATION_NOT_FOUND");
+    if (String(mutation.direction).toUpperCase()!=="OUT" || mutation.journal_entry_id!=null ||
+        ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase()))
+      throw new ApprovalError("Mutasi tidak dapat dicocokkan",409,"MUTATION_NOT_ELIGIBLE");
+    if (await isKasBesarScReconciliationAccount(client,companyId,mutation.bank_account_id))
+      throw new ApprovalError("Match INV Vendor nonaktif untuk Kas Besar SC",422,"MATCH_DISABLED_KAS_BESAR_SC");
+    const invoice=(await client.query<{status:string;invoice_breakdown:Record<string,unknown>|null}>(
+      "select status::text,invoice_breakdown from public.vendor_invoices where id=$1 and company_id=$2 and cancelled_at is null for update",
+      [invoiceId,companyId])).rows[0];
+    if (!invoice || invoice.status.toLowerCase()!=="draft")
+      throw new ApprovalError("Invoice Draft tidak ditemukan",422,"INVALID_DRAFT_INVOICE");
+    const relation=invoice.invoice_breakdown?.document_relation as Record<string,unknown>|undefined;
+    if (relation?.kind==="supporting_tax_invoice")
+      throw new ApprovalError("Faktur pajak pendukung bukan tagihan",409,"SUPPORTING_TAX_INVOICE");
+    const lines=(await client.query<{id:number;name:string;subtotal:string;withheld:string}>(
+      `select l.id,l.name,l.subtotal::text,
+         coalesce((select sum(t.tax_amount) from public.vendor_invoice_line_taxes t where t.invoice_line_id=l.id and t.company_id=$2),0)::text withheld
+         from public.vendor_invoice_lines l where l.invoice_id=$1 order by l.id for update`,
+      [invoiceId,companyId])).rows;
+    const electricity=lines.filter(l=>/listrik|electricity/i.test(l.name));
+    const water=lines.filter(l=>/\\bair\\b|water/i.test(l.name));
+    if (electricity.length!==1 || water.length!==1 || electricity[0].id===water[0].id)
+      throw new ApprovalError("Diperlukan satu komponen listrik dan satu air",422,"UTILITIES_COMPONENTS_INVALID");
+    const selected=[electricity[0],water[0]];
+    const net=Math.round(selected.reduce((sum,l)=>sum+Number(l.subtotal)-Number(l.withheld),0)*100)/100;
+    const amount=Math.round(Math.abs(Number(mutation.amount))*100)/100;
+    if (!Number.isFinite(net)||net<=0||!Number.isFinite(amount)||Math.abs(net-amount)>0.01)
+      throw new ApprovalError("Jumlah neto listrik + air tidak sesuai mutasi",422,"UTILITIES_AMOUNT_MISMATCH");
+    const matches=(await client.query<{candidate_type:string;candidate_id:number}>(
+      `select candidate_type,candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and status='provisional_review'
+          and candidate_type in ('vendor_invoice_line_review','vendor_invoice_draft_review','vendor_invoice_utilities_review')
+        for update`,[mutationId])).rows;
+    if (matches.some(m=>m.candidate_type!=="vendor_invoice_utilities_review"||Number(m.candidate_id)!==invoiceId))
+      throw new ApprovalError("Mutasi sudah memiliki kandidat lain",409,"CANDIDATE_ALREADY_LINKED");
+    if (!matches.length) await client.query(
+      `insert into public.bank_reconciliation_matches
+       (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source,is_manual)
+       values ($1,'vendor_invoice_utilities_review',$2,100,$3,true,false,false,false,false,'provisional_review','public.vendor_invoices',true)`,
+      [mutationId,invoiceId,`Combined utilities exact net; lines:${selected.map(l=>l.id).join(",")}`]);
+    await client.query("insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+      [mutationId,"VENDOR_INVOICE_UTILITIES_PROVISIONAL_LINK",actor.email,JSON.stringify({company_id:companyId,invoice_id:invoiceId,line_ids:selected.map(l=>l.id),net_amount:net})]);
+    await client.query("commit");
+    res.json({linked:true,provisional:true,invoiceId,lineIds:selected.map(l=>l.id),netAmount:net,paymentPosted:false});
+  } catch(error) {
+    await client.query("rollback").catch(()=>{});
+    if(error instanceof ApprovalError) { res.status(error.status).json({error:error.message,code:error.code}); return; }
+    req.log.error({error,mutationId,invoiceId},"Utilities provisional link failed");
+    res.status(503).json({error:"Kandidat listrik dan air gagal disimpan"});
+  } finally {client.release();}
+});
+
 // Component-level review candidate. A bank movement can represent one AP2 component, not the whole invoice.
 router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
