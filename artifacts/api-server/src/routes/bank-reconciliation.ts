@@ -8921,6 +8921,17 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (
     if (!Number.isFinite(amount) || expectedNet <= 0 || Math.abs(amount - expectedNet) > 0.01) {
       throw new ApprovalError("Nominal mutasi tidak sama dengan neto komponen setelah PPh. Periksa bukti pembayaran sebelum mengaitkan.", 422, "COMPONENT_AMOUNT_MISMATCH");
     }
+    // A bank mutation may fund only one provisional allocation. Reject concurrent
+    // invoice-level or other-component links before recording this component.
+    const competing = await client.query<{ candidate_type: string; candidate_id: number }>(
+      `select candidate_type,candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and status='provisional_review'
+          and candidate_type in ('vendor_invoice_line_review','vendor_invoice_draft_review')
+        for update`, [mutationId],
+    );
+    if (competing.rows.some((r) => r.candidate_type === 'vendor_invoice_line_review' && Number(r.candidate_id) !== lineId)) {
+      throw new ApprovalError("Mutasi sudah terhubung ke komponen lain",409,"COMPONENT_ALREADY_LINKED");
+    }
     const existing = await client.query<{ id: number; candidate_id: number }>(
       `select id,candidate_id from public.bank_reconciliation_matches
         where mutation_id=$1 and candidate_type='vendor_invoice_line_review'
