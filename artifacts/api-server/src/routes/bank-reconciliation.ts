@@ -8823,6 +8823,12 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (
         ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
       throw new ApprovalError("Mutasi tidak dapat dikaitkan dengan komponen Draft", 409, "MUTATION_NOT_ELIGIBLE");
     }
+    const bankAccount = (await client.query<{ bank_account_id: string | null }>(
+      "select bank_account_id from public.bank_mutations where id=$1 and company_id=$2", [mutationId,companyId],
+    )).rows[0];
+    if (await isKasBesarScReconciliationAccount(client, companyId, bankAccount?.bank_account_id ?? null)) {
+      throw new ApprovalError("Match INV Vendor nonaktif untuk Kas Besar SC",422,"MATCH_DISABLED_KAS_BESAR_SC");
+    }
     const line = (await client.query<{
       invoice_id: number; name: string; subtotal: string; withheld: string; invoice_status: string;
       invoice_breakdown: Record<string, unknown> | null;
@@ -8990,6 +8996,14 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-draft-link", async 
     const period = String(invoice.attachment_file_name ?? "").match(/Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN)(26)/i);
     if (invoice.invoice_breakdown?.source === "gmail_invoice_source" && period) {
       throw new ApprovalError("Periode sebelum Juli 2026 hanya untuk histori", 409, "SOURCE_PERIOD_CUTOFF");
+    }
+    const linkedComponent = await client.query(
+      `select id from public.bank_reconciliation_matches where mutation_id=$1
+        and candidate_type='vendor_invoice_line_review' and status='provisional_review' limit 1`,
+      [mutationId],
+    );
+    if (linkedComponent.rows.length) {
+      throw new ApprovalError("Komponen invoice sudah dipilih untuk mutasi ini. Batalkan komponen sebelum menyimpan kandidat invoice penuh.",409,"COMPONENT_LINK_EXISTS");
     }
     await client.query(
       `insert into public.bank_reconciliation_matches
