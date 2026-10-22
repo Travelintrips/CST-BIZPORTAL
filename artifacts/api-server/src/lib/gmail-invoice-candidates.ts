@@ -52,6 +52,32 @@ function isSrtAttachment(fileName: string): boolean {
   return /^srt(?:[\s_.-]|$)/i.test(fileName.trim());
 }
 
+// Narrow rule for Sukma's CST billing email: the last non-SRT PDF is the
+// actual billing invoice; earlier PDFs are supporting documents. Other emails
+// retain the existing multi-attachment behavior.
+function isSukmaCstBillingEmail(message: GmailInvoiceMessage): boolean {
+  const senderName = (message.senderName ?? "").toLowerCase();
+  const subject = (message.subject ?? "").toLowerCase();
+  return senderName.includes("sukma")
+    && /invoice|tagihan|penagihan/.test(subject)
+    && /cahaya\s+sejati\s+teknologi/.test(subject);
+}
+
+function invoiceAttachmentsForMessage(
+  message: GmailInvoiceMessage,
+): GmailAttachment[] {
+  const eligible = message.attachments.filter(
+    (attachment) => !isSrtAttachment(attachment.fileName),
+  );
+  if (!isSukmaCstBillingEmail(message)) return eligible;
+
+  const pdfs = eligible.filter(
+    (attachment) => attachment.mimeType.toLowerCase() === "application/pdf",
+  );
+  // Fail closed instead of guessing when no PDF is available.
+  return pdfs.length > 0 ? [pdfs[pdfs.length - 1]!] : [];
+}
+
 async function upsertShell(args: {
   companyId: number;
   message: GmailInvoiceMessage;
@@ -332,8 +358,7 @@ export async function syncGmailInvoiceCandidates(args: {
   let newWork = 0;
 
   scan: for (const message of messages) {
-    for (const attachment of message.attachments) {
-      if (isSrtAttachment(attachment.fileName)) continue;
+    for (const attachment of invoiceAttachmentsForMessage(message)) {
       counts.attachmentsSeen += 1;
 
       const status = await processAttachment({
