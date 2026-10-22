@@ -8414,13 +8414,14 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     // The batch endpoint allocates invoice-wide balances and cannot settle individual lines safely.
     const componentReview = await client.query<{ candidate_id: number }>(
       `select candidate_id from public.bank_reconciliation_matches
-        where mutation_id = $1 and candidate_type = 'vendor_invoice_line_review'
+        where mutation_id = $1
+          and candidate_type in ('vendor_invoice_line_review', 'vendor_invoice_draft_review')
           and status = 'provisional_review' for update`,
       [mutationId],
     );
     if (componentReview.rows.length > 0) {
       throw new ApprovalError(
-        "Mutasi memiliki kandidat komponen invoice. Pembayaran seluruh invoice diblokir agar listrik/air tidak ikut terbayar; gunakan penyelesaian komponen setelah Finance Review.",
+        "Mutasi memiliki kandidat Draft atau komponen invoice. Pembayaran seluruh invoice diblokir; selesaikan Finance Review dan pilih alokasi terpisah: konsesi, atau gabungan listrik + air.",
         409,
         "COMPONENT_SETTLEMENT_REQUIRED",
       );
