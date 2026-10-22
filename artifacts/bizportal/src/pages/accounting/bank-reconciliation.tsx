@@ -3466,6 +3466,8 @@ function VendorInvoicePaymentDialog({
           invoiceBreakdown?: OutstandingVendorInvoice["invoiceBreakdown"];
           netPayable: number;
           provisionalLinked?: boolean;
+          invoiceLines?: Array<{ id:number; label:string; subtotal:number; withholding:number;
+            netAmount:number; provisionalLinked:boolean }>;
           withholdingLines: Array<{ taxType: string; taxObject: string; amount: number;
             baseAmount: number; coaCode: string | null; coaName: string | null }>;
         }>,
@@ -3488,6 +3490,38 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Link kandidat dibatalkan", description: "Hanya link sementara yang dibatalkan; tidak ada jurnal yang diubah." });
     } catch (error) {
       toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
+  const removeDraftLineCandidate = async (lineId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(lineId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-line-link/${lineId}`, {
+        method: "DELETE", credentials: "include", headers: { "x-company-id": String(companyId) },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal membatalkan komponen");
+      await invoicesQuery.refetch();
+      toast({ title: "Link komponen dibatalkan", description: "Mutasi dan jurnal tidak diubah." });
+    } catch (error) {
+      toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
+  const saveDraftLineCandidate = async (lineId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(lineId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-line-link`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ invoice_line_id: lineId }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Tidak dapat memilih komponen");
+      await invoicesQuery.refetch();
+      toast({ title: "Kandidat komponen tersimpan", description: "Neto komponen cocok dengan mutasi. Link invoice secara keseluruhan telah digantikan." });
+    } catch (error) {
+      toast({ title: "Gagal memilih komponen", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     } finally { setSavingDraftId(null); }
   };
   const saveDraftCandidate = async (invoiceId: number) => {
@@ -3824,6 +3858,25 @@ function VendorInvoicePaymentDialog({
                           <div>DPP {idr(Number(component.dpp ?? 0))} · PPN {idr(Number(component.ppn ?? 0))} · Bruto {idr(Number(component.gross ?? 0))}</div>
                         </div>
                       ))}
+                      <div className="space-y-1 rounded-md border p-2">
+                        <div className="font-semibold">Pilih komponen tagihan untuk mutasi bank</div>
+                        {(invoice.invoiceLines ?? []).map((line) => (
+                          <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2">
+                            <div>
+                              <div className="font-medium">{line.label}</div>
+                              <div>Dasar {idr(line.subtotal)} · PPh {idr(line.withholding)} · Neto {idr(line.netAmount)}</div>
+                            </div>
+                            {line.provisionalLinked ? (
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                                onClick={() => removeDraftLineCandidate(line.id)}>Batalkan Link Komponen</Button>
+                            ) : (
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                                onClick={() => saveDraftLineCandidate(line.id)}>Link komponen ini</Button>
+                            )}
+                          </div>
+                        ))}
+                        <div className="text-muted-foreground">Link komponen hanya berhasil jika neto komponen sama dengan mutasi bank. Tidak membuat jurnal atau pelunasan.</div>
+                      </div>
                       {(invoice.withholdingLines ?? []).map((tax, i) => (
                         <div key={i} className="rounded border border-blue-200 p-2">
                           <div>{tax.taxType} — {tax.taxObject} · Dasar {idr(tax.baseAmount)} · PPh {idr(tax.amount)}</div>
