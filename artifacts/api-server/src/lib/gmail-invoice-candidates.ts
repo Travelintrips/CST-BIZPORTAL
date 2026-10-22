@@ -184,6 +184,19 @@ async function processAttachment(args: {
     );
 
     if (duplicateByHash.rows[0]) {
+      // For Sukma CST billing, an identical PDF already imported from another
+      // message is the same invoice. Do not create another source candidate.
+      // Delete only this newly created, still-pending shell; preserve the
+      // original record, audit history, and any payment references.
+      if (isSukmaCstBillingEmail(args.message)) {
+        await pool.query(
+          `delete from public.gmail_invoice_candidates
+            where id=$1 and company_id=$2 and status='new'
+              and extraction_status='pending'`,
+          [candidate.id, args.companyId],
+        );
+        return "existing";
+      }
       // Gmail may return a different attachmentId for the same file on each sync.
       // Keep one source record per message + file content instead of inserting
       // thousands of duplicate shells. A forwarded email (different message ID)
