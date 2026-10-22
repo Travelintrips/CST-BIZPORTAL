@@ -3507,6 +3507,23 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     } finally { setSavingDraftId(null); }
   };
+  const saveUtilitiesCandidate = async (invoiceId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-utilities-link`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal menyimpan kandidat listrik + air");
+      await invoicesQuery.refetch();
+      toast({ title: "Kandidat listrik + air tersimpan", description: "Kandidat rekonsiliasi tersimpan; pembayaran dan jurnal belum dibuat." });
+    } catch (error) {
+      toast({ title: "Gagal menyimpan kandidat listrik + air", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const saveDraftLineCandidate = async (lineId: number) => {
     if (!mutation || !companyId) return;
     setSavingDraftId(lineId);
@@ -3877,6 +3894,10 @@ function VendorInvoicePaymentDialog({
                         ))}
                         <div className="text-muted-foreground">Link komponen hanya berhasil jika neto komponen sama dengan mutasi bank. Tidak membuat jurnal atau pelunasan.</div>
                       </div>
+                      <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                        onClick={() => saveUtilitiesCandidate(invoice.id)}>
+                        Cocokkan kandidat Listrik + Air
+                      </Button>
                       {(invoice.withholdingLines ?? []).map((tax, i) => (
                         <div key={i} className="rounded border border-blue-200 p-2">
                           <div>{tax.taxType} — {tax.taxObject} · Dasar {idr(tax.baseAmount)} · PPh {idr(tax.amount)}</div>
