@@ -61,7 +61,7 @@ function isSukmaCstBillingEmail(message: GmailInvoiceMessage): boolean {
   const subject = (message.subject ?? "").toLowerCase();
   return senderName.includes("sukma")
     && /invoice|tagihan|penagihan/.test(subject)
-    && /cahaya\\s+sejati\\s+teknologi/.test(subject);
+    && /cahaya\s+sejati\s+teknologi/.test(subject);
 }
 
 function invoiceAttachmentsForMessage(
