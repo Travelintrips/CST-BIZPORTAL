@@ -8929,7 +8929,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (
           and candidate_type in ('vendor_invoice_line_review','vendor_invoice_draft_review','vendor_invoice_utilities_review')
         for update`, [mutationId],
     );
-    if (competing.rows.some((r) => r.candidate_type === 'vendor_invoice_line_review' && Number(r.candidate_id) !== lineId)) {
+    if (competing.rows.some((r) => r.candidate_type === 'vendor_invoice_utilities_review' || (r.candidate_type === 'vendor_invoice_line_review' && Number(r.candidate_id) !== lineId))) {
       throw new ApprovalError("Mutasi sudah terhubung ke komponen lain",409,"COMPONENT_ALREADY_LINKED");
     }
     const existing = await client.query<{ id: number; candidate_id: number }>(
