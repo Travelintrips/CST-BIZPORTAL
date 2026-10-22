@@ -3828,8 +3828,8 @@ function VendorInvoicePaymentDialog({
           )}
           {draftInvoices.length > 0 && (
             <div className="rounded-md border border-amber-300 p-3 space-y-2 text-sm">
-              <p className="font-semibold">INV Vendor — Kandidat Draft (pemeriksaan saja)</p>
-              <p className="text-xs text-muted-foreground">Pilih kandidat untuk membandingkan invoice, rincian PPh, dan mutasi. Pilihan ini tidak menyimpan match, tidak memposting invoice, dan tidak membuat jurnal atau pembayaran. Posting dan Finance Review tetap diperlukan sebelum Match &amp; Bayar.</p>
+              <p className="font-semibold">INV Vendor — Kandidat Rekonsiliasi Draft</p>
+              <p className="text-xs text-muted-foreground">Pilih invoice Draft sebagai kandidat rekonsiliasi mutasi bank. Link yang disimpan tercatat pada rekonsiliasi dan dapat dibatalkan. Karena invoice masih Draft, kandidat belum dapat diproses sebagai pembayaran atau jurnal sampai Finance Review dan Posting selesai.</p>
               {draftInvoices.map((invoice) => (
                 <div key={invoice.id} className="rounded border p-3 space-y-2">
                   <div className="flex items-start gap-3">
