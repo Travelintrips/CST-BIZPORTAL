@@ -3492,6 +3492,21 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     } finally { setSavingDraftId(null); }
   };
+  const removeDraftLineCandidate = async (lineId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(lineId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-line-link/${lineId}`, {
+        method: "DELETE", credentials: "include", headers: { "x-company-id": String(companyId) },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal membatalkan komponen");
+      await invoicesQuery.refetch();
+      toast({ title: "Link komponen dibatalkan", description: "Mutasi dan jurnal tidak diubah." });
+    } catch (error) {
+      toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const saveDraftLineCandidate = async (lineId: number) => {
     if (!mutation || !companyId) return;
     setSavingDraftId(lineId);
@@ -3851,10 +3866,13 @@ function VendorInvoicePaymentDialog({
                               <div className="font-medium">{line.label}</div>
                               <div>Dasar {idr(line.subtotal)} · PPh {idr(line.withholding)} · Neto {idr(line.netAmount)}</div>
                             </div>
-                            <Button size="sm" variant="outline" disabled={line.provisionalLinked || savingDraftId !== null}
-                              onClick={() => saveDraftLineCandidate(line.id)}>
-                              {line.provisionalLinked ? "Komponen terhubung ke mutasi" : "Link komponen ini"}
-                            </Button>
+                            {line.provisionalLinked ? (
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                                onClick={() => removeDraftLineCandidate(line.id)}>Batalkan Link Komponen</Button>
+                            ) : (
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                                onClick={() => saveDraftLineCandidate(line.id)}>Link komponen ini</Button>
+                            )}
                           </div>
                         ))}
                         <div className="text-muted-foreground">Link komponen hanya berhasil jika neto komponen sama dengan mutasi bank. Tidak membuat jurnal atau pelunasan.</div>
