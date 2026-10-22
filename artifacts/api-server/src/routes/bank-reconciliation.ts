@@ -8917,6 +8917,16 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-utilities-link", as
         for update`,[mutationId])).rows;
     if (matches.some(m=>m.candidate_type!=="vendor_invoice_utilities_review"||Number(m.candidate_id)!==invoiceId))
       throw new ApprovalError("Mutasi sudah memiliki kandidat lain",409,"CANDIDATE_ALREADY_LINKED");
+    // Never reserve the same combined utilities components for two bank movements.
+    const duplicate=(await client.query<{mutation_id:number}>(
+      `select m.mutation_id from public.bank_reconciliation_matches m
+         join public.bank_mutations bm on bm.id=m.mutation_id
+        where m.candidate_type='vendor_invoice_utilities_review'
+          and m.candidate_id=$1 and m.mutation_id<>$2
+          and m.status in ('provisional_review','approved','posted')
+          and bm.company_id=$3
+        limit 1 for update of m`,[invoiceId,mutationId,companyId])).rows[0];
+    if (duplicate) throw new ApprovalError("Listrik dan air sudah dicadangkan pada mutasi lain",409,"UTILITIES_ALREADY_LINKED");
     if (!matches.length) await client.query(
       `insert into public.bank_reconciliation_matches
        (mutation_id,candidate_type,candidate_id,match_score,match_reason,amount_match,date_match,name_match,order_id_match,proof_match,status,candidate_source,is_manual)
