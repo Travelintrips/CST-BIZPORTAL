@@ -8415,7 +8415,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
     const componentReview = await client.query<{ candidate_id: number }>(
       `select candidate_id from public.bank_reconciliation_matches
         where mutation_id = $1
-          and candidate_type in ('vendor_invoice_line_review', 'vendor_invoice_draft_review')
+          and candidate_type in ('vendor_invoice_line_review', 'vendor_invoice_draft_review', 'vendor_invoice_utilities_review')
           and status = 'provisional_review' for update`,
       [mutationId],
     );
