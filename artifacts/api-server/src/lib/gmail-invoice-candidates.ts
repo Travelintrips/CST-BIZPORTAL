@@ -52,7 +52,6 @@ function isSrtAttachment(fileName: string): boolean {
   return /^srt(?:[\s_.-]|$)/i.test(fileName.trim());
 }
 
-
 // Narrow rule for Sukma's CST billing email: the last non-SRT PDF is the
 // actual billing invoice; earlier PDFs are supporting documents. Other emails
 // retain the existing multi-attachment behavior.
