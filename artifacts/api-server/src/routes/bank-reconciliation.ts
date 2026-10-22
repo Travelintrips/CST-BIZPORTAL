@@ -9204,6 +9204,23 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
       [draftIds],
     );
 
+    const componentRows = draftIds.length ? await pool.query<{
+      id: number; invoice_id: number; name: string; subtotal: string; withholding: string;
+    }>(
+      `select l.id,l.invoice_id,l.name,l.subtotal::text,
+              coalesce(sum(t.tax_amount),0)::text withholding
+         from public.vendor_invoice_lines l
+         left join public.vendor_invoice_line_taxes t on t.invoice_line_id=l.id
+        where l.invoice_id=any($1::bigint[])
+        group by l.id,l.invoice_id,l.name,l.subtotal order by l.id`, [draftIds],
+    ) : { rows: [] as Array<{ id:number; invoice_id:number; name:string; subtotal:string; withholding:string }> };
+    const savedComponentLinks = await pool.query<{ candidate_id:number }>(
+      `select candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and candidate_type='vendor_invoice_line_review'
+          and candidate_source='public.vendor_invoice_lines' and status='provisional_review'`,
+      [mutationId],
+    );
+    const savedComponentIds = new Set(savedComponentLinks.rows.map((r)=>Number(r.candidate_id)));
     const savedDraftLinks = await pool.query<{ candidate_id: number }>(
       `select candidate_id from public.bank_reconciliation_matches
         where mutation_id=$1 and candidate_type='vendor_invoice_draft_review'
@@ -9227,6 +9244,11 @@ router.get("/bank-reconciliation/:mutationId/vendor-invoice-candidates", async (
           coaCode: tax.coa_code, coaName: tax.coa_name,
         })),
         netPayable: Math.max(0, Number(row.grand_total) - Math.max(0, Number(row.withholding_tax_amount ?? 0))),
+        invoiceLines: componentRows.rows.filter((l) => l.invoice_id === row.id).map((l) => ({
+          id: l.id, label: l.name, subtotal: Number(l.subtotal), withholding: Number(l.withholding),
+          netAmount: Number(l.subtotal) - Number(l.withholding),
+          provisionalLinked: savedComponentIds.has(l.id),
+        })),
         status: "draft",
         provisionalLinked: savedDraftIds.has(row.id),
         selectable: false,
