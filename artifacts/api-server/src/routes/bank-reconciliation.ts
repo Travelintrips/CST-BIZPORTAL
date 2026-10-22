@@ -8902,7 +8902,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-utilities-link", as
          from public.vendor_invoice_lines l where l.invoice_id=$1 order by l.id for update`,
       [invoiceId,companyId])).rows;
     const electricity=lines.filter(l=>/listrik|electricity/i.test(l.name));
-    const water=lines.filter(l=>/\\bair\\b|water/i.test(l.name));
+    const water=lines.filter(l=>/\bair\b|water/i.test(l.name));
     if (electricity.length!==1 || water.length!==1 || electricity[0].id===water[0].id)
       throw new ApprovalError("Diperlukan satu komponen listrik dan satu air",422,"UTILITIES_COMPONENTS_INVALID");
     const selected=[electricity[0],water[0]];
