@@ -8798,6 +8798,94 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
   }
 });
 
+// Component-level review candidate. A bank movement can represent one AP2 component, not the whole invoice.
+router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const companyId = parsePositiveInt(req.header("x-company-id"));
+  const lineId = parsePositiveInt(req.body?.invoice_line_id);
+  if (!mutationId || !companyId || !lineId) {
+    res.status(400).json({ error: "Mutasi, perusahaan, atau komponen invoice tidak valid" }); return;
+  }
+  const actor = await getApprovalActor(req);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Akses perusahaan tidak sesuai" }); return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = (await client.query<{ amount: string; direction: string; status: string; journal_entry_id: number | null }>(
+      "select amount, direction, status, journal_entry_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId, companyId],
+    )).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan", 404, "MUTATION_NOT_FOUND");
+    if (String(mutation.direction).toUpperCase() !== "OUT" || mutation.journal_entry_id != null ||
+        ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
+      throw new ApprovalError("Mutasi tidak dapat dikaitkan dengan komponen Draft", 409, "MUTATION_NOT_ELIGIBLE");
+    }
+    const line = (await client.query<{
+      invoice_id: number; name: string; subtotal: string; withheld: string; invoice_status: string;
+      invoice_breakdown: Record<string, unknown> | null;
+    }>(
+      `select l.invoice_id,l.name,l.subtotal::text,
+              coalesce((select sum(t.tax_amount) from public.vendor_invoice_line_taxes t where t.invoice_line_id=l.id),0)::text withheld,
+              v.status::text invoice_status,v.invoice_breakdown
+         from public.vendor_invoice_lines l join public.vendor_invoices v on v.id=l.invoice_id
+        where l.id=$1 and v.company_id=$2 for update of l,v`,
+      [lineId, companyId],
+    )).rows[0];
+    if (!line || line.invoice_status !== "draft") {
+      throw new ApprovalError("Komponen bukan bagian dari invoice Draft perusahaan ini", 422, "INVALID_INVOICE_LINE");
+    }
+    const relation = line.invoice_breakdown?.document_relation as Record<string, unknown> | undefined;
+    if (relation?.kind === "supporting_tax_invoice") {
+      throw new ApprovalError("Faktur pajak pendukung tidak dapat dicocokkan", 409, "SUPPORTING_TAX_INVOICE");
+    }
+    const amount = Math.abs(Number(mutation.amount));
+    const expectedNet = Number(line.subtotal) - Number(line.withheld);
+    if (!Number.isFinite(amount) || expectedNet <= 0 || Math.abs(amount - expectedNet) > 0.01) {
+      throw new ApprovalError("Nominal mutasi tidak sama dengan neto komponen setelah PPh. Periksa bukti pembayaran sebelum mengaitkan.", 422, "COMPONENT_AMOUNT_MISMATCH");
+    }
+    const existing = await client.query<{ id: number; candidate_id: number }>(
+      `select id,candidate_id from public.bank_reconciliation_matches
+        where mutation_id=$1 and candidate_type='vendor_invoice_line_review'
+          and status='provisional_review' for update`, [mutationId],
+    );
+    if (existing.rows.some((r) => r.candidate_id !== lineId)) {
+      throw new ApprovalError("Mutasi sudah memiliki kandidat komponen lain. Batalkan dahulu agar tidak teralokasi ganda.", 409, "COMPONENT_ALREADY_LINKED");
+    }
+    // Supersede broad invoice-level review links when an exact component is identified.
+    const superseded = await client.query<{ id: number }>(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and candidate_type='vendor_invoice_draft_review'
+          and status='provisional_review' returning id`, [mutationId],
+    );
+    if (existing.rows.length === 0) {
+      await client.query(
+        `insert into public.bank_reconciliation_matches
+          (mutation_id,candidate_type,candidate_id,match_score,match_reason,
+           amount_match,date_match,name_match,order_id_match,proof_match,
+           status,candidate_source,is_manual)
+         values ($1,'vendor_invoice_line_review',$2,100,$3,true,false,false,false,false,
+                 'provisional_review','public.vendor_invoice_lines',true)`,
+        [mutationId,lineId,`Exact component net amount; invoice:${line.invoice_id}; component:${line.name}`],
+      );
+    }
+    await client.query(
+      "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+      [mutationId,"VENDOR_INVOICE_COMPONENT_PROVISIONAL_LINK",actor.email,
+       JSON.stringify({company_id:companyId,invoice_id:line.invoice_id,line_id:lineId,bank_amount:amount,expected_net:expectedNet,superseded_invoice_links:superseded.rows.map((r)=>r.id)})],
+    );
+    await client.query("commit");
+    res.json({ linked:true, provisional:true, invoiceId:line.invoice_id, lineId, netAmount:expectedNet, paymentPosted:false });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error:error.message, code:error.code }); return; }
+    req.log.error({ error, mutationId, lineId }, "Vendor component provisional link failed");
+    res.status(503).json({ error:"Kandidat komponen gagal disimpan" });
+  } finally { client.release(); }
+});
+
 // Cancel only this provisional review record. Never undo approved financial matching.
 router.delete("/bank-reconciliation/:mutationId/vendor-invoice-draft-link/:invoiceId", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
