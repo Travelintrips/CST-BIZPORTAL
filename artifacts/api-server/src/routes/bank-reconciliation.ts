@@ -8798,6 +8798,58 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
   }
 });
 
+// Cancel a provisional component link without touching the bank entry, invoice or journals.
+router.delete("/bank-reconciliation/:mutationId/vendor-invoice-line-link/:lineId", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  const lineId = parsePositiveInt(req.params.lineId);
+  const companyId = parsePositiveInt(req.header("x-company-id"));
+  if (!mutationId || !lineId || !companyId) {
+    res.status(400).json({ error: "Mutasi, komponen, atau perusahaan tidak valid" }); return;
+  }
+  const actor = await getApprovalActor(req);
+  if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (actor.companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Akses perusahaan tidak sesuai" }); return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const mutation = (await client.query<{ status: string; journal_entry_id: number | null }>(
+      "select status,journal_entry_id from public.bank_mutations where id=$1 and company_id=$2 for update",
+      [mutationId,companyId],
+    )).rows[0];
+    if (!mutation) throw new ApprovalError("Mutasi tidak ditemukan",404,"MUTATION_NOT_FOUND");
+    if (mutation.journal_entry_id != null ||
+        ["approved","approved_pending_posting","posted","reconciled","void"].includes(String(mutation.status).toLowerCase())) {
+      throw new ApprovalError("Mutasi sudah diproses; kandidat tidak dapat diubah",409,"MUTATION_ALREADY_PROCESSED");
+    }
+    const owned = (await client.query(
+      "select l.id from public.vendor_invoice_lines l join public.vendor_invoices v on v.id=l.invoice_id where l.id=$1 and v.company_id=$2",
+      [lineId,companyId],
+    )).rows.length > 0;
+    if (!owned) throw new ApprovalError("Komponen tidak ditemukan untuk perusahaan ini",404,"INVOICE_LINE_NOT_FOUND");
+    const deleted = await client.query<{ id:number }>(
+      `update public.bank_reconciliation_matches set status='superseded'
+        where mutation_id=$1 and candidate_type='vendor_invoice_line_review'
+          and candidate_id=$2 and candidate_source='public.vendor_invoice_lines'
+          and status='provisional_review' returning id`,
+      [mutationId,lineId],
+    );
+    if (deleted.rows.length > 0) await client.query(
+      "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,$2,$3,$4::jsonb)",
+      [mutationId,"VENDOR_INVOICE_COMPONENT_PROVISIONAL_UNLINK",actor.email,
+       JSON.stringify({company_id:companyId,line_id:lineId,match_ids:deleted.rows.map((r)=>r.id)})],
+    );
+    await client.query("commit");
+    res.json({ linked:false, removed:deleted.rows.length, mutationId, lineId });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error instanceof ApprovalError) { res.status(error.status).json({ error:error.message,code:error.code }); return; }
+    req.log.error({ error, mutationId, lineId }, "Cancel component provisional link failed");
+    res.status(503).json({ error:"Gagal membatalkan link komponen" });
+  } finally { client.release(); }
+});
+
 // Component-level review candidate. A bank movement can represent one AP2 component, not the whole invoice.
 router.post("/bank-reconciliation/:mutationId/vendor-invoice-line-link", async (req, res): Promise<void> => {
   const mutationId = parsePositiveInt(req.params.mutationId);
