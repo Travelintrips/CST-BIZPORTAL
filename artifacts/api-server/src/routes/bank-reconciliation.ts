@@ -8916,6 +8916,9 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
     if (taxes.some(t=>!Number.isSafeInteger(Number(t.liability_account_id)) || Number(t.liability_account_id)<=0))
       throw new ApprovalError("COA Hutang PPh belum dipetakan di Finance Review",422,"WITHHOLDING_ACCOUNT_REQUIRED");
     const gross=money(matches.reduce((sum,l)=>sum+Number(l.subtotal),0));
+    // A taxable component without a verified withholding record must not be settled as tax-free.
+    if (taxes.length === 0 || matches.some(line => !taxes.some(t => Number(t.invoice_line_id) === Number(line.id))))
+      throw new ApprovalError("Rincian PPh komponen belum lengkap; lakukan Finance Review sebelum pembayaran",422,"COMPONENT_WITHHOLDING_INCOMPLETE");
     const withheld=money(taxes.reduce((sum,t)=>sum+Number(t.tax_amount),0));
     if (!Number.isFinite(gross) || gross<=0 || money(gross-withheld)<=0 || Math.abs(money(gross-withheld)-cash)>0.01)
       throw new ApprovalError("Neto komponen tidak sama dengan transfer bank",422,"COMPONENT_AMOUNT_MISMATCH");
@@ -8960,12 +8963,12 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
        total_allocated,remaining_amount,confidence,algorithm_used,status,created_by)
        values ($1,'MULTI_INVOICE','MULTI_INVOICE',$2,$3,$3,0,100,
         'bank_reconciliation_vendor_component','active',$4) returning id`,
-      [companyId,cash,gross,actor.email])).rows[0];
+      [companyId,cash,cash,actor.email])).rows[0];
     if (!group) throw new Error("Payment group gagal dibuat");
     await client.query(`insert into public.payment_allocations
       (group_id,company_id,invoice_id,invoice_ref,mutation_id,allocated_amount,remaining_amount,allocation_sequence,strategy,is_active)
       values ($1,$2,$3,$4,$5,$6,0,1,'MANUAL',true)`,
-      [group.id,companyId,invoiceId,invoice.vendor_invoice_ref??invoice.invoice_number,mutationId,gross]);
+      [group.id,companyId,invoiceId,invoice.vendor_invoice_ref??invoice.invoice_number,mutationId,cash]);
     await client.query(`update public.bank_reconciliation_matches set status='superseded'
       where mutation_id=$1 and status not in ('approved','posted')`,[mutationId]);
     await client.query(`insert into public.bank_reconciliation_matches
