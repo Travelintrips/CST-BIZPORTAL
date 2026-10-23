@@ -8920,6 +8920,23 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
     // A taxable component without a verified withholding record must not be settled as tax-free.
     if (taxes.length === 0 || matches.some(line => !taxes.some(t => Number(t.invoice_line_id) === Number(line.id))))
       throw new ApprovalError("Rincian PPh komponen belum lengkap; lakukan Finance Review sebelum pembayaran",422,"COMPONENT_WITHHOLDING_INCOMPLETE");
+    // Reject legacy Gmail imports that calculated PPh on VAT-inclusive amounts.
+    // This is a safety gate only: Finance Review must correct historical tax rows.
+    const lineTaxRows = (await client.query<{
+      invoice_line_id:number; tax_amount:string; subtotal:string; vat_amount:string; name:string;
+    }>(`select t.invoice_line_id,t.tax_amount::text,l.subtotal::text,
+                coalesce(l.tax_amount,0)::text as vat_amount,l.name
+           from public.vendor_invoice_line_taxes t
+           join public.vendor_invoice_lines l on l.id=t.invoice_line_id
+          where t.invoice_line_id=any($1::bigint[]) and t.company_id=$2
+          order by t.id for update of t`,[lineIds,companyId])).rows;
+    if (lineTaxRows.some(t => {
+      const rate = /15%/.test(t.name) ? 0.15 : /10%/.test(t.name) ? 0.10 : null;
+      if (rate === null) return false;
+      const expected = money((Number(t.subtotal)-Number(t.vat_amount))*rate);
+      return !Number.isFinite(expected) || Math.abs(expected-Number(t.tax_amount))>0.02;
+    }))
+      throw new ApprovalError("PPh invoice tidak sesuai dasar sebelum PPN; perbaiki melalui Finance Review",422,"COMPONENT_WITHHOLDING_BASE_MISMATCH");
     const withheld=money(taxes.reduce((sum,t)=>sum+Number(t.tax_amount),0));
     // Reject missing or inconsistent component tax amounts before writing any journal.
     if (taxes.some(t=>!Number.isFinite(Number(t.tax_amount)) || Number(t.tax_amount)<=0) ||
