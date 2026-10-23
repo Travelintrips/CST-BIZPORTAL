@@ -767,6 +767,32 @@ router.get("/purchase-workflow/vendor-invoices/:id/legacy-withholding-repair-his
   }
 });
 
+router.get("/purchase-workflow/vendor-invoices/expense-accounts", async (req, res): Promise<void> => {
+  const companyId = parseCompanyId(req);
+  if (companyId === null) {
+    sendError(res, 400, "Perusahaan invoice tidak valid", "INVALID_COMPANY");
+    return;
+  }
+  try {
+    const result = await pool.query<LiabilityAccountRow>(`
+      select id, code, name
+      from public.chart_of_accounts
+      where company_id = $1
+        and coalesce(is_active, true) = true
+        and coalesce(is_postable, true) = true
+        and coalesce(is_header, false) = false
+        and coalesce(status::text, 'ACTIVE') = 'ACTIVE'
+        and (lower(coalesce(type::text, '')) = 'expense'
+          or lower(coalesce(account_type::text, '')) = 'expense')
+      order by code, id
+    `, [companyId]);
+    res.json(result.rows);
+  } catch (error) {
+    req.log.error({ error }, "Failed to load vendor invoice expense accounts");
+    sendError(res, 503, "Akun beban tidak dapat dimuat", "EXPENSE_ACCOUNT_LOAD_FAILED");
+  }
+});
+
 router.get("/purchase-workflow/vendor-invoices/liability-accounts", async (req, res): Promise<void> => {
   const companyId = parseCompanyId(req);
   if (companyId === null) {
