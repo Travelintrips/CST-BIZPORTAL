@@ -8914,6 +8914,12 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
          from public.vendor_invoice_line_taxes t
          where t.invoice_line_id=any($1::bigint[]) and t.company_id=$2 and t.tax_amount>0
          order by t.id for update`,[lineIds,companyId])).rows;
+    const unresolvedTaxes=(await client.query<{id:number}>(`select id from public.vendor_invoice_line_taxes
+      where invoice_line_id=any($1::bigint[]) and company_id=$2
+        and (resolution_status is distinct from 'resolved' or reviewed_at is null)
+      limit 1 for update`,[lineIds,companyId])).rows;
+    if (unresolvedTaxes.length)
+      throw new ApprovalError("PPh komponen belum disetujui di Finance Review",422,"COMPONENT_TAX_REVIEW_REQUIRED");
     if (taxes.some(t=>!Number.isSafeInteger(Number(t.liability_account_id)) || Number(t.liability_account_id)<=0))
       throw new ApprovalError("COA Hutang PPh belum dipetakan di Finance Review",422,"WITHHOLDING_ACCOUNT_REQUIRED");
     const gross=money(matches.reduce((sum,l)=>sum+Number(l.subtotal),0));
