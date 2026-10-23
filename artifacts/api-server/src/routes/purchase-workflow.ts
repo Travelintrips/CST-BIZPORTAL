@@ -1099,8 +1099,22 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       withholdingTaxAmount: row.withholding_tax_amount,
       withholdingTaxType: row.withholding_tax_type,
       invoiceBreakdown: row.invoice_breakdown,
-      lines: lines.rows,
-      lineTaxes: taxes.rows,
+      lines: lines.rows.map((line) => ({
+        ...line,
+        productId: line.product_id,
+        unitCost: line.unit_cost,
+        taxAmount: line.tax_amount,
+        coaAccountId: line.coa_account_id,
+      })),
+      lineTaxes: taxes.rows.map((tax) => ({
+        ...tax,
+        invoiceLineId: tax.invoice_line_id,
+        taxType: tax.tax_type,
+        taxObject: tax.tax_object,
+        taxAmount: tax.tax_amount,
+        liabilityAccountId: tax.liability_account_id,
+        resolutionStatus: tax.resolution_status,
+      })),
       withholdingRecords: withholding.rows,
     });
   } catch (error) {
