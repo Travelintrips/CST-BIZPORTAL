@@ -44,7 +44,10 @@ describe("bank reconciliation approved-match guard", () => {
       "qris_existing_approval.status = 'approved'",
     );
     expect(routeSource).toContain(
-      'bmFilters.push(`${effectiveBankMutationStatusSql("bm")} =',
+      'const effectiveStatus = effectiveBankMutationStatusSql("bm");',
+    );
+    expect(routeSource).toContain(
+      'bmFilters.push(`${effectiveStatus} =',
     );
   });
 
