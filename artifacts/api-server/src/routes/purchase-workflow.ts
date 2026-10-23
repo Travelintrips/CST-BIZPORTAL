@@ -542,7 +542,25 @@ async function loadLegacyRepairData(
         [invoice.id, companyId],
       ),
     ]);
-    const components = legacyRepairComponents(invoice);
+    // Prefer the actual itemized tax records when their sum agrees with the
+    // invoice header. Legacy headers may still contain a combined PPh label
+    // even after an audited correction of the individual tax records.
+    const persistedTaxTotal = taxResult.rows.reduce((sum, tax) => sum + finiteMoney(tax.tax_amount), 0);
+    const headerTaxTotal = finiteMoney(invoice.withholding_tax_amount);
+    const hasCompletePersistedTaxes = taxResult.rows.length > 0
+      && Math.abs(persistedTaxTotal - headerTaxTotal) < 0.02
+      && taxResult.rows.every((tax) => tax.invoice_line_id && tax.tax_type.trim()
+        && tax.tax_object.trim() && finiteMoney(tax.base_amount) > 0);
+    const components = hasCompletePersistedTaxes
+      ? taxResult.rows.map((tax) => ({
+          invoiceLineId: tax.invoice_line_id,
+          taxType: tax.tax_type.trim(),
+          taxObject: tax.tax_object.trim(),
+          baseAmount: finiteMoney(tax.base_amount),
+          taxAmount: finiteMoney(tax.tax_amount),
+          liabilityAccountId: tax.liability_account_id,
+        }))
+      : legacyRepairComponents(invoice);
     const firstLineId = lineResult.rows[0]?.id ?? 0;
     const plans = components.map((plan, index) => ({
       ...plan,
