@@ -789,6 +789,18 @@ export function VendorInvoiceEditorPage() {
     },
     enabled: !isNew && activeCompanyId != null && hasActiveWithholding,
   });
+  const { data: expenseAccounts = [], isLoading: expenseAccountsLoading } = useQuery<LiabilityAccount[]>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/expense-accounts", activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(`/purchase-workflow/vendor-invoices/expense-accounts?company=${activeCompanyId}`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Gagal memuat daftar COA beban.");
+      }
+      return payload as LiabilityAccount[];
+    },
+    enabled: activeCompanyId != null,
+  });
   const refreshInvoiceDetail = async (): Promise<VI> => {
     const response = await apiFetch(
       `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
@@ -1335,7 +1347,18 @@ export function VendorInvoiceEditorPage() {
                       <td className="py-2 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-9 w-20" aria-label={`Satuan item ${i + 1}`} /></td>
                       <td className="py-2 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" aria-label={`Harga satuan item ${i + 1}`} /></td>
                       <td className="py-2 px-2"><Input type="number" value={line.taxAmount} onChange={e => updateLine(i, "taxAmount", e.target.value)} disabled={!isDraft} className="h-9 w-32 text-right font-mono" placeholder="0" aria-label={`PPN item ${i + 1}`} /></td>
-                      <td className="py-2 px-2"><Input type="number" value={line.coaAccountId ?? ""} onChange={e => updateLine(i, "coaAccountId", e.target.value)} disabled={!isDraft} className="h-9 w-28 text-right font-mono" placeholder="ID akun" aria-label={`COA beban item ${i + 1}`} /></td>
+                      <td className="py-2 px-2">
+                        <Select value={line.coaAccountId || undefined} onValueChange={(value) => updateLine(i, "coaAccountId", value)} disabled={!isDraft || expenseAccountsLoading}>
+                          <SelectTrigger className="h-9 min-w-48" aria-label={`COA beban item ${i + 1}`}>
+                            <SelectValue placeholder={expenseAccountsLoading ? "Memuat COA..." : "Pilih COA beban"} />
+                          </SelectTrigger>
+                          <SelectContent searchPlaceholder="Cari kode atau nama COA...">
+                            {expenseAccounts.map((account) => (
+                              <SelectItem key={account.id} value={String(account.id)}>{account.code} — {account.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </td>
                       <td className="py-2 px-2">
                         <Input type="number" value={line.withholdingAmount ?? "0"} onChange={e => updateLine(i, "withholdingAmount", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" placeholder="0" aria-label={`PPh item ${i + 1}`} />
                         {line.taxType && <span className="mt-1 block text-[10px] text-amber-600">{line.taxType}</span>}
