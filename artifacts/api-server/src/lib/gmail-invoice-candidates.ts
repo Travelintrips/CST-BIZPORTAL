@@ -725,7 +725,9 @@ export async function importGmailInvoiceCandidate(args: {
           : /(?:pemakaian\s+)?air/i.test(line.name)
             ? "water"
             : "other";
-      const base = line.subtotal;
+      // OCR line total includes VAT; withholding must use the pre-VAT taxable base.
+      // Keep the extracted VAT separate from PPh and never apply PPh to gross.
+      const base = Math.max(0, Math.round((line.subtotal - line.tax) * 100) / 100);
       const amount = rate != null && Number.isFinite(rate) && rate > 0 && rate <= 100
         ? Math.round(base * rate) / 100
         : 0;
