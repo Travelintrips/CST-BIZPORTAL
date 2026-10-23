@@ -1352,7 +1352,7 @@ export function VendorInvoiceEditorPage() {
                           <SelectTrigger className="h-9 min-w-48" aria-label={`COA beban item ${i + 1}`}>
                             <SelectValue placeholder={expenseAccountsLoading ? "Memuat COA..." : "Pilih COA beban"} />
                           </SelectTrigger>
-                          <SelectContent searchPlaceholder="Cari kode atau nama COA...">
+                          <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions collisionPadding={16} className="w-[min(28rem,calc(100vw-2rem))] max-h-[min(18rem,var(--radix-popper-available-height))] overflow-hidden" searchPlaceholder="Cari kode atau nama COA...">
                             {expenseAccounts.map((account) => (
                               <SelectItem key={account.id} value={String(account.id)}>{account.code} — {account.name}</SelectItem>
                             ))}
