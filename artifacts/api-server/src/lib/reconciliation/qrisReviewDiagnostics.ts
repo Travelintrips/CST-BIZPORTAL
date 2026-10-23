@@ -1,4 +1,5 @@
 import { pool } from "@workspace/db";
+import { calculateQrisCandidatePreview } from "./qrisMdrPolicy";
 
 type QrisDiagnosticRow = Record<string, unknown> & {
   mutation_id: number;
@@ -415,6 +416,20 @@ function synthesizeDiagnostic(
   ));
   const mdr = money(selected.reduce((sum, payment) => sum + paymentMdr(payment), 0));
   const net = money(gross - mdr);
+  // Read-only policy preview recomputed from the *current* candidate rows.
+  // A Mandiri 0.7% configuration suggests a regular merchant tariff, but this
+  // does not prove the acquirer's MCC/category or that the cohort is complete.
+  // Keep the original posted/payment MDR evidence unchanged; NEVER authorize
+  // settlement or approval from this estimate.
+  const previewPayments = selected.map((payment) => ({
+    id: payment.id,
+    amount: safeNumber(payment.amount) ?? 0,
+    transactionDate: dateOnly(payment.paid_at) ?? dateOnly(mutation.transaction_date) ?? "",
+    merchantCategory: "regular" as const,
+  }));
+  const policyPreview = previewPayments.every((payment) => payment.transactionDate && Number.isSafeInteger(payment.amount))
+    ? calculateQrisCandidatePreview({ payments: previewPayments, candidatesComplete: false })
+    : null;
   const difference = money(bankAmount - net);
   const settlementDate = dateOnly(mutation.transaction_date);
   const expectedDates = selected
@@ -439,6 +454,13 @@ function synthesizeDiagnostic(
     estimated_settlement_date: settlementDate,
     gross_amount: gross,
     mdr_amount: mdr,
+    // Dynamic, unverified preview only. Not a replacement for persisted MDR.
+    policy_mdr_preview_amount: policyPreview?.provisionalMdrAmount ?? null,
+    policy_mdr_preview_final: null,
+    policy_mdr_preview_category: "regular_unverified",
+    policy_mdr_source_difference: policyPreview == null ? null : money(policyPreview.provisionalMdrAmount - mdr),
+    policy_mdr_candidate_ids: selected.map((payment) => payment.id),
+    policy_mdr_requires_complete_candidates: true,
     other_fee_amount: 0,
     net_amount: net,
     observed_deduction: mdr,
