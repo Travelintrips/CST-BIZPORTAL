@@ -8889,7 +8889,8 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
       `select pa.mutation_id from public.payment_allocations pa
          join public.bank_mutations bm on bm.id=pa.mutation_id
         where pa.invoice_id=$1 and pa.company_id=$2 and coalesce(pa.is_active,true)=true
-          and pa.mutation_id<>$3 and bm.journal_entry_id is not null
+          and pa.mutation_id<>$3
+          and (bm.journal_entry_id is not null or bm.status not in ('void','cancelled'))
           and (bm.linked_transaction_type is distinct from 'vendor_invoice_component')
         limit 1`,[invoiceId,companyId,mutationId])).rows;
     if (activeOtherPayments.length)
