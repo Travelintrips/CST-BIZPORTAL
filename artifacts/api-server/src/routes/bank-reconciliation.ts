@@ -8916,7 +8916,7 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
          order by t.id for update`,[lineIds,companyId])).rows;
     const unresolvedTaxes=(await client.query<{id:number}>(`select id from public.vendor_invoice_line_taxes
       where invoice_line_id=any($1::bigint[]) and company_id=$2
-        and (resolution_status is distinct from 'resolved' or reviewed_at is null)
+        and (resolution_status not in ('confirmed', 'approved', 'resolved') or reviewed_at is null or reviewed_by is null)
       limit 1 for update`,[lineIds,companyId])).rows;
     if (unresolvedTaxes.length)
       throw new ApprovalError("PPh komponen belum disetujui di Finance Review",422,"COMPONENT_TAX_REVIEW_REQUIRED");
