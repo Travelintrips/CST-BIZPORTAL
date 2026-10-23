@@ -150,6 +150,25 @@ async function processAttachment(args: {
 }): Promise<"ready" | "manual_review" | "duplicate" | "failed" | "existing"> {
   const candidate = await upsertShell(args);
 
+  if (candidate.extraction_status === "complete" && candidate.status === "ready" && candidate.attachment_sha256) {
+    const importedTwin = await pool.query<{ id: number; vendor_invoice_id: number | null }>(
+      `select id, vendor_invoice_id from public.gmail_invoice_candidates
+        where company_id=$1 and gmail_message_id=$2 and attachment_sha256=$3
+          and id<>$4 and status='imported' and vendor_invoice_id is not null
+        order by id limit 1`,
+      [args.companyId, args.message.id, candidate.attachment_sha256, candidate.id],
+    );
+    if (importedTwin.rows[0]) {
+      await pool.query(
+        `update public.gmail_invoice_candidates
+            set status='duplicate', vendor_invoice_id=$1,
+                error_message='Same email attachment already imported', updated_at=now()
+          where id=$2 and company_id=$3 and status='ready'`,
+        [importedTwin.rows[0].vendor_invoice_id, candidate.id, args.companyId],
+      );
+    }
+  }
+
   if (
     candidate.status === "imported" ||
     candidate.status === "duplicate" ||
@@ -750,7 +769,9 @@ export async function importGmailInvoiceCandidate(args: {
           : /(?:pemakaian\s+)?air/i.test(line.name)
             ? "water"
             : "other";
-      const base = line.subtotal;
+      // OCR line total includes VAT; withholding must use the pre-VAT taxable base.
+      // Keep the extracted VAT separate from PPh and never apply PPh to gross.
+      const base = Math.max(0, Math.round((line.subtotal - line.tax) * 100) / 100);
       const amount = rate != null && Number.isFinite(rate) && rate > 0 && rate <= 100
         ? Math.round(base * rate) / 100
         : 0;
