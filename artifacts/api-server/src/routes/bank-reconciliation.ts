@@ -8920,6 +8920,10 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
     if (taxes.length === 0 || matches.some(line => !taxes.some(t => Number(t.invoice_line_id) === Number(line.id))))
       throw new ApprovalError("Rincian PPh komponen belum lengkap; lakukan Finance Review sebelum pembayaran",422,"COMPONENT_WITHHOLDING_INCOMPLETE");
     const withheld=money(taxes.reduce((sum,t)=>sum+Number(t.tax_amount),0));
+    // Reject missing or inconsistent component tax amounts before writing any journal.
+    if (taxes.some(t=>!Number.isFinite(Number(t.tax_amount)) || Number(t.tax_amount)<=0) ||
+        !Number.isFinite(withheld) || withheld<=0 || withheld>=gross)
+      throw new ApprovalError("Nilai PPh komponen tidak valid",422,"COMPONENT_WITHHOLDING_INVALID");
     if (!Number.isFinite(gross) || gross<=0 || money(gross-withheld)<=0 || Math.abs(money(gross-withheld)-cash)>0.01)
       throw new ApprovalError("Neto komponen tidak sama dengan transfer bank",422,"COMPONENT_AMOUNT_MISMATCH");
     const bankCoaId=await resolveApprovalBankAccount(client,companyId,mutation.bank_account_id == null ? null : String(mutation.bank_account_id));
