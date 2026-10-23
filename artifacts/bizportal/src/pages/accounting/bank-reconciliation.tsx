@@ -3507,6 +3507,42 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Gagal membatalkan link", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
     } finally { setSavingDraftId(null); }
   };
+  const saveUtilitiesCandidate = async (invoiceId: number) => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-utilities-link`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal menyimpan kandidat listrik + air");
+      await invoicesQuery.refetch();
+      toast({ title: "Kandidat listrik + air tersimpan", description: "Kandidat rekonsiliasi tersimpan; pembayaran dan jurnal belum dibuat." });
+    } catch (error) {
+      toast({ title: "Gagal menyimpan kandidat listrik + air", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
+  const settleComponent = async (invoiceId: number, mode: "concession" | "utilities") => {
+    if (!mutation || !companyId) return;
+    setSavingDraftId(invoiceId);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-component-payment`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-company-id": String(companyId) },
+        body: JSON.stringify({ invoice_id: invoiceId, mode }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Pembayaran komponen ditolak");
+      await invoicesQuery.refetch();
+      toast({ title: "Pembayaran komponen tercatat", description: "Jurnal menunggu posting sesuai prosedur rekonsiliasi." });
+      onClose();
+      await onSaved();
+    } catch (error) {
+      toast({ title: "Match & Bayar gagal", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    } finally { setSavingDraftId(null); }
+  };
   const saveDraftLineCandidate = async (lineId: number) => {
     if (!mutation || !companyId) return;
     setSavingDraftId(lineId);
@@ -3828,8 +3864,8 @@ function VendorInvoicePaymentDialog({
           )}
           {draftInvoices.length > 0 && (
             <div className="rounded-md border border-amber-300 p-3 space-y-2 text-sm">
-              <p className="font-semibold">INV Vendor — Kandidat Draft (pemeriksaan saja)</p>
-              <p className="text-xs text-muted-foreground">Pilih kandidat untuk membandingkan invoice, rincian PPh, dan mutasi. Pilihan ini tidak menyimpan match, tidak memposting invoice, dan tidak membuat jurnal atau pembayaran. Posting dan Finance Review tetap diperlukan sebelum Match &amp; Bayar.</p>
+              <p className="font-semibold">INV Vendor — Kandidat Rekonsiliasi Draft</p>
+              <p className="text-xs text-muted-foreground">Pilih invoice Draft sebagai kandidat rekonsiliasi mutasi bank. Link yang disimpan tercatat pada rekonsiliasi dan dapat dibatalkan. Karena invoice masih Draft, kandidat belum dapat diproses sebagai pembayaran atau jurnal sampai Finance Review dan Posting selesai.</p>
               {draftInvoices.map((invoice) => (
                 <div key={invoice.id} className="rounded border p-3 space-y-2">
                   <div className="flex items-start gap-3">
@@ -3877,6 +3913,10 @@ function VendorInvoicePaymentDialog({
                         ))}
                         <div className="text-muted-foreground">Link komponen hanya berhasil jika neto komponen sama dengan mutasi bank. Tidak membuat jurnal atau pelunasan.</div>
                       </div>
+                      <Button size="sm" variant="outline" disabled={savingDraftId !== null}
+                        onClick={() => saveUtilitiesCandidate(invoice.id)}>
+                        Cocokkan kandidat Listrik + Air
+                      </Button>
                       {(invoice.withholdingLines ?? []).map((tax, i) => (
                         <div key={i} className="rounded border border-blue-200 p-2">
                           <div>{tax.taxType} — {tax.taxObject} · Dasar {idr(tax.baseAmount)} · PPh {idr(tax.amount)}</div>
@@ -3939,6 +3979,14 @@ function VendorInvoicePaymentDialog({
                           <div className="font-medium">{invoice.billNumber ?? invoice.docNumber}</div>
                           <div className="text-xs text-muted-foreground">{invoice.supplierName}</div>
                           {invoice.dueDate && <div className="text-xs text-muted-foreground">Jatuh tempo {invoice.dueDate}</div>}
+                          {invoice.invoiceBreakdown?.components?.some((component) => /konsesi|listrik|electricity|\bair\b|water/i.test(String(component.label ?? component.component ?? ""))) && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null || saving}
+                                onClick={() => settleComponent(invoice.id, "concession")}>Match &amp; Bayar Konsesi</Button>
+                              <Button size="sm" variant="outline" disabled={savingDraftId !== null || saving}
+                                onClick={() => settleComponent(invoice.id, "utilities")}>Match &amp; Bayar Listrik + Air</Button>
+                            </div>
+                          )}
                           {hasWithholding && (
                             <Badge variant="outline" className="mt-1 border-blue-300 text-blue-700">
                               PPh auto ke COA
