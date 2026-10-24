@@ -610,19 +610,32 @@ export async function importGmailInvoiceCandidate(args: {
       Number(sequence.rows[0]?.seq ?? 0) + 1,
     ).padStart(5, "0")}`;
 
+    // Match an existing supplier by canonical name. OCR frequently prints AP2's
+    // formal legal name instead of the shorter name used in Supplier Master.
+    // Only this verified legal-name alias is accepted; never create suppliers
+    // or guess a match from a partial name.
+    const normalizedVendor = vendorName.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const ap2LegalAlias = normalizedVendor ===
+      "PERUSAHAANPERSEROANPERSEROPTANGKASAPURAINDONESIA";
     const supplier = await client.query<{ id: number }>(
       `select id
          from public.suppliers
-        where lower(
-          regexp_replace(coalesce(name,''),'[^[:alnum:]]','','g')
-        ) = lower(
-          regexp_replace($2,'[^[:alnum:]]','','g')
-        )
-          and (company_id=$1 or company_id is null)
+        where (company_id=$1 or company_id is null)
+          and (
+            lower(regexp_replace(coalesce(name,''),'[^[:alnum:]]','','g')) =
+              lower(regexp_replace($2,'[^[:alnum:]]','','g'))
+            or ($3::boolean and
+                upper(regexp_replace(coalesce(name,''),'[^[:alnum:]]','','g')) =
+                  'PTANGKASAPURAINDONESIAPERSERO')
+          )
         order by (company_id=$1) desc,id
-        limit 1`,
-      [args.companyId, vendorName],
+        limit 2`,
+      [args.companyId, vendorName, ap2LegalAlias],
     );
+    // Ambiguous master data must be reviewed rather than silently linked.
+    const resolvedSupplierId = supplier.rows.length === 1
+      ? supplier.rows[0]!.id
+      : null;
 
     const invoiceDate = candidate.extracted_invoice_date
       ? new Date(String(candidate.extracted_invoice_date))
@@ -673,7 +686,7 @@ export async function importGmailInvoiceCandidate(args: {
         invoiceNumber,
         vendorReference,
         args.companyId,
-        supplier.rows[0]?.id ?? null,
+        resolvedSupplierId,
         vendorName,
         invoiceDate,
         dueDate,
