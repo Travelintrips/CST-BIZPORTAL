@@ -2016,14 +2016,26 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
     } else {
       await db.update(vendorInvoicesTable).set({ status: "posted", threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
     }
-  } catch (e) { console.error("[VI post]", e); await db.update(vendorInvoicesTable).set({ status: "posted", updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id)); }
+  } catch (e) {
+    console.error("[VI post]", e);
+    return res.status(500).json({ code: "VENDOR_INVOICE_POST_FAILED", error: "Jurnal vendor invoice gagal diposting. Status invoice tidak diubah." });
+  }
 
   const [updated] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   res.json(updated);
 });
 
 router.post("/vendor-invoices/:id/cancel", async (req, res) => {
-  await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, Number(req.params.id)));
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: "ID invoice tidak valid." });
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const [invoice] = await db.select().from(vendorInvoicesTable).where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId)));
+  if (!invoice) return res.status(404).json({ error: "Vendor Invoice tidak ditemukan." });
+  if (invoice.journalEntryId != null || invoice.status === "posted") {
+    return res.status(409).json({ code: "VENDOR_INVOICE_REVERSAL_REQUIRED", error: "Invoice memiliki jurnal. Lakukan reversal akuntansi resmi sebelum membatalkan." });
+  }
+  if (invoice.status !== "draft") return res.status(409).json({ error: "Hanya invoice draft tanpa jurnal yang dapat dibatalkan." });
+  await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId), eq(vendorInvoicesTable.status, "draft")));
   res.json({ ok: true });
 });
 
