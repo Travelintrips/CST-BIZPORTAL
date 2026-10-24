@@ -1149,6 +1149,66 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
   }
 });
 
+router.put("/purchase-workflow/vendor-invoices/:id/expense-coas", async (req, res): Promise<void> => {
+  const invoiceId = parseInvoiceId(req);
+  const companyId = parseCompanyId(req);
+  const lines = req.body?.lines;
+  if (invoiceId === null || companyId === null || !Array.isArray(lines) || lines.length === 0 ||
+      lines.length > 100 || lines.some((line: any) =>
+        !Number.isSafeInteger(line?.lineId) || line.lineId <= 0 ||
+        !Number.isSafeInteger(line?.coaAccountId) || line.coaAccountId <= 0
+      ) || new Set(lines.map((line: any) => line.lineId)).size !== lines.length) {
+    sendError(res, 400, "Pemetaan COA beban tidak valid", "INVALID_EXPENSE_COA_MAPPING");
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const invoice = await client.query(
+      "select id from public.vendor_invoices where id=$1 and company_id=$2 and status::text='draft' for update",
+      [invoiceId, companyId],
+    );
+    if (invoice.rowCount !== 1) {
+      await client.query("rollback");
+      sendError(res, 409, "Invoice bukan Draft atau tidak ditemukan", "INVOICE_NOT_DRAFT");
+      return;
+    }
+    const invoiceLines = await client.query<{id: number}>(
+      "select id from public.vendor_invoice_lines where invoice_id=$1 order by id for update",
+      [invoiceId],
+    );
+    const validIds = new Set(invoiceLines.rows.map((line) => Number(line.id)));
+    if (lines.length !== validIds.size || lines.some((line: any) => !validIds.has(line.lineId))) {
+      await client.query("rollback");
+      sendError(res, 409, "Daftar baris invoice berubah; muat ulang halaman", "INVOICE_LINES_CHANGED");
+      return;
+    }
+    for (const line of lines) {
+      const account = await client.query(
+        "select id from public.chart_of_accounts where id=$1 and company_id=$2 and type::text='expense' and is_active=true and is_postable=true and coalesce(is_header,false)=false",
+        [line.coaAccountId, companyId],
+      );
+      if (account.rowCount !== 1) {
+        await client.query("rollback");
+        sendError(res, 422, "COA Beban tidak aktif atau tidak sesuai perusahaan", "INVALID_EXPENSE_ACCOUNT");
+        return;
+      }
+      await client.query(
+        "update public.vendor_invoice_lines set coa_account_id=$1 where id=$2 and invoice_id=$3",
+        [line.coaAccountId, line.lineId, invoiceId],
+      );
+    }
+    await client.query("commit");
+    res.json({ ok: true, invoiceId, saved: lines.length });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error, invoiceId }, "Failed to save vendor invoice expense COAs");
+    sendError(res, 503, "Gagal menyimpan COA Beban", "EXPENSE_COA_SAVE_FAILED");
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/purchase-workflow/vendor-invoices/:id/reset-payment", async (req, res): Promise<void> => {
   const invoiceId = parseInvoiceId(req);
   if (invoiceId === null) {
