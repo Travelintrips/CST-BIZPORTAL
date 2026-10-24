@@ -960,6 +960,38 @@ export function VendorInvoiceEditorPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal"),
   });
 
+  const saveExpenseCoasMut = useMutation({
+    mutationFn: async () => {
+      if (!vi?.id || lines.length === 0 || lines.some((line) => !line.id || !line.coaAccountId)) {
+        throw new Error("Pilih COA Beban untuk semua baris invoice terlebih dahulu.");
+      }
+      const payload = { lines: lines.map((line) => ({
+        lineId: Number(line.id),
+        coaAccountId: Number(line.coaAccountId),
+      })) };
+      const response = await apiFetch("/purchase-workflow/vendor-invoices/" + vi.id + "/expense-coas?company=" + activeCompanyId, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(formatPostingError(error, "COA Beban gagal disimpan."));
+      }
+      const verifiedResponse = await apiFetch("/purchase-workflow/vendor-invoices/" + vi.id + "?company=" + activeCompanyId);
+      if (!verifiedResponse.ok) throw new Error("COA disimpan, tetapi pembacaan ulang gagal.");
+      const verified = await verifiedResponse.json() as VI;
+      if (lines.some((line) => Number(verified.lines?.find((item) => Number(item.id) === Number(line.id))?.coaAccountId) !== Number(line.coaAccountId))) {
+        throw new Error("Verifikasi gagal: COA Beban belum tersimpan permanen.");
+      }
+      return verified;
+    },
+    onSuccess: () => {
+      toast.success("Ketiga COA Beban tersimpan dan terverifikasi");
+      qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal menyimpan COA"),
+  });
+
   const postMut = useMutation({
     mutationFn: async () => {
       // Users commonly edit the imported values and click Post directly.
@@ -1189,6 +1221,7 @@ export function VendorInvoiceEditorPage() {
           </div>
           <div className="flex gap-2">
             {isDraft && <Button variant="outline" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>Simpan</Button>}
+            {!isNew && isDraft && <Button variant="outline" onClick={() => saveExpenseCoasMut.mutate()} disabled={saveExpenseCoasMut.isPending}>{saveExpenseCoasMut.isPending ? "Menyimpan COA..." : "Simpan COA Beban"}</Button>}
             {!isNew && isDraft && !supportingTaxDocument && (
               <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => postMut.mutate()} disabled={postMut.isPending || saveMut.isPending || liabilityAccountsLoading}>
                 <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
