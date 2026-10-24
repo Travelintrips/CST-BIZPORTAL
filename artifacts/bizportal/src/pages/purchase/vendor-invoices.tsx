@@ -965,6 +965,36 @@ export function VendorInvoiceEditorPage() {
       if (!vi?.id || lines.length === 0 || lines.some((line) => !line.id || !line.coaAccountId)) {
         throw new Error("Pilih COA Beban untuk semua baris invoice terlebih dahulu.");
       }
+      // This endpoint only persists expense COAs. Refuse to silently discard
+      // edits to invoice amounts, dates, suppliers or withholding tax.
+      const invoiceChanged = !vi ||
+        form.supplierName !== vi.supplierName ||
+        form.vendorInvoiceRef !== (vi.vendorInvoiceRef ?? "") ||
+        form.poId !== String(vi.poId ?? "") ||
+        form.grId !== String(vi.grId ?? "") ||
+        form.invoiceDate !== (vi.invoiceDate?.substring(0, 10) ?? "") ||
+        Number(form.paymentTermDays) !== Number(vi.paymentTermDays ?? 30) ||
+        lines.length !== (vi.lines?.length ?? 0) ||
+        lines.some((line, index) => {
+          const original = vi.lines?.[index];
+          const tax = vi.lineTaxes?.find((entry) => entry.invoiceLineId === original?.id);
+          const breakdown = vi.invoiceBreakdown?.components?.[index];
+          const withholding = tax && Number(tax.taxAmount) > 0
+            ? Number(tax.taxAmount)
+            : Number(breakdown?.withholding_tax_amount ?? 0);
+          return !original || Number(line.id) !== Number(original.id) ||
+            line.name !== original.name ||
+            Number(line.quantity) !== Number(original.quantity) ||
+            line.unit !== original.unit ||
+            Number(line.subtotal) !== Number(original.subtotal) ||
+            Number(line.taxAmount) !== Number(original.taxAmount) ||
+            Number(line.withholdingAmount) !== withholding ||
+            (line.liabilityAccountId ? Number(line.liabilityAccountId) : null) !==
+              (tax?.liabilityAccountId ? Number(tax.liabilityAccountId) : null);
+        });
+      if (invoiceChanged) {
+        throw new Error("Perubahan selain COA Beban belum didukung oleh penyimpanan ini. Muat ulang invoice sebelum mengubah COA.");
+      }
       const payload = { lines: lines.map((line) => ({
         lineId: Number(line.id),
         coaAccountId: Number(line.coaAccountId),
@@ -986,7 +1016,7 @@ export function VendorInvoiceEditorPage() {
       return verified;
     },
     onSuccess: () => {
-      toast.success("Ketiga COA Beban tersimpan dan terverifikasi");
+      toast.success("COA Beban tersimpan dan terverifikasi");
       qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices"] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal menyimpan COA"),
@@ -1220,8 +1250,8 @@ export function VendorInvoiceEditorPage() {
             )}
           </div>
           <div className="flex gap-2">
-            {isDraft && <Button variant="outline" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>Simpan</Button>}
-            {!isNew && isDraft && <Button variant="outline" onClick={() => saveExpenseCoasMut.mutate()} disabled={saveExpenseCoasMut.isPending}>{saveExpenseCoasMut.isPending ? "Menyimpan COA..." : "Simpan COA Beban"}</Button>}
+            {isNew && isDraft && <Button variant="outline" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>Simpan</Button>}
+            {!isNew && isDraft && <Button variant="outline" onClick={() => saveExpenseCoasMut.mutate()} disabled={saveExpenseCoasMut.isPending}>{saveExpenseCoasMut.isPending ? "Menyimpan..." : "Simpan"}</Button>}
             {!isNew && isDraft && !supportingTaxDocument && (
               <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => postMut.mutate()} disabled={postMut.isPending || saveMut.isPending || liabilityAccountsLoading}>
                 <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
