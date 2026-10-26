@@ -1458,6 +1458,7 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
       account_id: number; account_code: string; account_name: string; account_type: string;
       normal_balance: string; debit: string; credit: string; created_at: Date; posted_at: Date | null;
       payment_method: string | null; partner_name: string | null; running_balance: string;
+      source: string | null;
       total_count: number; filtered_debit: string; filtered_credit: string;
     }>(`
       with base as (
@@ -1522,8 +1523,32 @@ router.get("/accounting/hub/general-ledger", async (req, res): Promise<void> => 
       `, openingValues);
       for (const row of opening.rows) openingByContext.set(contextKey(row), Number(row.balance));
     }
+    // A posted reversal remains a posted ledger movement. Provide its identity
+    // separately so the UI can label both halves of the correction without
+    // changing historical debits/credits or pretending the original was deleted.
+    const entryIds = [...new Set(result.rows.map((row) => Number(row.entry_id)).filter((id) => Number.isInteger(id) && id > 0))];
+    const reversedByEntryId = new Map<number, string>();
+    if (entryIds.length > 0) {
+      const reversals = await pool.query<{ source_id: number; entry_number: string }>(
+        `select rev.source_id, rev.entry_number
+           from public.accounting_entries rev
+           join public.accounting_entries original
+             on original.id = rev.source_id and original.company_id = rev.company_id
+          where rev.source::text = 'reversal'
+            and rev.status::text = 'posted'
+            and rev.source_id = any($1::int[])
+          order by rev.id desc`,
+        [entryIds],
+      );
+      for (const reversal of reversals.rows) {
+        if (!reversedByEntryId.has(Number(reversal.source_id))) {
+          reversedByEntryId.set(Number(reversal.source_id), reversal.entry_number);
+        }
+      }
+    }
     const data = result.rows.map((row) => ({
       ...row, source_doc_number: null,
+      reversal_entry_number: reversedByEntryId.get(Number(row.entry_id)) ?? null,
       running_balance: String(Number(row.running_balance) + (openingByContext.get(contextKey(row)) ?? 0)),
       account_opening_balance: String(openingByContext.get(contextKey(row)) ?? 0),
     }));
