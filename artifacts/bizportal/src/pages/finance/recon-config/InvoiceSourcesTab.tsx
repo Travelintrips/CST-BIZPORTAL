@@ -671,7 +671,15 @@ export default function InvoiceSourcesTab() {
             <h3 className="text-base font-semibold text-white">Tolak kandidat invoice Gmail?</h3>
             <p className="mt-2 text-sm text-slate-400">Email dan lampiran asli tetap tersimpan. Setelah ditolak, kandidat tidak akan dibuat menjadi draft pada Sync Now berikutnya.</p>
             {rejectError && <p role="alert" className="mt-3 rounded border border-red-800 bg-red-950/40 p-2 text-sm text-red-300">{rejectError}</p>}
-            <label htmlFor="gmail-reject-reason" className="mt-4 block text-sm">Alasan penolakan (wajib)</label>
+            <label htmlFor="gmail-reject-reason" className="mt-4 block text-sm">Alasan penolakan (minimal 10 karakter)</label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {["Duplikat dokumen sumber", "Faktur pajak pendukung, bukan invoice", "Informasi invoice tidak valid"].map((reason) => (
+                <Button key={reason} type="button" size="sm" variant="outline" disabled={action !== null}
+                  onClick={() => { setRejectReason(reason); setRejectError(null); }}>
+                  {reason}
+                </Button>
+              ))}
+            </div>
             <textarea id="gmail-reject-reason" rows={3} maxLength={500} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)}
               className="mt-2 w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm text-white"
               placeholder="Contoh: Duplikat atau dokumen tidak valid" />
