@@ -2072,7 +2072,15 @@ router.post("/bank-reconciliation/run-matching", async (req, res): Promise<void>
     filters.push(`
       bm.status in ('unmatched', 'matched', 'duplicate_need_review')
       and (
-        bm.review_code = 'RECON_REVERSAL_REVIEW'
+        (
+          bm.status = 'unmatched'
+          and bm.review_code = 'RECON_REVERSAL_REVIEW'
+          and not exists (
+            select 1 from public.bank_reconciliation_matches final_match
+             where final_match.mutation_id = bm.id
+               and final_match.status in ('approved', 'posted')
+          )
+        )
         or not exists (
           select 1 from public.bank_reconciliation_audit audit
            where audit.mutation_id = bm.id
