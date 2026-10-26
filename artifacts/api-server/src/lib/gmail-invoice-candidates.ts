@@ -558,6 +558,7 @@ export async function reviewGmailInvoiceCandidate(args: {
     `update public.gmail_invoice_candidates
         set status = case
              when $4::boolean then 'rejected'
+             when attachment_file_name ~* '^fk([[:space:]_.-]|$)' then 'supporting'
              when extraction_status <> 'complete'
                or (extracted_vendor_name is null and extracted_invoice_number is null and extracted_total is null)
                then 'new'
@@ -589,7 +590,7 @@ export async function reviewGmailInvoiceCandidate(args: {
             updated_at=now()
       where id=$1 and company_id=$2 and vendor_invoice_id is null
         and (
-          ($4::boolean and status in ('new','ready','manual_review','failed'))
+          ($4::boolean and status in ('new','ready','manual_review','failed','duplicate','supporting'))
           or (not $4::boolean and status='rejected')
         )
       returning id,status`,
