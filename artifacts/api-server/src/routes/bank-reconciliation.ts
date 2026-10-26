@@ -3871,9 +3871,9 @@ async function approveBankMutation(
     const description = String(mutation.description ?? "").slice(0, 200);
     const inserted = await client.query<{ id: number; entry_number: string }>(
       `insert into public.accounting_entries
-        (entry_number, journal_id, date, ref, description, status, source, source_id,
+        (entry_number, journal_id, date, ref, description, status, entry_status, source, source_id,
          total_debit, total_credit, created_by_id, company_id)
-       values ($1, $2, $3, $4, $5, 'draft', 'bank_reconciliation', $6,
+       values ($1, $2, $3, $4, $5, 'draft', 'DRAFT', 'bank_reconciliation', $6,
                $7, $7, $8, $9)
        returning id, entry_number`,
       [entryNumber, journal.id, txDate, reference, description, mutationId, amount, actor.email, companyId],
@@ -4070,7 +4070,7 @@ async function postBankMutationCanonical(
 
   if (journal.status === "draft") {
     await client.query(
-      `update public.accounting_entries set status='posted',posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'`,
+      `update public.accounting_entries set status='posted',entry_status='POSTED',posted_at=coalesce(posted_at,now()) where id=$1 and status='draft'`,
       [entryId],
     );
   } else if (journal.status !== "posted") {
@@ -8644,9 +8644,9 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-payment-batch", asy
 
     const entryResult = await client.query<{ id: number }>(
       `insert into public.accounting_entries
-        (entry_number, journal_id, date, ref, description, status, source, source_id,
+        (entry_number, journal_id, date, ref, description, status, entry_status, source, source_id,
          total_debit, total_credit, created_by_id, company_id)
-       values ($1, $2, $3, $4, $5, 'draft', 'bank_reconciliation', $6,
+       values ($1, $2, $3, $4, $5, 'draft', 'DRAFT', 'bank_reconciliation', $6,
                $7, $8, $9, $10)
        returning id`,
       [entryNumber, journalId, txDate, reference, description, mutationId, totalDebit, totalCredit, actor.email, companyId],
@@ -8980,8 +8980,8 @@ router.post("/bank-reconciliation/:mutationId/vendor-invoice-component-payment",
     const description=`Pembayaran ${mode==="utilities"?"listrik + air":"konsesi"} — ${invoice.vendor_invoice_ref??invoice.invoice_number}`.slice(0,200);
     const entry=(await client.query<{id:number}>(
       `insert into public.accounting_entries
-       (entry_number,journal_id,date,ref,description,status,source,source_id,total_debit,total_credit,created_by_id,company_id)
-       values ($1,$2,$3,$4,$5,'draft','bank_reconciliation',$6,$7,$7,$8,$9) returning id`,
+       (entry_number,journal_id,date,ref,description,status,entry_status,source,source_id,total_debit,total_credit,created_by_id,company_id)
+       values ($1,$2,$3,$4,$5,'draft','DRAFT','bank_reconciliation',$6,$7,$7,$8,$9) returning id`,
       [entryNumber,journalId,txDate,reference,description,mutationId,gross,actor.email,companyId])).rows[0];
     if (!entry) throw new Error("Jurnal tidak tersimpan");
     await client.query(`insert into public.accounting_entry_lines (entry_id,account_id,debit,credit,description)
