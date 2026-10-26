@@ -2,6 +2,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useCompany } from "@/contexts/CompanyContext";
+import { canReverseFromLedger, ledgerReversalState } from "@/lib/generalLedgerReversal";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,8 @@ interface GLRow {
   date: string; source_module: string; source_schema: string; source_table: string | null;
   source_id: number | null; ref: string | null; entry_description: string | null;
   line_description: string | null; status: string;
+  source?: string | null;
+  reversal_entry_number?: string | null;
   journal_name: string; journal_type: string;
   account_id: number; account_code: string; account_name: string; account_type: string;
   normal_balance: "DEBIT" | "CREDIT";
@@ -632,7 +635,8 @@ export default function AccountingHubGLPage() {
             ) : rows.map((r) => {
               const isFirstLineOfEntry = !seenEntries.has(r.entry_id);
               if (isFirstLineOfEntry) seenEntries.add(r.entry_id);
-              const canVoid = r.status === "posted" && r.source_module !== "reversal";
+              const reversalState = ledgerReversalState(r);
+              const canVoid = canReverseFromLedger(r);
               const rowMonthIdx = Number(r.date?.slice(5, 7)) - 1;
               const rowMonthLabel = rowMonthIdx >= 0 && rowMonthIdx < 12 ? MONTH_NAMES[rowMonthIdx] : "-";
 
@@ -662,7 +666,7 @@ export default function AccountingHubGLPage() {
 
                   {/* Jenis Transaksi (readable label) */}
                   <td className="px-3 py-2">
-                    <span className="text-xs font-medium text-foreground">{moduleLabel(r.source_module)}</span>
+                    <span className="text-xs font-medium text-foreground">{reversalState === "reversal" ? "Jurnal Pembalik" : moduleLabel(r.source_module)}</span>
                     <div className="text-[10px] text-muted-foreground">{r.journal_name}</div>
                   </td>
 
@@ -738,6 +742,8 @@ export default function AccountingHubGLPage() {
 
                   <td className="px-3 py-2">
                     <Badge variant={r.status === "posted" ? "default" : "secondary"} className="text-xs">{r.status}</Badge>
+                    {reversalState === "reversal" && <div className="text-[10px] text-amber-500 mt-1">Jurnal pembalik</div>}
+                    {reversalState === "reversed" && <div className="text-[10px] text-amber-500 mt-1" title={`Jurnal dibalik oleh ${r.reversal_entry_number}`}>Sudah dibalik</div>}
                   </td>
                    <td className="px-3 py-2">
                      {isFirstLineOfEntry && (
@@ -884,6 +890,8 @@ export default function AccountingHubGLPage() {
               {/* Status & Type */}
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant={detailRow.status === "posted" ? "default" : "secondary"} className="text-xs">{detailRow.status}</Badge>
+                {ledgerReversalState(detailRow) === "reversal" && <Badge variant="outline" className="text-xs">Jurnal Pembalik</Badge>}
+                {ledgerReversalState(detailRow) === "reversed" && <Badge variant="outline" className="text-xs">Sudah Dibalik</Badge>}
                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeColor(detailRow.account_type)}`}>{detailRow.account_type}</span>
               </div>
 
@@ -891,6 +899,8 @@ export default function AccountingHubGLPage() {
               <div className="rounded-md border bg-muted/30 p-3 space-y-2">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Jurnal</p>
                 <Row label="No. Jurnal" value={<span className="font-mono">{detailRow.entry_number}</span>} />
+                {detailRow.reversal_entry_number && <Row label="Dibalik Oleh" value={<span className="font-mono">{detailRow.reversal_entry_number}</span>} />}
+                {ledgerReversalState(detailRow) === "reversal" && detailRow.source_id != null && <Row label="Membalik Entry ID" value={String(detailRow.source_id)} />}
                 <Row label="Tanggal" value={detailRow.date} />
                 <Row label="Nama Jurnal" value={detailRow.journal_name} />
                 <Row label="Tipe Jurnal" value={detailRow.journal_type} />
