@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
+import { isReconRuleAutoApprovalAllowed, canRunLegacyKasScRuleBackfill } from "../lib/reconciliation/autoApprovalPolicy";
 import {
   hydrateQrisReviewDiagnostics,
   listQrisReviewDiagnostics,
@@ -1564,7 +1565,8 @@ async function matchLocalMutation(
     // Only inbound QRIS belongs to the Sport Center settlement flow.
     // Outbound QRIS is an ordinary company payment rail (merchant expense,
     // vendor payment, etc.) and may be auto-posted by a deterministic Rule AI.
-    const autoPostEligible = (confidence === 100 || kasScApprovedRuleAutoPost)
+    const autoPostEligible = isReconRuleAutoApprovalAllowed(matchedRule.id)
+      && (confidence === 100 || kasScApprovedRuleAutoPost)
       && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
       && !matchedRule.requiresDocumentUpload
@@ -1716,6 +1718,10 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
     failed: 0,
   };
 
+  if (!canRunLegacyKasScRuleBackfill()) {
+    summary.skipped = true;
+    return summary;
+  }
   const client = await pool.connect();
   let lockAcquired = false;
   try {
@@ -1791,6 +1797,7 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
     );
 
     for (const row of rows.rows) {
+      if (!isReconRuleAutoApprovalAllowed(row.rule_id)) continue;
       summary.scanned += 1;
       const actor: ApprovalActor = {
         email: "system:kas-sc-rule-backfill",

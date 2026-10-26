@@ -1321,9 +1321,9 @@ function AiRulesTab() {
         <div className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-200">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <div>
-            <p className="font-semibold">Rule AI langsung disetujui dan aktif sebagai referensi</p>
+            <p className="font-semibold">Rule AI aktif untuk pencocokan, bukan persetujuan pembayaran</p>
             <p className="mt-0.5 text-xs text-emerald-300/80">
-              {highlightedRule.name} akan digunakan untuk transaksi berikutnya pada perusahaan aktif.
+              {highlightedRule.name} dapat menghasilkan kandidat rekonsiliasi. Persetujuan dan posting tetap memerlukan otorisasi terpisah.
             </p>
           </div>
         </div>
@@ -1831,8 +1831,8 @@ function AiRulesTab() {
               </Select>
               <p className="mt-1 text-[11px] text-slate-500">
                 Wajib kandidat cocok untuk pembayaran/invoice. Pilih tanpa kandidat untuk biaya admin atau alokasi langsung berbasis rule.
-                Auto-approve dan auto-post hanya berjalan jika confidence Rule AI 1, COA target valid, tidak ada ambiguitas,
-                dan rule tidak mewajibkan kandidat atau dokumen.
+                Confidence 100% tidak memberikan izin untuk auto-approve atau auto-post. Rule ini hanya mengusulkan klasifikasi/kandidat;
+                keputusan approval dan posting perlu otorisasi terpisah. Backfill otomatis legacy juga nonaktif secara default.
               </p>
             </div>
             <div className={`rounded-lg border p-3 ${

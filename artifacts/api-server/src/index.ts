@@ -1,4 +1,5 @@
 import app from "./app";
+import { canRunLegacyKasScRuleBackfill } from "./lib/reconciliation/autoApprovalPolicy";
 import { logger } from "./lib/logger";
 import { runFleetAutoReminderSweep } from "./lib/fleet-wa-reminder";
 import {
@@ -123,11 +124,15 @@ const runKasScRuleBackfillTick = async () => {
   }
 };
 
-const kasScRuleBackfillTimer = setInterval(() => {
-  void runKasScRuleBackfillTick();
-}, 2 * 60 * 1000);
-kasScRuleBackfillTimer.unref();
-setTimeout(() => void runKasScRuleBackfillTick(), 20_000).unref();
+const kasScRuleBackfillTimer = canRunLegacyKasScRuleBackfill()
+  ? setInterval(() => { void runKasScRuleBackfillTick(); }, 2 * 60 * 1000)
+  : null;
+if (kasScRuleBackfillTimer) {
+  kasScRuleBackfillTimer.unref();
+  setTimeout(() => void runKasScRuleBackfillTick(), 20_000).unref();
+} else {
+  logger.info("Legacy Kas Besar SC auto-approval backfill disabled by default.");
+}
 
 let qrisAutoCandidateRunning = false;
 const runQrisAutoCandidateTick = async () => {
@@ -169,7 +174,7 @@ server.on("error", (err) => {
 const stopBackgroundTimers = () => {
   if (fleetReminderTimer) clearInterval(fleetReminderTimer);
   clearInterval(qrisAutoCandidateTimer);
-  clearInterval(kasScRuleBackfillTimer);
+  if (kasScRuleBackfillTimer) clearInterval(kasScRuleBackfillTimer);
   if (startupInitializationTimer) {
     clearTimeout(startupInitializationTimer);
     startupInitializationTimer = null;
