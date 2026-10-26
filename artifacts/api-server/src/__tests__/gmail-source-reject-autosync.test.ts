@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 const candidates = readFileSync(new URL("../lib/gmail-invoice-candidates.ts", import.meta.url), "utf8");
 const routes = readFileSync(new URL("../routes/gmail-invoice-source.ts", import.meta.url), "utf8");
-const invoicePage = readFileSync(new URL("../../../../bizportal/src/pages/purchase/vendor-invoices.tsx", import.meta.url), "utf8");
-const sourcePage = readFileSync(new URL("../../../../bizportal/src/pages/finance/recon-config/InvoiceSourcesTab.tsx", import.meta.url), "utf8");
+const invoicePage = readFileSync(new URL("../../../bizportal/src/pages/purchase/vendor-invoices.tsx", import.meta.url), "utf8");
+const sourcePage = readFileSync(new URL("../../../bizportal/src/pages/finance/recon-config/InvoiceSourcesTab.tsx", import.meta.url), "utf8");
 
 describe("Gmail source rejection and automatic sync safeguards", () => {
   it("retains rejection across the source Gmail upsert and blocks import", () => {
