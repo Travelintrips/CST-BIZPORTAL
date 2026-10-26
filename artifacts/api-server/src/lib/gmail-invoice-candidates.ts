@@ -511,6 +511,7 @@ export async function reviewGmailInvoiceCandidate(args: {
     `update public.gmail_invoice_candidates
         set status = case
              when $4::boolean then 'rejected'
+             when extraction_status <> 'complete' then 'new'
              when extraction_status='complete'
                and nullif(trim(coalesce(extracted_vendor_name,'')),'') is not null
                and nullif(trim(coalesce(extracted_invoice_number,'')),'') is not null
