@@ -2069,7 +2069,11 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
           AND (journal_entry_id = ${invoice.journalEntryId}
             OR (linked_transaction_type = 'vendor_invoice' AND linked_transaction_id = ${id})) LIMIT 1
       `));
-      if (payments.length || vendorPayments.length || bankLinks.length) {
+      const reconciliationMatches = rowsOf<{ id: number }>(await tx.execute(sql`
+        SELECT id FROM bank_reconciliation_matches
+        WHERE candidate_id = ${id} AND candidate_type = 'vendor_invoice' LIMIT 1
+      `));
+      if (payments.length || vendorPayments.length || bankLinks.length || reconciliationMatches.length) {
         throw Object.assign(new Error("Terdapat transaksi pembayaran atau rekonsiliasi terkait. Reversal diblokir."), { httpStatus: 409 });
       }
       const [original] = await tx.select().from(accountingEntriesTable).where(and(eq(accountingEntriesTable.id, invoice.journalEntryId), eq(accountingEntriesTable.companyId, companyId)));
