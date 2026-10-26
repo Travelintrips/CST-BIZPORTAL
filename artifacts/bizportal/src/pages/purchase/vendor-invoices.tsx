@@ -421,7 +421,7 @@ export function VendorInvoicesListPage() {
             <p className="text-sm text-muted-foreground">Pusat tagihan supplier & 3-way matching</p>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <Link href="/finance/recon-config?tab=invoice-sources"><Button variant="outline"><RefreshCw className="mr-2 h-4 w-4" />Sumber Gmail / Auto Sync</Button></Link>
+            <Link href="/finance/recon-config?tab=invoice-sources"><Button variant="outline"><RefreshCw className="mr-2 h-4 w-4" />Sumber Gmail / Sync Now</Button></Link>
             <Link href="/purchase/vendor-invoices/import"><Button variant="outline"><Bot className="mr-2 h-4 w-4 text-indigo-500" />Import via AI</Button></Link>
             <Link href="/purchase/vendor-invoices/new"><Button variant="outline"><Plus className="mr-2 h-4 w-4" />Buat Invoice</Button></Link>
             <Link href="/accounting/bank-disbursements?mode=vendor_invoice">

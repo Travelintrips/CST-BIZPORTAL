@@ -268,7 +268,7 @@ export default function InvoiceSourcesTab() {
         message:
           organizer === "partial"
             ? "Gmail berhasil dihubungkan, tetapi sebagian auto-label perlu diperiksa."
-            : "Gmail berhasil dihubungkan. Auto-label aktif dan Sync Now siap membaca attachment invoice.",
+            : "Gmail berhasil dihubungkan. Sinkronisasi invoice hanya berjalan ketika Sync Now diklik.",
       };
     }
 
@@ -460,33 +460,6 @@ export default function InvoiceSourcesTab() {
           ? err.message
           : "Gagal membaca Gmail.",
       );
-    } finally {
-      setAction(null);
-    }
-  };
-
-  const updateAutoSync = async (enabled: boolean) => {
-    if (!companyId) return;
-    setAction("auto-sync");
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch(
-        "/api/recon-classification/invoice-sources/gmail/auto-sync",
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ company_id: companyId, enabled }),
-        },
-      );
-      await readJson<{ ok: boolean }>(response);
-      setNotice(enabled
-        ? "Auto Sync Gmail aktif: pemeriksaan berkala setiap 10 menit."
-        : "Auto Sync Gmail dinonaktifkan. Sync Now tetap tersedia.");
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan Auto Sync.");
     } finally {
       setAction(null);
     }
@@ -883,16 +856,8 @@ export default function InvoiceSourcesTab() {
                       Sync Now
                     </Button>
 
-                    <Button
-                      variant="outline"
-                      onClick={() => void updateAutoSync(!status.autoSyncEnabled)}
-                      disabled={action !== null}
-                      className="gap-2 border-slate-600"
-                    >
-                      {status.autoSyncEnabled ? "Nonaktifkan Auto Sync" : "Aktifkan Auto Sync"}
-                    </Button>
                     <span className="self-center text-xs text-slate-400">
-                      Auto Sync: {status.autoSyncEnabled ? "Aktif" : "Nonaktif"} · tiap {status.autoSyncIntervalMinutes ?? 10} menit
+                      Mode manual — tidak ada sinkronisasi terjadwal. Klik Sync Now untuk memeriksa email baru.
                     </span>
 
                     <Button

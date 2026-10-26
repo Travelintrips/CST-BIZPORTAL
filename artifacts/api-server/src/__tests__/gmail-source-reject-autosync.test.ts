@@ -28,12 +28,18 @@ describe("Gmail source rejection and automatic sync safeguards", () => {
     expect(sourcePage).toContain("Pulihkan");
   });
 
-  it("uses the existing ten-minute background job with a company-scoped toggle", () => {
-    expect(routes).toContain("const GMAIL_ORGANIZER_POLL_MS = 10 * 60 * 1000");
-    expect(routes).toContain('getConfig(companyId, "AUTO_SYNC_ENABLED")');
-    expect(routes).toContain('"/recon-classification/invoice-sources/gmail/auto-sync"');
-    expect(sourcePage).toContain("Nonaktifkan Auto Sync");
-    expect(sourcePage).toContain("Aktifkan Auto Sync");
+  it("only scans Gmail invoice attachments when Sync Now is explicitly clicked", () => {
+    expect(routes).toContain('"/recon-classification/invoice-sources/gmail/sync"');
+    expect(routes).toContain("await syncGmailInvoiceCandidates({");
+    expect(routes).toContain("autoSyncEnabled: false");
+    expect(routes).toContain("autoSyncIntervalMinutes: 0");
+    expect(routes).not.toContain("runGmailOrganizerTick");
+    expect(routes).not.toContain("GMAIL_ORGANIZER_POLL_MS");
+    expect(routes).not.toContain("setInterval(");
+    expect(routes).not.toContain('"/recon-classification/invoice-sources/gmail/auto-sync"');
+    expect(sourcePage).toContain("Mode manual — tidak ada sinkronisasi terjadwal");
+    expect(sourcePage).toContain("Sync Now");
+    expect(sourcePage).not.toContain("Aktifkan Auto Sync");
   });
 
   it("archives only untouched drafts and retains audit and ledger evidence", () => {
@@ -52,7 +58,7 @@ describe("Gmail source rejection and automatic sync safeguards", () => {
   it("only shows actionable AP deletion for drafts", () => {
     expect(invoicePage).toContain('disabled={item.status !== "draft"}');
     expect(invoicePage).toContain('vi.status === "draft" && (');
-    expect(invoicePage).toContain("Sumber Gmail / Auto Sync");
+    expect(invoicePage).toContain("Sumber Gmail / Sync Now");
     expect(invoicePage).toContain("Ya, Arsipkan Draft");
   });
 });

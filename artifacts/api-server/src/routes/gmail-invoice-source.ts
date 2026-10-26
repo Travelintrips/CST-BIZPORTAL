@@ -527,7 +527,6 @@ async function readStatus(
     lastSyncAt,
     lastSyncCount,
     lastSyncStatus,
-    autoSyncConfig,
     clientId,
     clientSecret,
     aiKey,
@@ -538,7 +537,6 @@ async function readStatus(
     getConfig(companyId, "LAST_SYNC_AT"),
     getConfig(companyId, "LAST_SYNC_COUNT"),
     getConfig(companyId, "LAST_SYNC_STATUS"),
-    getConfig(companyId, "AUTO_SYNC_ENABLED"),
     googleClientId(),
     googleClientSecret(),
     getRuntimeConfig("OPENAI_API_KEY"),
@@ -566,8 +564,9 @@ async function readStatus(
     lastSyncCount:
       Number(lastSyncCount ?? 0) || 0,
     lastSyncStatus: lastSyncStatus || null,
-    autoSyncEnabled: autoSyncConfig !== "false",
-    autoSyncIntervalMinutes: 10,
+    // Background Gmail invoice scanning is removed: only explicit Sync Now triggers reads.
+    autoSyncEnabled: false,
+    autoSyncIntervalMinutes: 0,
     redirectUri: getRedirectUri(request),
     scope: OAUTH_SCOPE,
     organizerRuleCount: organizationRules.filter(
@@ -578,133 +577,8 @@ async function readStatus(
   };
 }
 
-const GMAIL_ORGANIZER_POLL_MS = 10 * 60 * 1000;
-let gmailOrganizerTickActive = false;
-
-async function runGmailOrganizerTick(): Promise<void> {
-  if (
-    isDevelopmentEnvironment() ||
-    gmailOrganizerTickActive
-  ) {
-    return;
-  }
-
-  gmailOrganizerTickActive = true;
-
-  try {
-    const result = await pool.query<{ key: string }>(
-      `select key
-         from public.app_config
-        where key like 'GMAIL_INVOICE_SOURCE_%_REFRESH_TOKEN'
-          and coalesce(value,'') <> ''
-        order by key`,
-    );
-
-    for (const row of result.rows) {
-      const match = row.key.match(
-        /^GMAIL_INVOICE_SOURCE_(\d+)_REFRESH_TOKEN$/,
-      );
-      const companyId = match
-        ? Number(match[1])
-        : 0;
-
-      if (!Number.isSafeInteger(companyId) || companyId <= 0) {
-        continue;
-      }
-
-      try {
-        const encryptedToken = await getConfig(
-          companyId,
-          "REFRESH_TOKEN",
-        );
-        if (!encryptedToken) continue;
-
-        const accessToken = await refreshAccessToken(
-          await decryptRefreshToken(encryptedToken),
-        );
-        const profile = await gmailProfile(accessToken);
-
-        if (profile.emailAddress !== sourceEmail()) {
-          continue;
-        }
-
-        const autoSyncEnabled = await getConfig(companyId, "AUTO_SYNC_ENABLED") !== "false";
-        if (autoSyncEnabled) {
-        const syncResult =
-          await syncGmailInvoiceCandidates({
-            companyId,
-            accessToken,
-            sourceEmail: profile.emailAddress,
-            actorEmail: "system:gmail-invoice-sync",
-          });
-
-        const syncedAt = new Date().toISOString();
-
-        await Promise.all([
-          setConfig(
-            companyId,
-            "LAST_SYNC_AT",
-            syncedAt,
-            {
-              description:
-                "Last successful automatic Gmail invoice source sync time",
-              actor: "system:gmail-invoice-sync",
-            },
-          ),
-          setConfig(
-            companyId,
-            "LAST_SYNC_COUNT",
-            String(syncResult.attachmentsSeen),
-            {
-              description:
-                "Invoice attachments processed in latest automatic Gmail sync",
-              actor: "system:gmail-invoice-sync",
-            },
-          ),
-          setConfig(
-            companyId,
-            "LAST_SYNC_STATUS",
-            syncResult.failed > 0
-              ? "partial"
-              : "ok",
-            {
-              description:
-                "Last automatic Gmail invoice source synchronization status",
-              actor: "system:gmail-invoice-sync",
-            },
-          ),
-        ]);
-
-        }
-
-        await provisionGmailOrganizationRules({
-          companyId,
-          accessToken,
-          actorEmail: "system:gmail-organizer",
-          senderScanLimit: 100,
-        });
-      } catch (error) {
-        console.warn(
-          "[gmail-organizer] background pass failed",
-          {
-            companyId,
-            error:
-              error instanceof Error
-                ? error.message
-                : String(error),
-          },
-        );
-      }
-    }
-  } catch (error) {
-    console.warn(
-      "[gmail-organizer] background scan failed",
-      error,
-    );
-  } finally {
-    gmailOrganizerTickActive = false;
-  }
-}
+// Gmail invoice scanning and labeling are manual-only.
+// No startup timer, interval or background OAuth scan is registered here.
 
 router.get(
   "/recon-classification/invoice-sources/gmail/status",
@@ -1450,30 +1324,6 @@ router.post(
   },
 );
 
-// Explicitly control the existing 10-minute background source sync.
-router.post(
-  "/recon-classification/invoice-sources/gmail/auto-sync",
-  async (req, res) => {
-    try {
-      const actor = await requireFinanceAdmin(req);
-      if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const companyId = requireCompanyScope(res, actor, req.body?.company_id);
-      if (!companyId) return;
-      if (typeof req.body?.enabled !== "boolean") {
-        res.status(400).json({ error: "enabled wajib boolean." }); return;
-      }
-      await setConfig(companyId, "AUTO_SYNC_ENABLED", req.body.enabled ? "true" : "false", {
-        actor: actor.email,
-        description: "Enable automatic Gmail invoice candidate scanning every ten minutes",
-      });
-      res.json({ ok: true, autoSyncEnabled: req.body.enabled, autoSyncIntervalMinutes: 10 });
-    } catch (error) {
-      req.log.error({ error }, "Failed to update Gmail invoice auto sync");
-      res.status(503).json({ error: "Pengaturan auto sync tidak dapat disimpan." });
-    }
-  },
-);
-
 // Rejecting an email source candidate never deletes mail, an AP invoice or a
 // journal. Restoration explicitly reopens the candidate for manual review.
 router.post(
@@ -1651,15 +1501,5 @@ router.post(
     }
   },
 );
-
-if (!isDevelopmentEnvironment()) {
-  setTimeout(() => {
-    void runGmailOrganizerTick();
-  }, 60_000).unref();
-
-  setInterval(() => {
-    void runGmailOrganizerTick();
-  }, GMAIL_ORGANIZER_POLL_MS).unref();
-}
 
 export default router;
