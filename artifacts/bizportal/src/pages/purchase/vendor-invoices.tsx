@@ -157,7 +157,7 @@ function formatBillingPeriods(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const labels = new Set<string>();
   for (const period of value) {
-    if (typeof period !== "string" || !/^20\\d{2}-(0[1-9]|1[0-2])$/.test(period)) continue;
+    if (typeof period !== "string" || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(period)) continue;
     const [year, month] = period.split("-").map(Number);
     labels.add(new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1))));
   }
