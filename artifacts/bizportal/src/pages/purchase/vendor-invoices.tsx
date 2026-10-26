@@ -395,7 +395,10 @@ export function VendorInvoicesListPage() {
         throw new Error((err as Record<string, string>).error ?? "Gagal");
       }
       toast.success("Invoice berhasil dihapus");
-      qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+      await Promise.all([
+        qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] }),
+        qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repairs", activeCompanyId] }),
+      ]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Gagal menghapus invoice");
     } finally {
@@ -404,7 +407,8 @@ export function VendorInvoicesListPage() {
     }
   };
 
-  const confirmTarget = vis.find((vi: Record<string, unknown>) => Number(vi.id) === confirmDeleteId);
+  const confirmTarget = vis.find((vi: Record<string, unknown>) => Number(vi.id) === confirmDeleteId)
+    ?? repairQueue.find((vi) => vi.id === confirmDeleteId);
 
   return (
     <AppShell>
@@ -415,6 +419,7 @@ export function VendorInvoicesListPage() {
             <p className="text-sm text-muted-foreground">Pusat tagihan supplier & 3-way matching</p>
           </div>
           <div className="flex gap-2 flex-wrap">
+            <Link href="/finance/recon-config?tab=invoice-sources"><Button variant="outline"><RefreshCw className="mr-2 h-4 w-4" />Sumber Gmail / Auto Sync</Button></Link>
             <Link href="/purchase/vendor-invoices/import"><Button variant="outline"><Bot className="mr-2 h-4 w-4 text-indigo-500" />Import via AI</Button></Link>
             <Link href="/purchase/vendor-invoices/new"><Button variant="outline"><Plus className="mr-2 h-4 w-4" />Buat Invoice</Button></Link>
             <Link href="/accounting/bank-disbursements?mode=vendor_invoice">
@@ -597,9 +602,25 @@ export function VendorInvoicesListPage() {
                       {item.componentCount} komponen · PPh {idr(item.withholdingAmount)} · Grand total {idr(item.grandTotal)}
                     </p>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => setRepairInvoiceId(item.id)}>
-                    <Wrench className="mr-1 h-4 w-4" />Perbaiki
-                  </Button>
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setRepairInvoiceId(item.id)}>
+                        <Wrench className="mr-1 h-4 w-4" />Perbaiki
+                      </Button>
+                      <Button size="sm" variant="outline"
+                        className="gap-1 text-destructive hover:text-destructive"
+                        disabled={item.status !== "draft"}
+                        title={item.status === "draft" ? "Hapus draft setelah konfirmasi" : "Tidak bisa menghapus invoice yang telah diposting atau memiliki bukti akuntansi"}
+                        onClick={() => setConfirmDeleteId(item.id)}>
+                        <Trash2 className="h-3.5 w-3.5" />Hapus
+                      </Button>
+                    </div>
+                    {item.status !== "draft" && (
+                      <span className="max-w-[220px] text-right text-[10px] text-muted-foreground">
+                        Invoice {item.status}: hapus diblokir untuk menjaga jurnal dan pembayaran
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </CardContent>
@@ -716,7 +737,7 @@ export function VendorInvoicesListPage() {
                             <Link href={`/purchase/vendor-invoices/${vi.id}`}>
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><Eye className="h-4 w-4" /></Button>
                             </Link>
-                            {vi.status !== "paid" && (
+                            {vi.status === "draft" && (
                               <Button
                                 variant="ghost"
                                 size="sm"
