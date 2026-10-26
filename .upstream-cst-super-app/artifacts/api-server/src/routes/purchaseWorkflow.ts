@@ -2087,6 +2087,15 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
       if (Math.abs(debit - credit) > 0.01 || debit <= 0) throw Object.assign(new Error("Jurnal asli tidak seimbang."), { httpStatus: 409 });
       const [journal] = await tx.select().from(accountingJournalsTable).where(eq(accountingJournalsTable.id, original.journalId));
       if (!journal) throw Object.assign(new Error("Journal code tidak ditemukan."), { httpStatus: 409 });
+      // Fail closed until the reporting views account for BOTH original and
+      // reversing lines. The current trial balance excludes voided originals
+      // but includes posted reversals, which would misstate balances.
+      const viewCheck = rowsOf<{ definition: string }>(await tx.execute(sql`
+        SELECT pg_get_viewdef('public.accounting_trial_balance_v'::regclass, true) AS definition
+      `));
+      if (!viewCheck[0]?.definition?.includes('vendor_invoice_reversal_pair')) {
+        throw Object.assign(new Error("Trial Balance belum mendukung pasangan jurnal reversal Vendor Invoice; reversal ditahan untuk mencegah saldo salah."), { httpStatus: 409 });
+      }
       const reversal = await postEntryWithClient(tx, {
         journalId: original.journalId,
         date: new Date(),
