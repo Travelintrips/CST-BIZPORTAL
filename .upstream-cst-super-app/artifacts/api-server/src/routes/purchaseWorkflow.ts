@@ -41,6 +41,7 @@ import {
   accountingSettingsTable,
   accountingEntriesTable,
   accountingEntryLinesTable,
+  accountingJournalsTable,
   whStockTable,
   whMovementsTable,
 } from "@workspace/db";
@@ -2072,7 +2073,7 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
         throw Object.assign(new Error("Terdapat transaksi pembayaran atau rekonsiliasi terkait. Reversal diblokir."), { httpStatus: 409 });
       }
       const [original] = await tx.select().from(accountingEntriesTable).where(and(eq(accountingEntriesTable.id, invoice.journalEntryId), eq(accountingEntriesTable.companyId, companyId)));
-      if (!original || original.source !== "purchase_bill" || original.sourceId !== id || original.status !== "posted" || original.isVoided || original.voidEntryId) {
+      if (!original || original.source !== "purchase_bill" || original.sourceId !== id || original.status !== "posted" || original.isVoided || original.isReversed || original.voidEntryId) {
         throw Object.assign(new Error("Jurnal asli tidak valid atau sudah dibalik."), { httpStatus: 409 });
       }
       const lines = await tx.select().from(accountingEntryLinesTable).where(eq(accountingEntryLinesTable.entryId, original.id));
@@ -2080,6 +2081,8 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
       const debit = lines.reduce((sum, l) => sum + Number(l.debit ?? 0), 0);
       const credit = lines.reduce((sum, l) => sum + Number(l.credit ?? 0), 0);
       if (Math.abs(debit - credit) > 0.01 || debit <= 0) throw Object.assign(new Error("Jurnal asli tidak seimbang."), { httpStatus: 409 });
+      const [journal] = await tx.select().from(accountingJournalsTable).where(eq(accountingJournalsTable.id, original.journalId));
+      if (!journal) throw Object.assign(new Error("Journal code tidak ditemukan."), { httpStatus: 409 });
       const reversal = await postEntryWithClient(tx, {
         journalId: original.journalId,
         date: new Date(),
@@ -2094,10 +2097,10 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
           credit: Number(line.debit ?? 0),
           description: `Reversal ${invoice.invoiceNumber}`,
         })),
-      }, "PUR");
+      }, journal.code);
       if (reversal.status !== "posted") throw new Error("Jurnal reversal tidak berstatus posted.");
       await tx.update(accountingEntriesTable).set({
-        isVoided: true, isReversed: true, voidEntryId: reversal.id, voidedAt: new Date(),
+        status: "voided", isVoided: true, isReversed: true, voidEntryId: reversal.id, voidedAt: new Date(),
       }).where(eq(accountingEntriesTable.id, original.id));
       await tx.update(vendorInvoicesTable).set({
         status: "cancelled", cancelledAt: invoice.cancelledAt ?? new Date(),
