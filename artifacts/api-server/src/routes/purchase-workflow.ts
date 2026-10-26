@@ -57,6 +57,13 @@ interface VendorInvoiceDetailRow {
   journal_entry_number: string | null;
   reversal_journal_id: number | null;
   orphan_disbursement_numbers: string[];
+  linked_voided_disbursement_numbers: string[];
+  tax_review_status: string | null;
+  tax_review_reason: string | null;
+  supporting_tax_candidate_id: number | null;
+  supporting_tax_document_number: string | null;
+  supporting_tax_document_dpp: string | null;
+  supporting_tax_document_amount: string | null;
   withholding_tax_amount: string | null;
   withholding_tax_type: string | null;
   invoice_breakdown: unknown;
@@ -1172,7 +1179,12 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       select vi.*, vi.status::text status,
              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
              ae.status::text journal_status, ae.entry_number journal_entry_number,
-             coalesce(orphan_disbursement.disbursement_numbers, array[]::text[]) orphan_disbursement_numbers
+             coalesce(orphan_disbursement.disbursement_numbers, array[]::text[]) orphan_disbursement_numbers,
+             coalesce(voided_disbursement.disbursement_numbers, array[]::text[]) linked_voided_disbursement_numbers,
+             tax_evidence.id supporting_tax_candidate_id,
+             tax_evidence.extracted_invoice_number supporting_tax_document_number,
+             tax_evidence.extracted_subtotal supporting_tax_document_dpp,
+             tax_evidence.extracted_tax supporting_tax_document_amount
         from public.vendor_invoices vi
         left join public.accounting_entries ae on ae.id = vi.journal_entry_id
         ${RECONCILED_PAYMENT_JOIN}
@@ -1203,6 +1215,39 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
                  and reversed_entry.status::text = 'posted'
             )
         ) orphan_disbursement on true
+        -- A reversed/voided payment may be historically linked after a safe
+        -- relink. Show that evidence without counting it as settlement.
+        left join lateral (
+          select array_agg(distinct bd.disbursement_number order by bd.disbursement_number) disbursement_numbers
+          from public.bank_disbursement_items bdi
+          join public.bank_disbursements bd on bd.id = bdi.disbursement_id
+          join public.accounting_entries rev
+            on rev.id=bd.void_entry_id and rev.company_id=bd.company_id
+              and rev.source::text='reversal' and rev.source_id=bd.entry_id
+              and rev.status::text='posted'
+          where bdi.vendor_invoice_id=vi.id
+            and bd.company_id=vi.company_id and bd.status='voided'
+        ) voided_disbursement on true
+        -- Matching invoice source + supporting PDF is evidence of origin,
+        -- not evidence of tax authenticity, validity or approval.
+        left join lateral (
+          select support.id,support.extracted_invoice_number,
+                 support.extracted_subtotal,support.extracted_tax
+          from public.gmail_invoice_candidates support
+          where support.company_id=vi.company_id
+            and support.status='supporting'
+            and support.extraction_status='complete'
+            and support.extracted_tax=vi.tax_amount
+            and exists (
+              select 1 from public.gmail_invoice_candidates source_invoice
+              where source_invoice.company_id=vi.company_id
+                and source_invoice.vendor_invoice_id=vi.id
+                and source_invoice.gmail_message_id=support.gmail_message_id
+                and source_invoice.extracted_invoice_number=vi.vendor_invoice_ref
+            )
+          order by support.id asc
+          limit 1
+        ) tax_evidence on true
        where vi.id = $2 and vi.company_id = $1
     `, [companyId, invoiceId]);
     const row = invoiceResult.rows[0];
@@ -1262,6 +1307,16 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       journalEntryNumber: row.journal_entry_number,
       journalReversalEntryId: row.reversal_journal_id,
       orphanDisbursementNumbers: row.orphan_disbursement_numbers,
+      linkedVoidedDisbursementNumbers: row.linked_voided_disbursement_numbers,
+      taxReviewStatus: row.tax_review_status,
+      taxReviewReason: row.tax_review_reason,
+      supportingTaxDocument: row.supporting_tax_candidate_id == null ? null : {
+        candidateId: row.supporting_tax_candidate_id,
+        documentNumber: row.supporting_tax_document_number,
+        documentDpp: row.supporting_tax_document_dpp,
+        documentTax: row.supporting_tax_document_amount,
+        verified: false,
+      },
       withholdingTaxAmount: row.withholding_tax_amount,
       withholdingTaxType: row.withholding_tax_type,
       invoiceBreakdown: row.invoice_breakdown,
