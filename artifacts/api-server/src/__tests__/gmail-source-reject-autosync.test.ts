@@ -42,6 +42,29 @@ describe("Gmail source rejection and automatic sync safeguards", () => {
     expect(sourcePage).not.toContain("Aktifkan Auto Sync");
   });
 
+  it("identifies Faktur Pajak files as supporting evidence, not payable drafts", () => {
+    expect(candidates).toContain("isSupportingTaxAttachment");
+    expect(candidates).toContain('status=\'supporting\'');
+    expect(candidates).toContain("SUPPORTING_TAX_INVOICE_NOT_PAYABLE");
+    expect(routes).toContain('"supporting"');
+    expect(sourcePage).toContain("Faktur Pendukung");
+  });
+
+  it("marks repeated PDF hashes as duplicate and blocks historical ready sources from import", () => {
+    expect(candidates).toContain("classifyPreviouslyReadySourceDuplicates");
+    expect(candidates).toContain("partition by company_id, attachment_sha256");
+    expect(candidates).toContain("c.vendor_invoice_id is null");
+    expect(candidates).toContain("GMAIL_SOURCE_DUPLICATE_PDF");
+    expect(candidates).toContain("PDF identik");
+  });
+
+  it("renders rejection errors inline and never auto-syncs Gmail in background", () => {
+    expect(sourcePage).toContain("setRejectError(message)");
+    expect(sourcePage).toContain('role="alert"');
+    expect(routes).not.toContain("runGmailOrganizerTick");
+    expect(routes).not.toContain("setInterval(");
+  });
+
   it("archives only untouched drafts and retains audit and ledger evidence", () => {
     expect(purchaseApi).toContain('router.delete("/purchase-workflow/vendor-invoices/:id"');
     expect(purchaseApi).toContain('invoice.status !== "draft"');
