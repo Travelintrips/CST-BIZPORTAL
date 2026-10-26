@@ -106,6 +106,8 @@ interface LegacyRepairInvoiceRow {
   withholding_tax_type: string | null;
   tax_object: string | null;
   invoice_breakdown: unknown;
+  invoice_date: string | Date | null;
+  attachment_file_name: string | null;
   created_at: Date | string;
 }
 
@@ -508,7 +510,8 @@ async function loadLegacyRepairData(
 }>> {
   const invoiceResult = await query<LegacyRepairInvoiceRow>(
     `select id, invoice_number, supplier_name, status::text status, grand_total, total_amount,
-            withholding_tax_amount, withholding_tax_type, tax_object, invoice_breakdown, created_at
+            withholding_tax_amount, withholding_tax_type, tax_object, invoice_breakdown,
+            invoice_date, attachment_file_name, created_at
        from public.vendor_invoices
       where company_id = $1
         and cancelled_at is null
@@ -696,6 +699,8 @@ router.get("/purchase-workflow/vendor-invoices/legacy-withholding-repairs", asyn
         reasonCode: reason!.code,
         reason: reason!.message,
         componentCount: plans.length,
+        invoiceDate: invoice.invoice_date,
+        billingPeriods: vendorInvoiceBillingPeriods(invoice.attachment_file_name, invoice.invoice_breakdown),
       })),
       total: entries.length,
     });
