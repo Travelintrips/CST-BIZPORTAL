@@ -153,7 +153,7 @@ async function processAttachment(args: {
   actorEmail: string;
   message: GmailInvoiceMessage;
   attachment: GmailAttachment;
-}): Promise<"ready" | "manual_review" | "duplicate" | "failed" | "existing"> {
+}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing"> {
   const candidate = await upsertShell(args);
 
   if (candidate.extraction_status === "complete" && candidate.status === "ready" && candidate.attachment_sha256) {
