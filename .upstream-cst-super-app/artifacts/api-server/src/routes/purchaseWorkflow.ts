@@ -3,6 +3,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import {
   postEntry,
+  postEntryWithClient,
   postPurchaseReturn,
   reclassifyPostedPurchaseInvoice,
 } from "../lib/accounting.js";
@@ -38,6 +39,8 @@ import {
   productsTable,
   chartOfAccountsTable,
   accountingSettingsTable,
+  accountingEntriesTable,
+  accountingEntryLinesTable,
   whStockTable,
   whMovementsTable,
 } from "@workspace/db";
@@ -2037,6 +2040,79 @@ router.post("/vendor-invoices/:id/cancel", async (req, res) => {
   if (invoice.status !== "draft") return res.status(409).json({ error: "Hanya invoice draft tanpa jurnal yang dapat dibatalkan." });
   await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId), eq(vendorInvoicesTable.status, "draft")));
   res.json({ ok: true });
+});
+
+// Reversal for a posted Vendor Invoice is a separate audited action from cancelling a draft.
+// The original journal is never deleted or edited financially.
+router.post("/vendor-invoices/:id/reverse", async (req, res) => {
+  const id = Number(req.params.id);
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: "ID invoice tidak valid." });
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Serialize concurrent reversals for the same invoice.
+      const locked = rowsOf<{ id: number }>(await tx.execute(sql`SELECT id FROM vendor_invoices WHERE id = ${id} AND company_id = ${companyId} FOR UPDATE`));
+      if (!locked.length) throw Object.assign(new Error("Invoice tidak ditemukan."), { httpStatus: 404 });
+      const [invoice] = await tx.select().from(vendorInvoicesTable).where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId)));
+      if (!invoice?.journalEntryId) throw Object.assign(new Error("Invoice tidak mempunyai jurnal untuk dibalik."), { httpStatus: 409 });
+      if (invoice.reversalJournalId) throw Object.assign(new Error("Invoice sudah memiliki jurnal reversal."), { httpStatus: 409 });
+      if (Number(invoice.amountPaid ?? 0) !== 0) throw Object.assign(new Error("Invoice memiliki pembayaran. Gunakan alur koreksi settlement."), { httpStatus: 409 });
+      const payments = rowsOf<{ id: number }>(await tx.execute(sql`
+        SELECT id FROM accounting_payments WHERE company_id = ${companyId} AND source_doc_id = ${id} LIMIT 1
+      `));
+      const vendorPayments = rowsOf<{ id: number }>(await tx.execute(sql`
+        SELECT id FROM vendor_payments WHERE company_id = ${companyId} AND purchase_document_id = ${id} LIMIT 1
+      `));
+      const bankLinks = rowsOf<{ id: number }>(await tx.execute(sql`
+        SELECT id FROM bank_mutations WHERE company_id = ${companyId}
+          AND (journal_entry_id = ${invoice.journalEntryId}
+            OR (linked_transaction_type = 'vendor_invoice' AND linked_transaction_id = ${id})) LIMIT 1
+      `));
+      if (payments.length || vendorPayments.length || bankLinks.length) {
+        throw Object.assign(new Error("Terdapat transaksi pembayaran atau rekonsiliasi terkait. Reversal diblokir."), { httpStatus: 409 });
+      }
+      const [original] = await tx.select().from(accountingEntriesTable).where(and(eq(accountingEntriesTable.id, invoice.journalEntryId), eq(accountingEntriesTable.companyId, companyId)));
+      if (!original || original.source !== "purchase_bill" || original.sourceId !== id || original.status !== "posted" || original.isVoided || original.voidEntryId) {
+        throw Object.assign(new Error("Jurnal asli tidak valid atau sudah dibalik."), { httpStatus: 409 });
+      }
+      const lines = await tx.select().from(accountingEntryLinesTable).where(eq(accountingEntryLinesTable.entryId, original.id));
+      if (!lines.length) throw Object.assign(new Error("Jurnal asli tidak memiliki baris."), { httpStatus: 409 });
+      const debit = lines.reduce((sum, l) => sum + Number(l.debit ?? 0), 0);
+      const credit = lines.reduce((sum, l) => sum + Number(l.credit ?? 0), 0);
+      if (Math.abs(debit - credit) > 0.01 || debit <= 0) throw Object.assign(new Error("Jurnal asli tidak seimbang."), { httpStatus: 409 });
+      const reversal = await postEntryWithClient(tx, {
+        journalId: original.journalId,
+        date: new Date(),
+        ref: invoice.invoiceNumber,
+        description: `Reversal Vendor Invoice ${invoice.invoiceNumber}; original journal ${original.id}`,
+        source: "reversal",
+        sourceId: original.id,
+        companyId,
+        lines: lines.map((line) => ({
+          accountId: line.accountId,
+          debit: Number(line.credit ?? 0),
+          credit: Number(line.debit ?? 0),
+          description: `Reversal ${invoice.invoiceNumber}`,
+        })),
+      }, "PUR");
+      if (reversal.status !== "posted") throw new Error("Jurnal reversal tidak berstatus posted.");
+      await tx.update(accountingEntriesTable).set({
+        isVoided: true, isReversed: true, voidEntryId: reversal.id, voidedAt: new Date(),
+      }).where(eq(accountingEntriesTable.id, original.id));
+      await tx.update(vendorInvoicesTable).set({
+        status: "cancelled", cancelledAt: invoice.cancelledAt ?? new Date(),
+        reversalJournalId: reversal.id, reversedAt: new Date(),
+        reversalNote: "Reversal melalui endpoint Vendor Invoice terotorisasi",
+        updatedAt: new Date(),
+      }).where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId)));
+      return { ok: true, originalJournalId: original.id, reversalJournalId: reversal.id };
+    });
+    res.json(result);
+  } catch (error: unknown) {
+    console.error("[vendor-invoices] reversal failed", { id, companyId, error });
+    const status = Number((error as { httpStatus?: number })?.httpStatus) || 500;
+    res.status(status).json({ error: status === 500 ? "Reversal gagal; seluruh perubahan transaksi dibatalkan." : (error as Error).message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
