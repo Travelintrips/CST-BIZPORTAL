@@ -75,6 +75,16 @@ interface VI {
   journalEntryNumber?: string | null;
   journalReversalEntryId?: number | null;
   orphanDisbursementNumbers?: string[];
+  linkedVoidedDisbursementNumbers?: string[];
+  taxReviewStatus?: string | null;
+  taxReviewReason?: string | null;
+  supportingTaxDocument?: {
+    candidateId: number;
+    documentNumber: string | null;
+    documentDpp: string | number | null;
+    documentTax: string | number | null;
+    verified: boolean;
+  } | null;
   withholdingTaxAmount?: string | number | null;
   withholding_tax_amount?: string | number | null;
   invoiceBreakdown?: {
@@ -1408,6 +1418,35 @@ export function VendorInvoiceEditorPage() {
             </Link>
           </div>
         )}
+        {!isNew && vi?.taxReviewStatus === "required" && (
+          <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
+            <p className="font-semibold text-amber-500">Verifikasi dokumen pajak belum selesai</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {vi.taxReviewReason ?? "Periksa dokumen pajak dan persetujuan Finance sebelum jurnal koreksi diposting."}
+            </p>
+            {vi.supportingTaxDocument && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Dokumen sumber Gmail #{vi.supportingTaxDocument.candidateId}, nomor {vi.supportingTaxDocument.documentNumber ?? "belum terbaca"}.
+                DPP yang diekstrak: {idr(Number(vi.supportingTaxDocument.documentDpp ?? 0))};
+                PPN: {idr(Number(vi.supportingTaxDocument.documentTax ?? 0))}.
+                Ekstraksi bukan verifikasi keaslian Faktur Pajak.
+              </p>
+            )}
+          </div>
+        )}
+        {!isNew && (vi?.linkedVoidedDisbursementNumbers?.length ?? 0) > 0 && (
+          <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
+            <p className="font-semibold text-amber-500">Bank Disbursement historis sudah dibatalkan</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {vi!.linkedVoidedDisbursementNumbers!.join(", ")} sudah VOIDED dan memiliki jurnal pembalik.
+              Relasi historis tetap dapat ditelusuri, tetapi bukan pembayaran yang dapat diakui.
+              Verifikasi mutasi dan settlement sebelum membuat disbursement pengganti.
+            </p>
+            <Link href="/accounting/bank-disbursements" className="mt-2 inline-block text-xs font-semibold text-amber-500 underline">
+              Periksa Bank Disbursement
+            </Link>
+          </div>
+        )}
         {!isNew && (vi?.orphanDisbursementNumbers?.length ?? 0) > 0 && (
           <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
             <p className="font-semibold text-amber-500">Periksa Bank Disbursement historis sebelum membayar lagi</p>
@@ -1422,7 +1461,7 @@ export function VendorInvoiceEditorPage() {
             </Link>
           </div>
         )}
-        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && !vi.journalReversalEntryId && !(vi.orphanDisbursementNumbers?.length) && (
+        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 &&  !vi.journalReversalEntryId && !(vi.orphanDisbursementNumbers?.length) && !(vi.linkedVoidedDisbursementNumbers?.length) && (
           <div className="flex gap-2">
             <Link href={`/accounting/bank-disbursements?mode=vendor_invoice&invoiceIds=${vi.id}`}>
               <Button className="bg-orange-600 hover:bg-orange-700 text-white gap-1" size="sm">
