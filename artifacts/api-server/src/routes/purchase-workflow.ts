@@ -55,6 +55,7 @@ interface VendorInvoiceDetailRow {
   journal_entry_id: number | null;
   journal_status: string | null;
   journal_entry_number: string | null;
+  reversal_journal_id: number | null;
   orphan_disbursement_numbers: string[];
   withholding_tax_amount: string | null;
   withholding_tax_type: string | null;
@@ -1259,6 +1260,7 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       journalEntryId: row.journal_entry_id,
       journalStatus: row.journal_status,
       journalEntryNumber: row.journal_entry_number,
+      journalReversalEntryId: row.reversal_journal_id,
       orphanDisbursementNumbers: row.orphan_disbursement_numbers,
       withholdingTaxAmount: row.withholding_tax_amount,
       withholdingTaxType: row.withholding_tax_type,

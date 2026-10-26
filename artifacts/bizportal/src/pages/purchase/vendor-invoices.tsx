@@ -73,6 +73,7 @@ interface VI {
   amount_paid?: string | number | null;
   journalStatus?: string | null;
   journalEntryNumber?: string | null;
+  journalReversalEntryId?: number | null;
   orphanDisbursementNumbers?: string[];
   withholdingTaxAmount?: string | number | null;
   withholding_tax_amount?: string | number | null;
@@ -1393,6 +1394,20 @@ export function VendorInvoiceEditorPage() {
           </div>
         )}
 
+        {!isNew && !!vi?.journalReversalEntryId && (
+          <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
+            <p className="font-semibold text-amber-500">Jurnal invoice ini sudah dibalik</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Jurnal invoice dihubungkan dengan jurnal pembalik ID {vi.journalReversalEntryId}.
+              Status invoice masih {vi.status}; status ini bukan bukti bahwa koreksi COA
+              sudah diposting. Finance perlu memeriksa jurnal koreksi dan saldo hutang
+              sebelum membuat Bank Disbursement baru atau mencatat pembayaran lagi.
+            </p>
+            <Link href="/accounting/hub/general-ledger" className="mt-2 inline-block text-xs font-semibold text-amber-500 underline">
+              Periksa Buku Besar
+            </Link>
+          </div>
+        )}
         {!isNew && (vi?.orphanDisbursementNumbers?.length ?? 0) > 0 && (
           <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
             <p className="font-semibold text-amber-500">Periksa Bank Disbursement historis sebelum membayar lagi</p>
@@ -1407,7 +1422,7 @@ export function VendorInvoiceEditorPage() {
             </Link>
           </div>
         )}
-        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && !(vi.orphanDisbursementNumbers?.length) && (
+        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && !vi.journalReversalEntryId && !(vi.orphanDisbursementNumbers?.length) && (
           <div className="flex gap-2">
             <Link href={`/accounting/bank-disbursements?mode=vendor_invoice&invoiceIds=${vi.id}`}>
               <Button className="bg-orange-600 hover:bg-orange-700 text-white gap-1" size="sm">
