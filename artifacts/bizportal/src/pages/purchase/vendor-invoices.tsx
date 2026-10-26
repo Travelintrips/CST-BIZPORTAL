@@ -394,7 +394,7 @@ export function VendorInvoicesListPage() {
         const err = await r.json().catch(() => ({}));
         throw new Error((err as Record<string, string>).error ?? "Gagal");
       }
-      toast.success("Invoice berhasil dihapus");
+      toast.success("Draft diarsipkan dari daftar aktif. Riwayat dan data sumber tetap tersimpan.");
       await Promise.all([
         qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] }),
         qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices/legacy-withholding-repairs", activeCompanyId] }),
@@ -434,11 +434,11 @@ export function VendorInvoicesListPage() {
         {confirmDeleteId !== null && confirmTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
             <div className="bg-background border rounded-lg shadow-lg p-6 w-full max-w-sm mx-4">
-              <h2 className="text-lg font-semibold mb-1">Hapus Invoice?</h2>
+              <h2 className="text-lg font-semibold mb-1">Hapus draft dari daftar?</h2>
               <p className="text-sm text-muted-foreground mb-1">
                 <span className="font-mono font-medium text-foreground">{String(confirmTarget.invoiceNumber)}</span> — {String(confirmTarget.supplierName)}
               </p>
-              <p className="text-sm text-destructive mb-4">Tindakan ini tidak dapat dibatalkan.</p>
+              <p className="text-sm text-muted-foreground mb-4">Draft akan dibatalkan dan dikeluarkan dari daftar aktif. Dokumen sumber serta audit tidak dihapus permanen. Invoice yang sudah diposting tidak dapat dihapus.</p>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setConfirmDeleteId(null)} disabled={deletingId === confirmDeleteId}>
                   Batal
@@ -448,7 +448,7 @@ export function VendorInvoicesListPage() {
                   disabled={deletingId === confirmDeleteId}
                   onClick={() => handleDelete(confirmDeleteId)}
                 >
-                  {deletingId === confirmDeleteId ? "Menghapus..." : "Ya, Hapus"}
+                  {deletingId === confirmDeleteId ? "Memproses..." : "Ya, Arsipkan Draft"}
                 </Button>
               </div>
             </div>
@@ -743,7 +743,7 @@ export function VendorInvoicesListPage() {
                                 size="sm"
                                 className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
                                 onClick={() => setConfirmDeleteId(Number(vi.id))}
-                                title="Hapus invoice"
+                                title="Arsipkan invoice draft"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
