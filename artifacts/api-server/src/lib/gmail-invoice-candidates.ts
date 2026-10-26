@@ -459,7 +459,7 @@ export async function classifyPreviouslyReadySourceDuplicates(companyId: number)
        ) as rank
        from public.gmail_invoice_candidates
        where company_id=$1 and attachment_sha256 is not null
-         and extraction_status='complete' and status in ('ready','duplicate','imported','supporting')
+         and extraction_status='complete' and status in ('ready','imported','supporting')
      )
      update public.gmail_invoice_candidates c
         set status='duplicate',
@@ -690,6 +690,7 @@ export async function importGmailInvoiceCandidate(args: {
         `select id from public.gmail_invoice_candidates
           where company_id=$1 and attachment_sha256=$2 and id<>$3
             and extraction_status='complete'
+            and status in ('ready','imported','supporting')
             and (id<$3 or status in ('imported','supporting'))
           order by case when status='imported' then 0 else 1 end, id limit 1`,
         [args.companyId, candidate.attachment_sha256, candidate.id],
