@@ -1270,7 +1270,7 @@ export default function InvoiceSourcesTab() {
                             ) : candidate.status === "manual_review" ? (
                               <span className="text-xs text-slate-500">Review OCR</span>
                             ) : null}
-                            {!candidate.vendorInvoiceId && ["new", "ready", "manual_review", "failed"].includes(candidate.status) && (
+                            {!candidate.vendorInvoiceId && ["new", "ready", "manual_review", "failed", "duplicate", "supporting"].includes(candidate.status) && (
                               <Button type="button" size="sm" variant="outline"
                                 className="gap-1.5 border-red-800 text-red-400 hover:text-red-300"
                                 disabled={action !== null}
