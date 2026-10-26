@@ -11,6 +11,7 @@ import {
 import {
   importGmailInvoiceCandidate,
   listGmailInvoiceCandidates,
+  reviewGmailInvoiceCandidate,
   syncGmailInvoiceCandidates,
 } from "../lib/gmail-invoice-candidates";
 import { getRuntimeConfig } from "../lib/gmail-invoice-runtime";
@@ -39,6 +40,8 @@ type GmailSourceStatus = {
   lastSyncAt: string | null;
   lastSyncCount: number;
   lastSyncStatus: string | null;
+  autoSyncEnabled: boolean;
+  autoSyncIntervalMinutes: number;
   redirectUri: string;
   scope: string;
   organizerRuleCount: number;
@@ -524,6 +527,7 @@ async function readStatus(
     lastSyncAt,
     lastSyncCount,
     lastSyncStatus,
+    autoSyncConfig,
     clientId,
     clientSecret,
     aiKey,
@@ -534,6 +538,7 @@ async function readStatus(
     getConfig(companyId, "LAST_SYNC_AT"),
     getConfig(companyId, "LAST_SYNC_COUNT"),
     getConfig(companyId, "LAST_SYNC_STATUS"),
+    getConfig(companyId, "AUTO_SYNC_ENABLED"),
     googleClientId(),
     googleClientSecret(),
     getRuntimeConfig("OPENAI_API_KEY"),
@@ -561,6 +566,8 @@ async function readStatus(
     lastSyncCount:
       Number(lastSyncCount ?? 0) || 0,
     lastSyncStatus: lastSyncStatus || null,
+    autoSyncEnabled: autoSyncConfig !== "false",
+    autoSyncIntervalMinutes: 10,
     redirectUri: getRedirectUri(request),
     scope: OAUTH_SCOPE,
     organizerRuleCount: organizationRules.filter(
@@ -621,6 +628,8 @@ async function runGmailOrganizerTick(): Promise<void> {
           continue;
         }
 
+        const autoSyncEnabled = await getConfig(companyId, "AUTO_SYNC_ENABLED") !== "false";
+        if (autoSyncEnabled) {
         const syncResult =
           await syncGmailInvoiceCandidates({
             companyId,
@@ -665,6 +674,8 @@ async function runGmailOrganizerTick(): Promise<void> {
             },
           ),
         ]);
+
+        }
 
         await provisionGmailOrganizationRules({
           companyId,
@@ -870,7 +881,7 @@ router.get(
       );
 
       const requestedStatus = String(req.query.status ?? "ready");
-      const allowedStatuses = ["ready", "review", "duplicate", "imported", "all"] as const;
+      const allowedStatuses = ["ready", "review", "duplicate", "imported", "rejected", "all"] as const;
       if (!allowedStatuses.some((value) => value === requestedStatus)) {
         res.status(400).json({ error: "Filter status invoice tidak valid." });
         return;
@@ -1434,6 +1445,63 @@ router.post(
             ? `Gmail sync gagal: ${error.message}`
             : "Gmail terhubung tetapi pembacaan email belum berhasil.",
         code: "GMAIL_SYNC_FAILED",
+      });
+    }
+  },
+);
+
+// Explicitly control the existing 10-minute background source sync.
+router.post(
+  "/recon-classification/invoice-sources/gmail/auto-sync",
+  async (req, res) => {
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const companyId = requireCompanyScope(res, actor, req.body?.company_id);
+      if (!companyId) return;
+      if (typeof req.body?.enabled !== "boolean") {
+        res.status(400).json({ error: "enabled wajib boolean." }); return;
+      }
+      await setConfig(companyId, "AUTO_SYNC_ENABLED", req.body.enabled ? "true" : "false", {
+        actor: actor.email,
+        description: "Enable automatic Gmail invoice candidate scanning every ten minutes",
+      });
+      res.json({ ok: true, autoSyncEnabled: req.body.enabled, autoSyncIntervalMinutes: 10 });
+    } catch (error) {
+      req.log.error({ error }, "Failed to update Gmail invoice auto sync");
+      res.status(503).json({ error: "Pengaturan auto sync tidak dapat disimpan." });
+    }
+  },
+);
+
+// Rejecting an email source candidate never deletes mail, an AP invoice or a
+// journal. Restoration explicitly reopens the candidate for manual review.
+router.post(
+  "/recon-classification/invoice-sources/gmail/candidates/:id/review",
+  async (req, res) => {
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const companyId = requireCompanyScope(res, actor, req.body?.company_id);
+      if (!companyId) return;
+      const candidateId = parsePositiveInt(req.params.id);
+      if (!candidateId) {
+        res.status(400).json({ error: "candidate id tidak valid." }); return;
+      }
+      const decision = req.body?.decision;
+      if (decision !== "reject" && decision !== "restore") {
+        res.status(400).json({ error: "Keputusan harus reject atau restore." }); return;
+      }
+      const result = await reviewGmailInvoiceCandidate({
+        companyId, candidateId, actorEmail: actor.email,
+        decision, reason: typeof req.body?.reason === "string" ? req.body.reason : "",
+      });
+      res.json({ ok: true, candidate: result });
+    } catch (error) {
+      const code = error && typeof error === "object" && "status" in error
+        ? Number((error as { status?: unknown }).status) : 503;
+      res.status([400, 409].includes(code) ? code : 503).json({
+        error: error instanceof Error ? error.message : "Keputusan kandidat tidak dapat disimpan.",
       });
     }
   },
