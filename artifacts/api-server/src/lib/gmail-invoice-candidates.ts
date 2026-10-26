@@ -582,7 +582,7 @@ export async function reviewGmailInvoiceCandidate(args: {
                   then extracted_json->'source_review_history' else '[]'::jsonb end
                 || jsonb_build_array(jsonb_build_object(
                   'decision',case when $4::boolean then 'rejected' else 'restored' end,
-                  'reason',$5,'actor',$3,'at',now()
+                  'reason',$5::text,'actor',$3::text,'at',now()
                 ))
               ),
               true
