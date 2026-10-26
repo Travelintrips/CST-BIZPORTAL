@@ -73,6 +73,7 @@ interface VI {
   amount_paid?: string | number | null;
   journalStatus?: string | null;
   journalEntryNumber?: string | null;
+  orphanDisbursementNumbers?: string[];
   withholdingTaxAmount?: string | number | null;
   withholding_tax_amount?: string | number | null;
   invoiceBreakdown?: {
@@ -1392,7 +1393,21 @@ export function VendorInvoiceEditorPage() {
           </div>
         )}
 
-        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && (
+        {!isNew && (vi?.orphanDisbursementNumbers?.length ?? 0) > 0 && (
+          <div role="alert" className="rounded-lg border border-amber-500/70 bg-amber-950/20 px-4 py-3 text-sm">
+            <p className="font-semibold text-amber-500">Periksa Bank Disbursement historis sebelum membayar lagi</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {vi!.orphanDisbursementNumbers!.join(", ")} mempunyai referensi invoice supplier dan nilai bruto
+              yang cocok, tetapi terhubung ke ID Vendor Invoice lama yang sudah tidak tersedia.
+              Jurnal pembayarannya telah dibalik. Catatan ini bukan bukti pembayaran final
+              dan tidak menambah nilai Terbayar.
+            </p>
+            <Link href="/accounting/bank-disbursements" className="mt-2 inline-block text-xs font-semibold text-amber-500 underline">
+              Periksa riwayat Bank Disbursement
+            </Link>
+          </div>
+        )}
+        {!isNew && vi && vi.status === "posted" && outstandingPayment > 0.01 && !(vi.orphanDisbursementNumbers?.length) && (
           <div className="flex gap-2">
             <Link href={`/accounting/bank-disbursements?mode=vendor_invoice&invoiceIds=${vi.id}`}>
               <Button className="bg-orange-600 hover:bg-orange-700 text-white gap-1" size="sm">
