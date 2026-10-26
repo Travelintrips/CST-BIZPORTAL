@@ -858,6 +858,8 @@ router.post(
         companyId,
         accessToken,
         actorEmail: actor.email,
+        // Bound a single user-triggered pass to avoid Gmail per-user rate spikes.
+        senderScanLimit: 50,
       });
 
       res.status(result.failed > 0 ? 207 : 200).json({
@@ -1146,23 +1148,12 @@ router.get(
         },
       );
 
-      const organizer =
-        await provisionGmailOrganizationRules({
-          companyId: parsedState.companyId,
-          accessToken: tokens.access_token,
-          actorEmail: actor.email,
-        });
-
+      // OAuth success must not depend on Gmail label provisioning or quota.
+      // Users can apply labels explicitly using the separate manual action.
       redirectWithResult(
         res,
         parsedState.returnPath,
-        {
-          gmail: "connected",
-          organizer:
-            organizer.failed > 0
-              ? "partial"
-              : "ready",
-        },
+        { gmail: "connected" },
       );
     } catch (error) {
       req.log.error(
@@ -1240,29 +1231,8 @@ router.post(
           actorEmail: actor.email,
         });
 
-      let organizer:
-        | Awaited<
-            ReturnType<
-              typeof provisionGmailOrganizationRules
-            >
-          >
-        | null = null;
-
-      try {
-        organizer =
-          await provisionGmailOrganizationRules({
-            companyId,
-            accessToken,
-            actorEmail: actor.email,
-            senderScanLimit: 250,
-          });
-      } catch (organizerError) {
-        req.log.warn(
-          { organizerError, companyId },
-          "Gmail sender auto-label refresh failed",
-        );
-      }
-
+      // No label backfill during Sync Now: label operations have a separate
+      // explicit action and independent Gmail quota/rate limit.
       const now = new Date().toISOString();
 
       await Promise.all([
@@ -1304,7 +1274,6 @@ router.post(
         ok: true,
         email: profile.emailAddress,
         ...result,
-        organizer,
         syncedAt: now,
       });
     } catch (error) {

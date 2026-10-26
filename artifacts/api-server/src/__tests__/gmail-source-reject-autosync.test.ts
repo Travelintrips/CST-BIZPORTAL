@@ -17,6 +17,11 @@ describe("Gmail source rejection and automatic sync safeguards", () => {
     expect(candidates).toContain("attachment_sha256=$2 and status='rejected'");
   });
 
+  it("types actor $3 explicitly in the rejection JSON audit to prevent PostgreSQL 42P18", () => {
+    expect(candidates).toContain("'reason',$5::text,'actor',$3::text,'at',now()");
+    expect(candidates).not.toContain("'reason',$5,'actor',$3,'at',now()");
+  });
+
   it("requires a reason and scopes reject/restore decisions to the active company", () => {
     expect(candidates).toContain("reason.length < 10 || reason.length > 500");
     expect(candidates).toContain("where id=$1 and company_id=$2 and vendor_invoice_id is null");

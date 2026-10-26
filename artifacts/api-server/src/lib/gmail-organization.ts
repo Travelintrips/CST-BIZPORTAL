@@ -226,11 +226,11 @@ async function markRule(
 ): Promise<void> {
   await pool.query(
     `update public.gmail_organization_rules
-        set gmail_label_id=coalesce($2,gmail_label_id),
-            gmail_filter_id=coalesce($3,gmail_filter_id),
+        set gmail_label_id=coalesce($2::text,gmail_label_id),
+            gmail_filter_id=coalesce($3::text,gmail_filter_id),
             status=$4,
             last_applied_at=case when $4='active' then now() else last_applied_at end,
-            last_error=$5,
+            last_error=$5::text,
             updated_by=$6,
             updated_at=now()
       where id=$1`,
