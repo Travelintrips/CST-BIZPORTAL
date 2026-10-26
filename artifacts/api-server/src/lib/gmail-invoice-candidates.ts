@@ -273,7 +273,9 @@ async function processAttachment(args: {
                 extracted_tax=$8,
                 extracted_total=$9,
                 extracted_confidence=$10,
-                extracted_json=$11::jsonb,
+                extracted_json=$11::jsonb || jsonb_build_object('source_review_history',
+                  case when jsonb_typeof(extracted_json->'source_review_history')='array'
+                    then extracted_json->'source_review_history' else '[]'::jsonb end),
                 extraction_status='complete',
                 status='duplicate',
                 vendor_invoice_id=$12,
@@ -351,7 +353,9 @@ async function processAttachment(args: {
               extracted_tax=$9,
               extracted_total=$10,
               extracted_confidence=$11,
-              extracted_json=$12::jsonb,
+              extracted_json=$12::jsonb || jsonb_build_object('source_review_history',
+                case when jsonb_typeof(extracted_json->'source_review_history')='array'
+                  then extracted_json->'source_review_history' else '[]'::jsonb end),
               extraction_status='complete',
               status=$13,
               vendor_invoice_id=$14,
