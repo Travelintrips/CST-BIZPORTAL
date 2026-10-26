@@ -511,7 +511,9 @@ export async function reviewGmailInvoiceCandidate(args: {
     `update public.gmail_invoice_candidates
         set status = case
              when $4::boolean then 'rejected'
-             when extraction_status <> 'complete' then 'new'
+             when extraction_status <> 'complete'
+               or (extracted_vendor_name is null and extracted_invoice_number is null and extracted_total is null)
+               then 'new'
              when extraction_status='complete'
                and nullif(trim(coalesce(extracted_vendor_name,'')),'') is not null
                and nullif(trim(coalesce(extracted_invoice_number,'')),'') is not null
@@ -519,6 +521,10 @@ export async function reviewGmailInvoiceCandidate(args: {
                and coalesce(extracted_confidence,0) >= 0.65 then 'ready'
              else 'manual_review'
            end,
+            extraction_status = case
+              when not $4::boolean and extracted_vendor_name is null
+                and extracted_invoice_number is null and extracted_total is null then 'pending'
+              else extraction_status end,
             error_message = case when $4::boolean then $5 else null end,
             extracted_json = jsonb_set(
               case when jsonb_typeof(extracted_json)='object' then extracted_json else '{}'::jsonb end,
