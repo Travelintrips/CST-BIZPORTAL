@@ -153,6 +153,17 @@ interface VendorInvoicePage {
 }
 
 
+function formatBillingPeriods(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const labels = new Set<string>();
+  for (const period of value) {
+    if (typeof period !== "string" || !/^20\\d{2}-(0[1-9]|1[0-2])$/.test(period)) continue;
+    const [year, month] = period.split("-").map(Number);
+    labels.add(new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1))));
+  }
+  return [...labels];
+}
+
 function vendorInvoicePphBreakdown(invoice: Record<string, unknown>): Array<{ type: string; amount: number }> {
   const breakdown = invoice.invoiceBreakdown && typeof invoice.invoiceBreakdown === "object"
     ? invoice.invoiceBreakdown as Record<string, unknown>
@@ -597,6 +608,7 @@ export function VendorInvoicesListPage() {
                   <thead><tr className="border-b">
                     <th className="text-left py-2 px-3">No. Invoice</th>
                     <th className="text-left py-2 px-3">Supplier</th>
+                    <th className="text-left py-2 px-3">Periode Penagihan</th>
                     <th className="text-left py-2 px-3">Status</th>
                     <th className="text-left py-2 px-3">3-Way Match</th>
                     <th className="text-right py-2 px-3">Grand Total</th>
@@ -612,6 +624,15 @@ export function VendorInvoicesListPage() {
                       <tr key={String(vi.id)} className="border-b hover:bg-muted/50">
                         <td className="py-2 px-3 font-mono text-xs">{String(vi.invoiceNumber)}</td>
                         <td className="py-2 px-3">{String(vi.supplierName)}</td>
+                        <td className="py-2 px-3 min-w-[145px] text-xs">
+                          {formatBillingPeriods(vi.billingPeriods).length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {formatBillingPeriods(vi.billingPeriods).map((period) => (
+                                <Badge key={period} variant="outline" className="whitespace-nowrap font-normal">{period}</Badge>
+                              ))}
+                            </div>
+                          ) : <span className="text-muted-foreground">Belum tercatat</span>}
+                        </td>
                         <td className="py-2 px-3">
                           <Badge variant={vi.status === "paid" ? "default" : vi.status === "cancelled" ? "destructive" : vi.status === "posted" || vi.status === "matched" ? "secondary" : "outline"}>
                             {String(vi.status)}

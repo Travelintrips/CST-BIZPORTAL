@@ -5,6 +5,38 @@ import { getDevSession, getProductionSession, isDevelopmentEnvironment, type Dev
 const router: IRouter = Router();
 
 
+// Billing periods are distinct from invoice dates and payment months.
+// Read only explicit source period metadata; never infer from invoice_date.
+function vendorInvoiceBillingPeriods(filename: string | null, breakdown: unknown): string[] {
+  const periods = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const match = /^(20\\d{2})[-/](0?[1-9]|1[0-2])(?:[-/]\\d{1,2})?$/.exec(value.trim());
+    if (match) periods.add(`${match[1]}-${match[2].padStart(2, "0")}`);
+  };
+  if (breakdown && typeof breakdown === "object" && !Array.isArray(breakdown)) {
+    const data = breakdown as Record<string, unknown>;
+    for (const key of ["billing_periods", "billingPeriods", "service_periods", "servicePeriods"]) {
+      const value = data[key];
+      if (Array.isArray(value)) value.forEach(add);
+      else add(value);
+    }
+    for (const key of ["billing_period", "billingPeriod", "service_period", "servicePeriod", "period_start", "periodStart"]) add(data[key]);
+    if (Array.isArray(data.components)) {
+      for (const item of data.components) {
+        if (!item || typeof item !== "object") continue;
+        const component = item as Record<string, unknown>;
+        for (const key of ["billing_period", "billingPeriod", "service_period", "servicePeriod", "period_start", "periodStart"]) add(component[key]);
+      }
+    }
+  }
+  const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  for (const match of (filename ?? "").matchAll(/Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)([0-9]{2})/gi)) {
+    periods.add(`20${match[2]}-${String(months.indexOf(match[1].toUpperCase()) + 1).padStart(2, "0")}`);
+  }
+  return [...periods].sort();
+}
+
 interface VendorInvoiceListRow {
   id: number;
   invoice_number: string;
@@ -21,6 +53,7 @@ interface VendorInvoiceListRow {
   withholding_tax_amount: string | null;
   withholding_tax_type: string | null;
   invoice_breakdown: unknown;
+  attachment_file_name: string | null;
   pph_paid_amount: string;
   total_count: number;
 }
@@ -600,6 +633,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
              vi.three_way_match_status, vi.company_id, vi.invoice_date,
              vi.journal_entry_id, ae.status::text journal_status,
              vi.withholding_tax_amount, vi.withholding_tax_type, vi.invoice_breakdown,
+             vi.attachment_file_name,
              coalesce(pph_payment.paid_amount, 0) pph_paid_amount,
              count(*) over()::int total_count
         from public.vendor_invoices vi
@@ -659,6 +693,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
         withholdingTaxAmount: row.withholding_tax_amount,
         withholdingTaxType: row.withholding_tax_type,
         invoiceBreakdown: row.invoice_breakdown,
+        billingPeriods: vendorInvoiceBillingPeriods(row.attachment_file_name, row.invoice_breakdown),
         pphPaidAmount: Number(row.pph_paid_amount),
       })),
       page,
