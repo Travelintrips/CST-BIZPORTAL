@@ -155,6 +155,7 @@ describe("Vendor Invoice AP PPh list presentation", () => {
     expect(screen.getByText("Juni 2026")).toBeTruthy();
     expect(screen.getByText("Tanggal invoice: 8 Juli 2026")).toBeTruthy();
     const unknownPeriodCard = screen.getByText("VI/2026/00007 — PT. ANGKASA PURA INDONESIA").parentElement;
-    expect(within(unknownPeriodCard!).getAllByText("Belum tercatat")).toHaveLength(2);
+    expect(within(unknownPeriodCard!).getByText("Belum tercatat")).toBeTruthy();
+    expect(within(unknownPeriodCard!).getByText("Tanggal invoice: Belum tercatat")).toBeTruthy();
   });
 });
