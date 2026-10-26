@@ -106,8 +106,8 @@ interface LegacyRepairInvoiceRow {
   withholding_tax_type: string | null;
   tax_object: string | null;
   invoice_breakdown: unknown;
-  invoice_date: string | Date | null;
-  attachment_file_name: string | null;
+  invoice_date?: string | Date | null;
+  attachment_file_name?: string | null;
   created_at: Date | string;
 }
 
@@ -699,8 +699,8 @@ router.get("/purchase-workflow/vendor-invoices/legacy-withholding-repairs", asyn
         reasonCode: reason!.code,
         reason: reason!.message,
         componentCount: plans.length,
-        invoiceDate: invoice.invoice_date,
-        billingPeriods: vendorInvoiceBillingPeriods(invoice.attachment_file_name, invoice.invoice_breakdown),
+        invoiceDate: invoice.invoice_date ?? null,
+        billingPeriods: vendorInvoiceBillingPeriods(invoice.attachment_file_name ?? null, invoice.invoice_breakdown),
       })),
       total: entries.length,
     });
