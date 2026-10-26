@@ -29,13 +29,16 @@ describe("Gmail organization rules", () => {
     );
   });
 
-  it("provisions organization rules after OAuth and exposes a manual apply route", () => {
-    expect(routeSource).toContain(
-      "await provisionGmailOrganizationRules({",
-    );
+  it("keeps Gmail label application separate from OAuth and Sync Now", () => {
     expect(routeSource).toContain(
       '"/recon-classification/invoice-sources/gmail/organization-rules/apply"',
     );
+    const callbackStart = routeSource.indexOf('"/recon-classification/invoice-sources/gmail/callback"');
+    const syncStart = routeSource.indexOf('"/recon-classification/invoice-sources/gmail/sync"');
+    const reviewStart = routeSource.indexOf('"/recon-classification/invoice-sources/gmail/candidates/:id/review"');
+    expect(routeSource.slice(callbackStart, syncStart)).not.toContain("await provisionGmailOrganizationRules({");
+    expect(routeSource.slice(syncStart, reviewStart)).not.toContain("await provisionGmailOrganizationRules({");
+    expect(routeSource).toContain("gmail_label_id=coalesce");
   });
 
   it("keeps the organizer non-destructive while sender labels are backfilled", () => {
@@ -52,8 +55,8 @@ describe("Gmail organization rules", () => {
     expect(organizerSource).not.toContain('"DELETE"');
   });
 
-  it("runs sender organization only through explicit sync or manual apply", () => {
-    expect(routeSource).toContain("senderScanLimit: 250");
+  it("runs sender organization only through manual Apply Labels", () => {
+    expect(routeSource).toContain("await provisionGmailOrganizationRules({");
     expect(routeSource).toContain('"/recon-classification/invoice-sources/gmail/sync"');
     expect(routeSource).toContain('"/recon-classification/invoice-sources/gmail/organization-rules/apply"');
     expect(routeSource).not.toContain("runGmailOrganizerTick");
