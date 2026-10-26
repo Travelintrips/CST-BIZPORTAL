@@ -52,6 +52,12 @@ function isSrtAttachment(fileName: string): boolean {
   return /^srt(?:[\s_.-]|$)/i.test(fileName.trim());
 }
 
+// A file starting FK_ is a Faktur Pajak: supporting tax evidence, not
+// a separately payable vendor invoice. Preserve it for audit / matching.
+function isSupportingTaxAttachment(fileName: string): boolean {
+  return /^fk(?:[\s_.-]|$)/i.test(fileName.trim());
+}
+
 // Narrow rule for Sukma's CST billing email: the last non-SRT PDF is the
 // actual billing invoice; earlier PDFs are supporting documents. Other emails
 // retain the existing multi-attachment behavior.
@@ -147,7 +153,7 @@ async function processAttachment(args: {
   actorEmail: string;
   message: GmailInvoiceMessage;
   attachment: GmailAttachment;
-}): Promise<"ready" | "manual_review" | "duplicate" | "failed" | "existing"> {
+}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing"> {
   const candidate = await upsertShell(args);
 
   if (candidate.extraction_status === "complete" && candidate.status === "ready" && candidate.attachment_sha256) {
@@ -173,6 +179,7 @@ async function processAttachment(args: {
     candidate.status === "imported" ||
     candidate.status === "duplicate" ||
     candidate.status === "rejected" ||
+    candidate.status === "supporting" ||
     candidate.extraction_status === "complete"
   ) {
     return "existing";
@@ -334,7 +341,9 @@ async function processAttachment(args: {
         extraction.total_amount > 0,
     );
 
-    const status = existingInvoice.rows[0]
+    const status = isSupportingTaxAttachment(args.attachment.fileName)
+      ? "supporting"
+      : existingInvoice.rows[0]
       ? "duplicate"
       : hasCoreFields && extraction.confidence >= 0.65
         ? "ready"
@@ -435,7 +444,41 @@ export async function syncGmailInvoiceCandidates(args: {
     }
   }
 
+  await classifyPreviouslyReadySourceDuplicates(args.companyId);
   return counts;
+}
+
+// Reclassify only unlinked ready source rows. Existing imported invoices,
+// rejected decisions, posted journals and payment relationships are untouched.
+export async function classifyPreviouslyReadySourceDuplicates(companyId: number): Promise<void> {
+  await pool.query(
+    `with ranked as (
+       select id, row_number() over (
+         partition by company_id, attachment_sha256
+         order by case when status='imported' then 0 else 1 end, id
+       ) as rank
+       from public.gmail_invoice_candidates
+       where company_id=$1 and attachment_sha256 is not null
+         and extraction_status='complete' and status in ('ready','imported','supporting')
+     )
+     update public.gmail_invoice_candidates c
+        set status='duplicate',
+            error_message='PDF identik dengan kandidat lain; tidak dapat dibuat draft',
+            updated_at=now()
+       from ranked r
+      where c.id=r.id and c.company_id=$1 and c.status='ready'
+        and c.vendor_invoice_id is null and r.rank>1`,
+    [companyId],
+  );
+  await pool.query(
+    `update public.gmail_invoice_candidates
+        set status='supporting',
+            error_message='Faktur Pajak (FK) merupakan dokumen pendukung, bukan invoice yang dapat dibayar sendiri',
+            updated_at=now()
+      where company_id=$1 and status='ready' and vendor_invoice_id is null
+        and attachment_file_name ~* '^fk([[:space:]_.-]|$)'`,
+    [companyId],
+  );
 }
 
 function candidateView(row: CandidateRow) {
@@ -478,7 +521,7 @@ function candidateView(row: CandidateRow) {
 export async function listGmailInvoiceCandidates(
   companyId: number,
   limit = 50,
-  statusFilter: "ready" | "review" | "duplicate" | "imported" | "rejected" | "all" = "ready",
+  statusFilter: "ready" | "review" | "duplicate" | "imported" | "rejected" | "supporting" | "all" = "ready",
 ) {
   const statuses = statusFilter === "review"
     ? ["manual_review", "failed"]
@@ -515,6 +558,7 @@ export async function reviewGmailInvoiceCandidate(args: {
     `update public.gmail_invoice_candidates
         set status = case
              when $4::boolean then 'rejected'
+             when attachment_file_name ~* '^fk([[:space:]_.-]|$)' then 'supporting'
              when extraction_status <> 'complete'
                or (extracted_vendor_name is null and extracted_invoice_number is null and extracted_total is null)
                then 'new'
@@ -546,7 +590,7 @@ export async function reviewGmailInvoiceCandidate(args: {
             updated_at=now()
       where id=$1 and company_id=$2 and vendor_invoice_id is null
         and (
-          ($4::boolean and status in ('new','ready','manual_review','failed'))
+          ($4::boolean and status in ('new','ready','manual_review','failed','duplicate','supporting'))
           or (not $4::boolean and status='rejected')
         )
       returning id,status`,
@@ -604,6 +648,13 @@ export async function importGmailInvoiceCandidate(args: {
 
     // Never import an attachment already classified as a duplicate.
     // Its source row remains visible for audit, but it cannot create an AP invoice.
+    if (isSupportingTaxAttachment(candidate.attachment_file_name)) {
+      throw Object.assign(
+        new Error("Faktur Pajak FK adalah dokumen pendukung, bukan draft invoice untuk pembayaran."),
+        { status: 409, code: "SUPPORTING_TAX_INVOICE_NOT_PAYABLE" },
+      );
+    }
+
     if (candidate.status === "rejected") {
       throw Object.assign(
         new Error("Kandidat telah ditolak dan tidak boleh dibuat menjadi Vendor Invoice. Pulihkan penolakan terlebih dahulu."),
@@ -631,6 +682,26 @@ export async function importGmailInvoiceCandidate(args: {
         new Error("Kandidat belum lolos pemeriksaan sumber dan tidak boleh diimpor."),
         { status: 409, code: "GMAIL_CANDIDATE_NOT_READY" },
       );
+    }
+
+    // Protect against historical 'ready' duplicates that were never
+    // reclassified by previous OCR runs.
+    if (candidate.attachment_sha256) {
+      const existingPdf = await client.query<{ id: number }>(
+        `select id from public.gmail_invoice_candidates
+          where company_id=$1 and attachment_sha256=$2 and id<>$3
+            and extraction_status='complete'
+            and status in ('ready','imported','supporting')
+            and (id<$3 or status in ('imported','supporting'))
+          order by case when status='imported' then 0 else 1 end, id limit 1`,
+        [args.companyId, candidate.attachment_sha256, candidate.id],
+      );
+      if (existingPdf.rows[0]) {
+        throw Object.assign(
+          new Error("PDF identik sudah tersedia. Gunakan kandidat yang pertama dan jangan buat draft ganda."),
+          { status: 409, code: "GMAIL_SOURCE_DUPLICATE_PDF" },
+        );
+      }
     }
 
     if (candidate.extraction_status !== "complete") {

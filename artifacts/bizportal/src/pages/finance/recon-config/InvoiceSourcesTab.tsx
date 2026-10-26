@@ -170,6 +170,10 @@ function statusBadge(status: string) {
     );
   }
 
+  if (normalized === "supporting") {
+    return <Badge className="border-sky-700 bg-sky-950/40 text-sky-300">Faktur Pendukung</Badge>;
+  }
+
   if (normalized === "rejected") {
     return <Badge className="border-red-700 bg-red-950/40 text-red-300">Ditolak</Badge>;
   }
@@ -232,9 +236,10 @@ export default function InvoiceSourcesTab() {
   const [candidates, setCandidates] =
     useState<GmailCandidate[]>([]);
   const [candidateFilter, setCandidateFilter] =
-    useState<"ready" | "review" | "duplicate" | "imported" | "rejected" | "all">("ready");
+    useState<"ready" | "review" | "duplicate" | "supporting" | "imported" | "rejected" | "all">("ready");
   const [rejectCandidateId, setRejectCandidateId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const [organizationRules, setOrganizationRules] =
     useState<GmailOrganizationRule[]>([]);
   const [loading, setLoading] = useState(false);
@@ -483,12 +488,15 @@ export default function InvoiceSourcesTab() {
       await readJson<{ ok: boolean }>(response);
       setRejectCandidateId(null);
       setRejectReason("");
+      setRejectError(null);
       setNotice(decision === "reject"
-        ? "Kandidat ditolak dan akan dilewati saat Auto Sync berikutnya. Email asli tetap tersimpan."
+        ? "Kandidat ditolak dan tidak akan diimpor saat Sync Now berikutnya. Email asli tetap tersimpan."
         : "Kandidat dipulihkan untuk ditinjau ulang.");
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan keputusan.");
+      const message = err instanceof Error ? err.message : "Gagal menyimpan keputusan.";
+      setRejectError(message);
+      setError(message);
     } finally {
       setAction(null);
     }
@@ -661,13 +669,22 @@ export default function InvoiceSourcesTab() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div role="dialog" aria-modal="true" aria-label="Tolak kandidat Gmail" className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 p-5 text-slate-200 shadow-xl">
             <h3 className="text-base font-semibold text-white">Tolak kandidat invoice Gmail?</h3>
-            <p className="mt-2 text-sm text-slate-400">Email dan lampiran asli tidak dihapus. Kandidat ditandai Ditolak dan tidak akan diimpor saat sinkronisasi berikutnya.</p>
-            <label htmlFor="gmail-reject-reason" className="mt-4 block text-sm">Alasan penolakan (wajib)</label>
+            <p className="mt-2 text-sm text-slate-400">Email dan lampiran asli tetap tersimpan. Setelah ditolak, kandidat tidak akan dibuat menjadi draft pada Sync Now berikutnya.</p>
+            {rejectError && <p role="alert" className="mt-3 rounded border border-red-800 bg-red-950/40 p-2 text-sm text-red-300">{rejectError}</p>}
+            <label htmlFor="gmail-reject-reason" className="mt-4 block text-sm">Alasan penolakan (minimal 10 karakter)</label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {["Duplikat dokumen sumber", "Faktur pajak pendukung, bukan invoice", "Informasi invoice tidak valid"].map((reason) => (
+                <Button key={reason} type="button" size="sm" variant="outline" disabled={action !== null}
+                  onClick={() => { setRejectReason(reason); setRejectError(null); }}>
+                  {reason}
+                </Button>
+              ))}
+            </div>
             <textarea id="gmail-reject-reason" rows={3} maxLength={500} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)}
               className="mt-2 w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm text-white"
               placeholder="Contoh: Duplikat atau dokumen tidak valid" />
             <div className="mt-4 flex justify-end gap-2">
-              <Button type="button" variant="outline" disabled={action !== null} onClick={() => { setRejectCandidateId(null); setRejectReason(""); }}>Batal</Button>
+              <Button type="button" variant="outline" disabled={action !== null} onClick={() => { setRejectCandidateId(null); setRejectReason(""); setRejectError(null); }}>Batal</Button>
               <Button type="button" variant="destructive" disabled={action !== null || rejectReason.trim().length < 10}
                 onClick={() => void reviewCandidate(rejectCandidateId, "reject", rejectReason)}>
                 {action === `review:${rejectCandidateId}` ? "Menyimpan..." : "Ya, Tolak"}
@@ -1051,6 +1068,7 @@ export default function InvoiceSourcesTab() {
               ["ready", "Siap Diproses"],
               ["review", "Perlu Review"],
               ["duplicate", "Duplikat"],
+              ["supporting", "Faktur Pendukung"],
               ["imported", "Sudah Diimpor"],
               ["rejected", "Ditolak"],
               ["all", "Semua"],
@@ -1252,11 +1270,11 @@ export default function InvoiceSourcesTab() {
                             ) : candidate.status === "manual_review" ? (
                               <span className="text-xs text-slate-500">Review OCR</span>
                             ) : null}
-                            {!candidate.vendorInvoiceId && ["new", "ready", "manual_review", "failed"].includes(candidate.status) && (
+                            {!candidate.vendorInvoiceId && ["new", "ready", "manual_review", "failed", "duplicate", "supporting"].includes(candidate.status) && (
                               <Button type="button" size="sm" variant="outline"
                                 className="gap-1.5 border-red-800 text-red-400 hover:text-red-300"
                                 disabled={action !== null}
-                                onClick={() => { setRejectCandidateId(candidate.id); setRejectReason(""); }}>
+                                onClick={() => { setRejectCandidateId(candidate.id); setRejectReason(""); setRejectError(null); }}>
                                 <XCircle className="h-3.5 w-3.5" />Tolak
                               </Button>
                             )}

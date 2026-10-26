@@ -755,7 +755,7 @@ router.get(
       );
 
       const requestedStatus = String(req.query.status ?? "ready");
-      const allowedStatuses = ["ready", "review", "duplicate", "imported", "rejected", "all"] as const;
+      const allowedStatuses = ["ready", "review", "duplicate", "supporting", "imported", "rejected", "all"] as const;
       if (!allowedStatuses.some((value) => value === requestedStatus)) {
         res.status(400).json({ error: "Filter status invoice tidak valid." });
         return;
@@ -1350,8 +1350,12 @@ router.post(
     } catch (error) {
       const code = error && typeof error === "object" && "status" in error
         ? Number((error as { status?: unknown }).status) : 503;
+      req.log.error({ error, candidateId: req.params.id }, "Failed to review Gmail candidate");
       res.status([400, 409].includes(code) ? code : 503).json({
         error: error instanceof Error ? error.message : "Keputusan kandidat tidak dapat disimpan.",
+        code: error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "GMAIL_REVIEW_FAILED")
+          : "GMAIL_REVIEW_FAILED",
       });
     }
   },
