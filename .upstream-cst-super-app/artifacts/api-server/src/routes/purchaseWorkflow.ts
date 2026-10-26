@@ -2111,7 +2111,33 @@ router.post("/vendor-invoices/:id/reverse", async (req, res) => {
           description: `Reversal ${invoice.invoiceNumber}`,
         })),
       }, journal.code);
-      if (reversal.status !== "posted") throw new Error("Jurnal reversal tidak berstatus posted.");
+      // Idempotency may return an existing journal. Verify its identity and financial
+      // signature before linking it to the invoice or voiding the original.
+      if (
+        reversal.status !== "posted" ||
+        reversal.id === original.id ||
+        reversal.companyId !== companyId ||
+        reversal.source !== "reversal" ||
+        reversal.sourceId !== original.id ||
+        reversal.journalId !== original.journalId
+      ) {
+        throw Object.assign(new Error("Jurnal reversal tidak sesuai dengan jurnal asli."), { httpStatus: 409 });
+      }
+      const persistedReversalLines = await tx.select().from(accountingEntryLinesTable)
+        .where(eq(accountingEntryLinesTable.entryId, reversal.id));
+      const financialSignature = (entries: Array<{ accountId: number; debit: unknown; credit: unknown }>) =>
+        entries.map((line) =>
+          [line.accountId, Number(line.debit ?? 0).toFixed(2), Number(line.credit ?? 0).toFixed(2)].join(":")
+        ).sort().join("|");
+      const expectedReversalSignature = financialSignature(lines.map((line) => ({
+        accountId: line.accountId, debit: line.credit, credit: line.debit,
+      })));
+      if (
+        persistedReversalLines.length !== lines.length ||
+        financialSignature(persistedReversalLines) !== expectedReversalSignature
+      ) {
+        throw Object.assign(new Error("Baris jurnal reversal tidak cocok dengan jurnal asli."), { httpStatus: 409 });
+      }
       await tx.update(accountingEntriesTable).set({
         status: "voided", isVoided: true, isReversed: true, voidEntryId: reversal.id, voidedAt: new Date(),
       }).where(eq(accountingEntriesTable.id, original.id));
