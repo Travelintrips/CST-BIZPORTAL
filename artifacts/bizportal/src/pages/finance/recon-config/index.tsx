@@ -1831,7 +1831,8 @@ function AiRulesTab() {
               </Select>
               <p className="mt-1 text-[11px] text-slate-500">
                 Wajib kandidat cocok untuk pembayaran/invoice. Pilih tanpa kandidat untuk biaya admin atau alokasi langsung berbasis rule.
-                Confidence 100% tidak memberikan izin untuk auto-approve atau auto-post. Rule ini hanya mengusulkan klasifikasi/kandidat;\n                keputusan approval dan posting perlu otorisasi terpisah. Backfill otomatis legacy juga nonaktif secara default.
+                Confidence 100% tidak memberikan izin untuk auto-approve atau auto-post. Rule ini hanya mengusulkan klasifikasi/kandidat;
+                keputusan approval dan posting perlu otorisasi terpisah. Backfill otomatis legacy juga nonaktif secara default.
               </p>
             </div>
             <div className={`rounded-lg border p-3 ${
