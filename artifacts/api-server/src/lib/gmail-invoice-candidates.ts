@@ -615,6 +615,13 @@ export async function importGmailInvoiceCandidate(args: {
       };
     }
 
+    if (candidate.status !== "ready") {
+      throw Object.assign(
+        new Error("Kandidat belum lolos pemeriksaan sumber dan tidak boleh diimpor."),
+        { status: 409, code: "GMAIL_CANDIDATE_NOT_READY" },
+      );
+    }
+
     if (candidate.extraction_status !== "complete") {
       throw Object.assign(
         new Error("OCR kandidat belum selesai."),
