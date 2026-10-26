@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -154,6 +154,7 @@ describe("Vendor Invoice AP PPh list presentation", () => {
     expect(screen.getByText("Mei 2026")).toBeTruthy();
     expect(screen.getByText("Juni 2026")).toBeTruthy();
     expect(screen.getByText("Tanggal invoice: 8 Juli 2026")).toBeTruthy();
-    expect(screen.getAllByText("Belum tercatat")).toHaveLength(2);
+    const unknownPeriodCard = screen.getByText("VI/2026/00007 — PT. ANGKASA PURA INDONESIA").parentElement;
+    expect(within(unknownPeriodCard!).getAllByText("Belum tercatat")).toHaveLength(2);
   });
 });
