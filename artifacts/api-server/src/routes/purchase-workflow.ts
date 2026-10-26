@@ -55,6 +55,7 @@ interface VendorInvoiceDetailRow {
   journal_entry_id: number | null;
   journal_status: string | null;
   journal_entry_number: string | null;
+  orphan_disbursement_numbers: string[];
   withholding_tax_amount: string | null;
   withholding_tax_type: string | null;
   invoice_breakdown: unknown;
@@ -1169,10 +1170,38 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       ${RECONCILED_PAYMENT_CTE}
       select vi.*, vi.status::text status,
              coalesce(rvip.paid_amount, 0) reconciled_amount_paid,
-             ae.status::text journal_status, ae.entry_number journal_entry_number
+             ae.status::text journal_status, ae.entry_number journal_entry_number,
+             coalesce(orphan_disbursement.disbursement_numbers, array[]::text[]) orphan_disbursement_numbers
         from public.vendor_invoices vi
         left join public.accounting_entries ae on ae.id = vi.journal_entry_id
         ${RECONCILED_PAYMENT_JOIN}
+        -- Informational only. An orphaned historical disbursement is NOT
+        -- a settled vendor invoice and must never increase amountPaid.
+        left join lateral (
+          select array_agg(distinct bd.disbursement_number order by bd.disbursement_number) disbursement_numbers
+          from public.bank_disbursement_items bdi
+          join public.bank_disbursements bd on bd.id = bdi.disbursement_id
+          join public.accounting_entries payment_entry on payment_entry.id = bd.entry_id
+          where bd.company_id = vi.company_id
+            and bd.payment_type = 'vendor_invoice'
+            and bd.ref = vi.vendor_invoice_ref
+            and vi.vendor_invoice_ref is not null
+            and bdi.vendor_invoice_id is not null
+            and not exists (
+              select 1 from public.vendor_invoices original_invoice
+              where original_invoice.id = bdi.vendor_invoice_id
+            )
+            and bdi.amount + coalesce(bdi.wht_amount, 0) = vi.grand_total
+            and payment_entry.ref = vi.vendor_invoice_ref
+            and payment_entry.status::text = 'posted'
+            and exists (
+              select 1 from public.accounting_entries reversed_entry
+               where reversed_entry.company_id = bd.company_id
+                 and reversed_entry.source::text = 'reversal'
+                 and reversed_entry.source_id = payment_entry.id
+                 and reversed_entry.status::text = 'posted'
+            )
+        ) orphan_disbursement on true
        where vi.id = $2 and vi.company_id = $1
     `, [companyId, invoiceId]);
     const row = invoiceResult.rows[0];
@@ -1230,6 +1259,7 @@ router.get("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<v
       journalEntryId: row.journal_entry_id,
       journalStatus: row.journal_status,
       journalEntryNumber: row.journal_entry_number,
+      orphanDisbursementNumbers: row.orphan_disbursement_numbers,
       withholdingTaxAmount: row.withholding_tax_amount,
       withholdingTaxType: row.withholding_tax_type,
       invoiceBreakdown: row.invoice_breakdown,
