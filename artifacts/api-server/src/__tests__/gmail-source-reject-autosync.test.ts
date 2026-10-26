@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+const purchaseApi = readFileSync(new URL("../routes/purchase-workflow.ts", import.meta.url), "utf8");
 const candidates = readFileSync(new URL("../lib/gmail-invoice-candidates.ts", import.meta.url), "utf8");
 const routes = readFileSync(new URL("../routes/gmail-invoice-source.ts", import.meta.url), "utf8");
 const invoicePage = readFileSync(new URL("../../../bizportal/src/pages/purchase/vendor-invoices.tsx", import.meta.url), "utf8");
@@ -35,9 +36,23 @@ describe("Gmail source rejection and automatic sync safeguards", () => {
     expect(sourcePage).toContain("Aktifkan Auto Sync");
   });
 
+  it("archives only untouched drafts and retains audit and ledger evidence", () => {
+    expect(purchaseApi).toContain('router.delete("/purchase-workflow/vendor-invoices/:id"');
+    expect(purchaseApi).toContain('invoice.status !== "draft"');
+    expect(purchaseApi).toContain("vi.cancelled_at is null");
+    expect(purchaseApi).toContain("journal_entry_id is null");
+    expect(purchaseApi).toContain("payment_request_items");
+    expect(purchaseApi).toContain("bank_disbursement_items");
+    expect(purchaseApi).toContain("payment_allocations");
+    expect(purchaseApi).toContain("archive_draft");
+    expect(purchaseApi).toContain("await client.query(\"commit\")");
+    expect(purchaseApi).not.toContain('router.delete("/purchase-workflow/vendor-invoices/:id", (req, res) =>');
+  });
+
   it("only shows actionable AP deletion for drafts", () => {
     expect(invoicePage).toContain('disabled={item.status !== "draft"}');
     expect(invoicePage).toContain('vi.status === "draft" && (');
     expect(invoicePage).toContain("Sumber Gmail / Auto Sync");
+    expect(invoicePage).toContain("Ya, Arsipkan Draft");
   });
 });
