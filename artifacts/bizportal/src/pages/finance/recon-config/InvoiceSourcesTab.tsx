@@ -24,6 +24,8 @@ import {
   RefreshCw,
   ShieldCheck,
   Unlink,
+  XCircle,
+  RotateCcw,
 } from "lucide-react";
 
 type GmailSourceStatus = {
@@ -35,6 +37,8 @@ type GmailSourceStatus = {
   lastSyncAt: string | null;
   lastSyncCount: number;
   lastSyncStatus: string | null;
+  autoSyncEnabled: boolean;
+  autoSyncIntervalMinutes: number;
   redirectUri: string;
   scope: string;
   organizerRuleCount: number;
@@ -166,6 +170,10 @@ function statusBadge(status: string) {
     );
   }
 
+  if (normalized === "rejected") {
+    return <Badge className="border-red-700 bg-red-950/40 text-red-300">Ditolak</Badge>;
+  }
+
   if (normalized === "duplicate") {
     return (
       <Badge className="border-amber-700 bg-amber-950/40 text-amber-300">
@@ -224,7 +232,9 @@ export default function InvoiceSourcesTab() {
   const [candidates, setCandidates] =
     useState<GmailCandidate[]>([]);
   const [candidateFilter, setCandidateFilter] =
-    useState<"ready" | "review" | "duplicate" | "imported" | "all">("ready");
+    useState<"ready" | "review" | "duplicate" | "imported" | "rejected" | "all">("ready");
+  const [rejectCandidateId, setRejectCandidateId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
   const [organizationRules, setOrganizationRules] =
     useState<GmailOrganizationRule[]>([]);
   const [loading, setLoading] = useState(false);
@@ -455,6 +465,62 @@ export default function InvoiceSourcesTab() {
     }
   };
 
+  const updateAutoSync = async (enabled: boolean) => {
+    if (!companyId) return;
+    setAction("auto-sync");
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(
+        "/api/recon-classification/invoice-sources/gmail/auto-sync",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ company_id: companyId, enabled }),
+        },
+      );
+      await readJson<{ ok: boolean }>(response);
+      setNotice(enabled
+        ? "Auto Sync Gmail aktif: pemeriksaan berkala setiap 10 menit."
+        : "Auto Sync Gmail dinonaktifkan. Sync Now tetap tersedia.");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan Auto Sync.");
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const reviewCandidate = async (candidateId: number, decision: "reject" | "restore", reason = "") => {
+    if (!companyId) return;
+    setAction(`review:${candidateId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(
+        `/api/recon-classification/invoice-sources/gmail/candidates/${candidateId}/review`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ company_id: companyId, decision, reason }),
+        },
+      );
+      await readJson<{ ok: boolean }>(response);
+      setRejectCandidateId(null);
+      setRejectReason("");
+      setNotice(decision === "reject"
+        ? "Kandidat ditolak dan akan dilewati saat Auto Sync berikutnya. Email asli tetap tersimpan."
+        : "Kandidat dipulihkan untuk ditinjau ulang.");
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan keputusan.");
+    } finally {
+      setAction(null);
+    }
+  };
+
   const importCandidate = async (
     candidate: GmailCandidate,
   ) => {
@@ -618,6 +684,25 @@ export default function InvoiceSourcesTab() {
 
   return (
     <div className="space-y-4">
+      {rejectCandidateId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div role="dialog" aria-modal="true" aria-label="Tolak kandidat Gmail" className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 p-5 text-slate-200 shadow-xl">
+            <h3 className="text-base font-semibold text-white">Tolak kandidat invoice Gmail?</h3>
+            <p className="mt-2 text-sm text-slate-400">Email dan lampiran asli tidak dihapus. Kandidat ditandai Ditolak dan tidak akan diimpor saat sinkronisasi berikutnya.</p>
+            <label htmlFor="gmail-reject-reason" className="mt-4 block text-sm">Alasan penolakan (wajib)</label>
+            <textarea id="gmail-reject-reason" rows={3} maxLength={500} value={rejectReason} onChange={(event) => setRejectReason(event.target.value)}
+              className="mt-2 w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm text-white"
+              placeholder="Contoh: Duplikat atau dokumen tidak valid" />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" disabled={action !== null} onClick={() => { setRejectCandidateId(null); setRejectReason(""); }}>Batal</Button>
+              <Button type="button" variant="destructive" disabled={action !== null || rejectReason.trim().length < 10}
+                onClick={() => void reviewCandidate(rejectCandidateId, "reject", rejectReason)}>
+                {action === `review:${rejectCandidateId}` ? "Menyimpan..." : "Ya, Tolak"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {callbackResult && (
         <div
           className={
@@ -797,6 +882,18 @@ export default function InvoiceSourcesTab() {
                       )}
                       Sync Now
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      onClick={() => void updateAutoSync(!status.autoSyncEnabled)}
+                      disabled={action !== null}
+                      className="gap-2 border-slate-600"
+                    >
+                      {status.autoSyncEnabled ? "Nonaktifkan Auto Sync" : "Aktifkan Auto Sync"}
+                    </Button>
+                    <span className="self-center text-xs text-slate-400">
+                      Auto Sync: {status.autoSyncEnabled ? "Aktif" : "Nonaktif"} · tiap {status.autoSyncIntervalMinutes ?? 10} menit
+                    </span>
 
                     <Button
                       variant="outline"
@@ -990,6 +1087,7 @@ export default function InvoiceSourcesTab() {
               ["review", "Perlu Review"],
               ["duplicate", "Duplikat"],
               ["imported", "Sudah Diimpor"],
+              ["rejected", "Ditolak"],
               ["all", "Semua"],
             ] as const).map(([value, label]) => (
               <Button
@@ -1143,6 +1241,7 @@ export default function InvoiceSourcesTab() {
                           </td>
 
                           <td className="whitespace-nowrap px-3 py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
                             {candidate.vendorInvoiceId ? (
                               <Button
                                 size="sm"
@@ -1180,14 +1279,23 @@ export default function InvoiceSourcesTab() {
                                 )}
                                 Buat Draft
                               </Button>
-                            ) : (
-                              <span className="text-xs text-slate-500">
-                                {candidate.status ===
-                                "manual_review"
-                                  ? "Review OCR"
-                                  : "—"}
-                              </span>
+                            ) : candidate.status === "rejected" ? (
+                              <Button type="button" size="sm" variant="outline" disabled={action !== null}
+                                className="gap-1.5 border-slate-600" onClick={() => void reviewCandidate(candidate.id, "restore")}>
+                                <RotateCcw className="h-3.5 w-3.5" />Pulihkan
+                              </Button>
+                            ) : candidate.status === "manual_review" ? (
+                              <span className="text-xs text-slate-500">Review OCR</span>
+                            ) : null}
+                            {!candidate.vendorInvoiceId && ["new", "ready", "manual_review", "failed"].includes(candidate.status) && (
+                              <Button type="button" size="sm" variant="outline"
+                                className="gap-1.5 border-red-800 text-red-400 hover:text-red-300"
+                                disabled={action !== null}
+                                onClick={() => { setRejectCandidateId(candidate.id); setRejectReason(""); }}>
+                                <XCircle className="h-3.5 w-3.5" />Tolak
+                              </Button>
                             )}
+                            </div>
                           </td>
                         </tr>
                       );

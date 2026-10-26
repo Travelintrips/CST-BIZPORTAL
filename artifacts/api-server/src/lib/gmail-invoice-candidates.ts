@@ -130,7 +130,7 @@ async function markFailed(id: number, error: unknown): Promise<void> {
             status='manual_review',
             error_message=$1,
             updated_at=now()
-      where id=$2`,
+      where id=$2 and status <> 'rejected'`,
     [
       error instanceof Error
         ? error.message.slice(0, 1000)
@@ -172,6 +172,7 @@ async function processAttachment(args: {
   if (
     candidate.status === "imported" ||
     candidate.status === "duplicate" ||
+    candidate.status === "rejected" ||
     candidate.extraction_status === "complete"
   ) {
     return "existing";
@@ -190,6 +191,24 @@ async function processAttachment(args: {
     }
 
     const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+    // Honor a rejected PDF even if Gmail assigns a different attachment ID.
+    const rejectedTwin = await pool.query<{ id: number }>(
+      `select id from public.gmail_invoice_candidates
+        where company_id=$1 and attachment_sha256=$2 and status='rejected' and id<>$3
+        order by id limit 1`,
+      [args.companyId, hash, candidate.id],
+    );
+    if (rejectedTwin.rows[0]) {
+      await pool.query(
+        `update public.gmail_invoice_candidates
+            set attachment_sha256=$1, extraction_status='complete',
+                status='rejected', error_message=$2, updated_at=now()
+          where id=$3 and company_id=$4 and status='new' and vendor_invoice_id is null`,
+        [hash, `Lampiran identik sudah ditolak (kandidat #${rejectedTwin.rows[0].id})`, candidate.id, args.companyId],
+      );
+      return "existing";
+    }
+
     const duplicateByHash = await pool.query<CandidateRow>(
       `select *
          from public.gmail_invoice_candidates
@@ -254,13 +273,15 @@ async function processAttachment(args: {
                 extracted_tax=$8,
                 extracted_total=$9,
                 extracted_confidence=$10,
-                extracted_json=$11::jsonb,
+                extracted_json=$11::jsonb || jsonb_build_object('source_review_history',
+                  case when jsonb_typeof(extracted_json->'source_review_history')='array'
+                    then extracted_json->'source_review_history' else '[]'::jsonb end),
                 extraction_status='complete',
                 status='duplicate',
                 vendor_invoice_id=$12,
                 error_message='Attachment identik sudah pernah diproses',
                 updated_at=now()
-          where id=$13`,
+          where id=$13 and status='new' and vendor_invoice_id is null`,
         [
           hash,
           original.extracted_vendor_name,
@@ -332,13 +353,15 @@ async function processAttachment(args: {
               extracted_tax=$9,
               extracted_total=$10,
               extracted_confidence=$11,
-              extracted_json=$12::jsonb,
+              extracted_json=$12::jsonb || jsonb_build_object('source_review_history',
+                case when jsonb_typeof(extracted_json->'source_review_history')='array'
+                  then extracted_json->'source_review_history' else '[]'::jsonb end),
               extraction_status='complete',
               status=$13,
               vendor_invoice_id=$14,
               error_message=$15,
               updated_at=now()
-        where id=$16`,
+        where id=$16 and status='new' and vendor_invoice_id is null`,
       [
         hash,
         bytes.length,
@@ -455,7 +478,7 @@ function candidateView(row: CandidateRow) {
 export async function listGmailInvoiceCandidates(
   companyId: number,
   limit = 50,
-  statusFilter: "ready" | "review" | "duplicate" | "imported" | "all" = "ready",
+  statusFilter: "ready" | "review" | "duplicate" | "imported" | "rejected" | "all" = "ready",
 ) {
   const statuses = statusFilter === "review"
     ? ["manual_review", "failed"]
@@ -471,6 +494,69 @@ export async function listGmailInvoiceCandidates(
     [companyId, Math.min(Math.max(limit, 1), 100), statuses],
   );
   return result.rows.map(candidateView);
+}
+
+// Source rejection preserves the email, OCR evidence and all posted ledgers.
+export async function reviewGmailInvoiceCandidate(args: {
+  companyId: number;
+  candidateId: number;
+  actorEmail: string;
+  decision: "reject" | "restore";
+  reason?: string;
+}): Promise<{ id: number; status: string }> {
+  const reason = args.reason?.trim() ?? "";
+  if (args.decision === "reject" && (reason.length < 10 || reason.length > 500)) {
+    throw Object.assign(new Error("Alasan penolakan wajib 10–500 karakter."), { status: 400 });
+  }
+  const isReject = args.decision === "reject";
+  // Atomic status guard: concurrent import cannot be rejected after it links
+  // an AP invoice. Review history is appended, never discarded on restore.
+  const updated = await pool.query<{ id: number; status: string }>(
+    `update public.gmail_invoice_candidates
+        set status = case
+             when $4::boolean then 'rejected'
+             when extraction_status <> 'complete'
+               or (extracted_vendor_name is null and extracted_invoice_number is null and extracted_total is null)
+               then 'new'
+             when extraction_status='complete'
+               and nullif(trim(coalesce(extracted_vendor_name,'')),'') is not null
+               and nullif(trim(coalesce(extracted_invoice_number,'')),'') is not null
+               and coalesce(extracted_total,0) > 0
+               and coalesce(extracted_confidence,0) >= 0.65 then 'ready'
+             else 'manual_review'
+           end,
+            extraction_status = case
+              when not $4::boolean and extracted_vendor_name is null
+                and extracted_invoice_number is null and extracted_total is null then 'pending'
+              else extraction_status end,
+            error_message = case when $4::boolean then $5 else null end,
+            extracted_json = jsonb_set(
+              case when jsonb_typeof(extracted_json)='object' then extracted_json else '{}'::jsonb end,
+              '{source_review_history}',
+              (
+                case when jsonb_typeof(extracted_json->'source_review_history')='array'
+                  then extracted_json->'source_review_history' else '[]'::jsonb end
+                || jsonb_build_array(jsonb_build_object(
+                  'decision',case when $4::boolean then 'rejected' else 'restored' end,
+                  'reason',$5,'actor',$3,'at',now()
+                ))
+              ),
+              true
+            ),
+            updated_at=now()
+      where id=$1 and company_id=$2 and vendor_invoice_id is null
+        and (
+          ($4::boolean and status in ('new','ready','manual_review','failed'))
+          or (not $4::boolean and status='rejected')
+        )
+      returning id,status`,
+    [args.candidateId, args.companyId, args.actorEmail, isReject, reason],
+  );
+  if (updated.rows[0]) return updated.rows[0];
+  throw Object.assign(
+    new Error("Kandidat tidak ditemukan, sudah diimpor, atau statusnya tidak mengizinkan perubahan."),
+    { status: 409, code: "GMAIL_REVIEW_CONFLICT" },
+  );
 }
 
 export async function importGmailInvoiceCandidate(args: {
@@ -518,6 +604,13 @@ export async function importGmailInvoiceCandidate(args: {
 
     // Never import an attachment already classified as a duplicate.
     // Its source row remains visible for audit, but it cannot create an AP invoice.
+    if (candidate.status === "rejected") {
+      throw Object.assign(
+        new Error("Kandidat telah ditolak dan tidak boleh dibuat menjadi Vendor Invoice. Pulihkan penolakan terlebih dahulu."),
+        { status: 409, code: "GMAIL_CANDIDATE_REJECTED" },
+      );
+    }
+
     if (candidate.status === "duplicate") {
       throw Object.assign(
         new Error("Invoice duplikat hanya disimpan di Sumber INV dan tidak dapat diimpor ke INV Vendor."),
@@ -531,6 +624,13 @@ export async function importGmailInvoiceCandidate(args: {
         vendorInvoiceId: candidate.vendor_invoice_id,
         existing: true,
       };
+    }
+
+    if (candidate.status !== "ready") {
+      throw Object.assign(
+        new Error("Kandidat belum lolos pemeriksaan sumber dan tidak boleh diimpor."),
+        { status: 409, code: "GMAIL_CANDIDATE_NOT_READY" },
+      );
     }
 
     if (candidate.extraction_status !== "complete") {

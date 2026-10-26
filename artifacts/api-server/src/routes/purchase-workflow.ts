@@ -628,6 +628,7 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
             and bd.status = 'posted'
         ) pph_payment on true
        where vi.company_id = $1
+         and vi.cancelled_at is null
          and not (
            vi.status = 'draft'
            and vi.invoice_breakdown->>'source' = 'gmail_invoice_source'
@@ -676,6 +677,104 @@ router.get("/purchase-workflow/vendor-invoices", async (req, res): Promise<void>
   } catch (error) {
     req.log.error({ error }, "Failed to load vendor invoices from Supabase");
     sendError(res, 503, "Data vendor invoice tidak dapat dimuat", "VENDOR_INVOICE_LOAD_FAILED");
+  }
+});
+
+// "Hapus" in the working list is a reversible, audited draft archive. No
+// financial record or Gmail source document is hard-deleted.
+router.delete("/purchase-workflow/vendor-invoices/:id", async (req, res): Promise<void> => {
+  const invoiceId = parseInvoiceId(req);
+  const companyId = parseCompanyId(req);
+  if (invoiceId === null || companyId === null) {
+    sendError(res, 400, "Invoice atau perusahaan tidak valid", "INVALID_INVOICE");
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await client.query<{
+      id: number; invoice_number: string; status: string;
+      amount_paid: string; journal_entry_id: number | null; is_locked: boolean;
+    }>(
+      `select vi.id,vi.invoice_number,vi.status::text status,
+              coalesce(vi.amount_paid,0)::text amount_paid,vi.journal_entry_id,
+              coalesce((to_jsonb(vi)->>'is_locked')::boolean,false) is_locked
+         from public.vendor_invoices vi
+        where vi.id=$1 and vi.company_id=$2 and vi.cancelled_at is null
+        for update`,
+      [invoiceId, companyId],
+    );
+    const invoice = result.rows[0];
+    if (!invoice) {
+      await client.query("rollback");
+      res.status(404).json({ error: "Vendor Invoice tidak ditemukan pada perusahaan aktif." });
+      return;
+    }
+    if (invoice.status !== "draft" || invoice.journal_entry_id !== null ||
+        invoice.is_locked || finiteMoney(invoice.amount_paid) > 0) {
+      await client.query("rollback");
+      res.status(409).json({
+        code: "VENDOR_INVOICE_ARCHIVE_BLOCKED",
+        error: "Hanya draft tanpa jurnal, kunci, atau pembayaran yang dapat dihapus dari daftar. Invoice posted harus melalui reversal resmi.",
+      });
+      return;
+    }
+    // Fail closed on every known payment path. These links are not removed.
+    const evidence = await client.query<{ has_links: boolean }>(
+      `select (
+        exists(select 1 from public.payment_request_items where vendor_invoice_id=$1)
+        or exists(select 1 from public.bank_disbursement_items where vendor_invoice_id=$1)
+        or exists(
+          select 1 from public.payment_allocations pa
+           where coalesce(to_jsonb(pa)->>'vendor_invoice_id',
+             to_jsonb(pa)->>'invoice_id') = $1::text
+        )
+      ) has_links`,
+      [invoiceId],
+    );
+    if (evidence.rows[0]?.has_links) {
+      await client.query("rollback");
+      res.status(409).json({
+        code: "VENDOR_INVOICE_HAS_PAYMENT_LINKS",
+        error: "Invoice masih memiliki hubungan Payment Request, Bank Disbursement atau rekonsiliasi pembayaran.",
+      });
+      return;
+    }
+    const updated = await client.query<{ id: number }>(
+      `update public.vendor_invoices
+          set status='cancelled', cancelled_at=now(), updated_at=now()
+        where id=$1 and company_id=$2 and status::text='draft'
+          and cancelled_at is null and journal_entry_id is null
+        returning id`,
+      [invoiceId, companyId],
+    );
+    if (!updated.rows[0]) throw new Error("Draft berubah saat proses hapus; pembatalan dibatalkan.");
+    await client.query(
+      `insert into public.audit_logs
+        (user_id,user_email,action,entity_type,entity_id,before_data,after_data,
+         user_agent,created_at,company_id,module)
+       values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,now(),$9,$10)`,
+      [
+        null,
+        (req as PurchaseRequest).purchaseUser?.email ?? "unknown-admin",
+        "archive_draft",
+        "vendor_invoice",
+        String(invoiceId),
+        JSON.stringify({ status: invoice.status, invoiceNumber: invoice.invoice_number }),
+        JSON.stringify({ status: "cancelled", removedFromActiveList: true }),
+        req.get("user-agent") ?? null,
+        companyId,
+        "purchase",
+      ],
+    );
+    await client.query("commit");
+    res.json({ ok: true, id: invoiceId, archived: true, message: "Draft dipindahkan dari daftar aktif; jejak audit tetap tersimpan." });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error, invoiceId }, "Failed to archive Vendor Invoice draft");
+    sendError(res, 503, "Gagal mengarsipkan draft; tidak ada perubahan yang disimpan", "VENDOR_DRAFT_ARCHIVE_FAILED");
+  } finally {
+    client.release();
   }
 });
 
