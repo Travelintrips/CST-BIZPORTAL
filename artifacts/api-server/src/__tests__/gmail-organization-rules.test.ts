@@ -38,7 +38,8 @@ describe("Gmail organization rules", () => {
     const reviewStart = routeSource.indexOf('"/recon-classification/invoice-sources/gmail/candidates/:id/review"');
     expect(routeSource.slice(callbackStart, syncStart)).not.toContain("await provisionGmailOrganizationRules({");
     expect(routeSource.slice(syncStart, reviewStart)).not.toContain("await provisionGmailOrganizationRules({");
-    expect(routeSource).toContain("gmail_label_id=coalesce");
+    expect(organizerSource).toContain("gmail_label_id=coalesce($2::text,gmail_label_id)");
+    expect(organizerSource).toContain("gmail_filter_id=coalesce($3::text,gmail_filter_id)");
   });
 
   it("keeps the organizer non-destructive while sender labels are backfilled", () => {
