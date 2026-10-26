@@ -43,11 +43,14 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("Vendor Invoice AP PPh list presentation", () => {
+  let repairQueuePayload: unknown[];
+
   beforeEach(() => {
+    repairQueuePayload = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.includes("/vendor-invoices/legacy-withholding-repairs")) {
-        return response({ data: [], total: 0 });
+        return response({ data: repairQueuePayload, total: repairQueuePayload.length });
       }
       if (path.includes("/vendor-invoices?company=1&page=1&pageSize=50")) {
         return response({
@@ -113,5 +116,44 @@ describe("Vendor Invoice AP PPh list presentation", () => {
     expect(screen.getByText((value) => value.includes("400.000"))).toBeTruthy();
     expect(screen.getByText("Harus dibayar")).toBeTruthy();
     expect(screen.getByText((value) => value.includes("26.315.250"))).toBeTruthy();
+  });
+
+  it("shows all recorded months and invoice date in the legacy PPh repair queue", async () => {
+    repairQueuePayload = [{
+      id: 11,
+      invoiceNumber: "VI/2026/00011",
+      supplierName: "PT. ANGKASA PURA INDONESIA",
+      status: "posted",
+      grandTotal: 27977617,
+      withholdingAmount: 3170506,
+      componentCount: 3,
+      reasonCode: "MISSING_LIABILITY",
+      reason: "PPh belum dipetakan ke COA liabilitas.",
+      billingPeriods: ["2026-05", "2026-06"],
+      invoiceDate: "2026-07-08T00:00:00.000Z",
+    }, {
+      id: 7,
+      invoiceNumber: "VI/2026/00007",
+      supplierName: "PT. ANGKASA PURA INDONESIA",
+      status: "posted",
+      grandTotal: 35879972,
+      withholdingAmount: 4054504,
+      componentCount: 3,
+      reasonCode: "MISSING_LIABILITY",
+      reason: "PPh belum dipetakan ke COA liabilitas.",
+      billingPeriods: [],
+      invoiceDate: null,
+    }];
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(<QueryClientProvider client={queryClient}><VendorInvoicesListPage /></QueryClientProvider>);
+
+    expect(await screen.findByText("Perbaikan PPh legacy (2)")).toBeTruthy();
+    expect(screen.getByText("Mei 2026")).toBeTruthy();
+    expect(screen.getByText("Juni 2026")).toBeTruthy();
+    expect(screen.getByText("Tanggal invoice: 8 Juli 2026")).toBeTruthy();
+    expect(screen.getAllByText("Belum tercatat")).toHaveLength(2);
   });
 });
