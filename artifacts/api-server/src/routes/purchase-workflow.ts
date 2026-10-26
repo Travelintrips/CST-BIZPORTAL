@@ -1,41 +1,10 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { getDevSession, getProductionSession, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
+import { vendorInvoiceBillingPeriods } from "./vendor-invoice-billing-periods";
 
 const router: IRouter = Router();
 
-
-// Billing periods are distinct from invoice dates and payment months.
-// Read only explicit source period metadata; never infer from invoice_date.
-function vendorInvoiceBillingPeriods(filename: string | null, breakdown: unknown): string[] {
-  const periods = new Set<string>();
-  const add = (value: unknown) => {
-    if (typeof value !== "string") return;
-    const match = /^(20\\d{2})[-/](0?[1-9]|1[0-2])(?:[-/]\\d{1,2})?$/.exec(value.trim());
-    if (match) periods.add(`${match[1]}-${match[2].padStart(2, "0")}`);
-  };
-  if (breakdown && typeof breakdown === "object" && !Array.isArray(breakdown)) {
-    const data = breakdown as Record<string, unknown>;
-    for (const key of ["billing_periods", "billingPeriods", "service_periods", "servicePeriods"]) {
-      const value = data[key];
-      if (Array.isArray(value)) value.forEach(add);
-      else add(value);
-    }
-    for (const key of ["billing_period", "billingPeriod", "service_period", "servicePeriod", "period_start", "periodStart"]) add(data[key]);
-    if (Array.isArray(data.components)) {
-      for (const item of data.components) {
-        if (!item || typeof item !== "object") continue;
-        const component = item as Record<string, unknown>;
-        for (const key of ["billing_period", "billingPeriod", "service_period", "servicePeriod", "period_start", "periodStart"]) add(component[key]);
-      }
-    }
-  }
-  const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-  for (const match of (filename ?? "").matchAll(/Per[. _-]*Posting[. _-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)([0-9]{2})/gi)) {
-    periods.add(`20${match[2]}-${String(months.indexOf(match[1].toUpperCase()) + 1).padStart(2, "0")}`);
-  }
-  return [...periods].sort();
-}
 
 interface VendorInvoiceListRow {
   id: number;
