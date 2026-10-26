@@ -952,10 +952,10 @@ export default function InvoiceSourcesTab() {
             <div>
               <CardTitle className="flex items-center gap-2 text-base text-white">
                 <Mail className="h-4 w-4 text-orange-400" />
-                Pengelompokan Gmail Otomatis
+                Pengelompokan Gmail (Manual)
               </CardTitle>
               <p className="mt-1 text-sm text-slate-400">
-                Email dikelompokkan berdasarkan nama pengirim. Email lama dibackfill dan email baru dari pengirim yang sama otomatis masuk ke label yang sesuai, tanpa dipindahkan dari Inbox.
+                Pengelompokan sender dan backfill dijalankan saat Anda menekan Terapkan Label. Sinkronisasi invoice Gmail tetap hanya melalui tombol Sync Now.
               </p>
             </div>
             <Badge
@@ -1026,14 +1026,14 @@ export default function InvoiceSourcesTab() {
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              Terapkan Auto Label
+              Terapkan Label
             </Button>
           </div>
 
           <p className="text-xs leading-5 text-slate-500">
             Contoh: email dari Hostinger akan masuk ke label
             <span className="font-semibold text-slate-300"> Hostinger</span>.
-            BizPortal juga membuat label untuk pengirim lain yang ditemukan. Pengirim baru akan dideteksi otomatis secara berkala.
+            Label baru hanya dibuat untuk pengirim yang benar-benar ditemukan saat tindakan manual dijalankan. Tidak ada pemindaian terjadwal.
           </p>
         </CardContent>
       </Card>
