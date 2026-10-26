@@ -108,6 +108,8 @@ interface LegacyRepairQueueItem {
   reasonCode: string;
   reason: string;
   componentCount: number;
+  invoiceDate?: string | null;
+  billingPeriods?: string[];
 }
 interface LegacyRepairPreview {
   repairRequired: boolean;
@@ -162,6 +164,13 @@ function formatBillingPeriods(value: unknown): string[] {
     labels.add(new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1))));
   }
   return [...labels];
+}
+
+function formatInvoiceDate(value: string | null | undefined): string {
+  if (!value) return "Belum tercatat";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Belum tercatat";
+  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
 function vendorInvoicePphBreakdown(invoice: Record<string, unknown>): Array<{ type: string; amount: number }> {
@@ -573,6 +582,17 @@ export function VendorInvoicesListPage() {
                   <div>
                     <p className="font-medium">{item.invoiceNumber} — {item.supplierName}</p>
                     <p className="text-xs text-amber-700">{item.reason}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                      <span>Periode penagihan:</span>
+                      {formatBillingPeriods(item.billingPeriods).length > 0 ? (
+                        formatBillingPeriods(item.billingPeriods).map((period) => (
+                          <Badge key={period} variant="outline" className="whitespace-nowrap font-normal">{period}</Badge>
+                        ))
+                      ) : <span>Belum tercatat</span>}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Tanggal invoice: {formatInvoiceDate(item.invoiceDate)}
+                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {item.componentCount} komponen · PPh {idr(item.withholdingAmount)} · Grand total {idr(item.grandTotal)}
                     </p>
