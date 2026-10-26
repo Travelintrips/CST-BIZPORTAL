@@ -858,6 +858,8 @@ router.post(
         companyId,
         accessToken,
         actorEmail: actor.email,
+        // Bound a single user-triggered pass to avoid Gmail per-user rate spikes.
+        senderScanLimit: 50,
       });
 
       res.status(result.failed > 0 ? 207 : 200).json({
