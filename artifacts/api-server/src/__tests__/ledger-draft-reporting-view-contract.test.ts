@@ -12,7 +12,7 @@ describe("CST ledger reporting projection", () => {
     expect(sql).toContain("CREATE OR REPLACE VIEW public.v_ledger_balance_view");
     expect(sql).toContain("CREATE OR REPLACE VIEW public.v_ledger_journal_view");
     expect(sql.match(/fle.company_id=1 AND EXISTS \(/g)).toHaveLength(2);
-    expect(sql.match(/ae.status::text='draft'/g).length).toBeGreaterThanOrEqual(2);
+    expect(sql.match(/ae.status::text='draft'/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps historical mirror entries immutable and honors view RLS", () => {
