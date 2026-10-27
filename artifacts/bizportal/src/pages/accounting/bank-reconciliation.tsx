@@ -8650,13 +8650,13 @@ export default function BankReconciliationPage() {
     )) return;
     matchingWasRunningRef.current = false;
     setMatchingAwaitingStart(false);
-    if (status.status === "completed") {
+    if (status?.status === "completed") {
       setWorkflowStage("candidates");
       toast({ title: "AI Matching selesai", description: "Hasil matching, status, dan jurnal diperbarui." });
     } else {
       toast({
         title: "AI Matching gagal",
-        description: status.error || "Periksa status job sebelum menjalankan ulang.",
+        description: status?.error || "Periksa status job sebelum menjalankan ulang.",
         variant: "destructive",
       });
     }
