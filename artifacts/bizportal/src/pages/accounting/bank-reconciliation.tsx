@@ -8638,10 +8638,10 @@ export default function BankReconciliationPage() {
       return r.json() as Promise<{ mutations: BankMutation[]; total?: number }>;
     },
     enabled: companyScopeReady,
-    // Explicit post-action invalidation remains immediate; background refresh is lighter.
+    // On entry and on known transaction changes only; no background list polling.
     staleTime: 30_000,
-    refetchInterval: 120_000,
-    refetchOnWindowFocus: true,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const { data: reconciliationAccountsData, isLoading: reconciliationAccountsLoading } = useQuery({
@@ -8674,7 +8674,8 @@ export default function BankReconciliationPage() {
     },
     enabled: companyScopeReady,
     staleTime: 30_000,
-    refetchInterval: 120_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const { data: matchedReadinessData } = useQuery({
@@ -8689,7 +8690,8 @@ export default function BankReconciliationPage() {
     },
     enabled: companyScopeReady,
     staleTime: 30_000,
-    refetchInterval: 120_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const {
@@ -8722,7 +8724,8 @@ export default function BankReconciliationPage() {
     },
     enabled: qrisCompanyId != null && (showQrisAuditList || showCanonicalSettlementQueue),
     staleTime: 30_000,
-    refetchInterval: 120_000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const {
@@ -8749,7 +8752,7 @@ export default function BankReconciliationPage() {
     },
     enabled: qrisCompanyId != null && showQrisResetHistory,
     staleTime: 60_000,
-    refetchInterval: false,
+    refetchOnWindowFocus: false,
   });
 
   // Legacy QRIS candidate generation was removed. Canonical settlements are
@@ -9469,6 +9472,7 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-ready-approval"] }),
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
+      qc.invalidateQueries({ queryKey: ["qris-settlement-reset-history"] }),
     ]);
   };
 
@@ -10517,7 +10521,7 @@ export default function BankReconciliationPage() {
                 </span>
               </Button>
             </label>
-            <Button variant="ghost" size="icon" onClick={() => refetch()} title="Refresh" className="h-8 w-8">
+            <Button variant="ghost" size="icon" onClick={() => void invalidate()} title="Refresh" className="h-8 w-8">
               <RefreshCw className="w-4 h-4" />
             </Button>
             <Button
