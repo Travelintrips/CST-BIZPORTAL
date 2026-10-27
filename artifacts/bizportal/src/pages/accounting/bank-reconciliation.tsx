@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AppShell } from "@/components/layout/AppShell";
+import { matchingStatusPollInterval, shouldRefreshOnMatchingTerminal } from "@/lib/bankReconciliationRefreshPolicy";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -8630,10 +8631,7 @@ export default function BankReconciliationPage() {
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
-    refetchInterval: query =>
-      matchingAwaitingStart || query.state.data?.running === true
-        ? 5_000
-        : false,
+    refetchInterval: query => matchingStatusPollInterval(query.state.data, matchingAwaitingStart),
   });
   const matchingBackgroundPending =
     matchingAwaitingStart || matchingJobStatus.data?.running === true;
@@ -8647,8 +8645,9 @@ export default function BankReconciliationPage() {
       if (matchingAwaitingStart) setMatchingAwaitingStart(false);
       return;
     }
-    if (!matchingWasRunningRef.current && !matchingAwaitingStart) return;
-    if (status?.status !== "completed" && status?.status !== "failed") return;
+    if (!shouldRefreshOnMatchingTerminal(
+      status?.status, matchingWasRunningRef.current, matchingAwaitingStart,
+    )) return;
     matchingWasRunningRef.current = false;
     setMatchingAwaitingStart(false);
     if (status.status === "completed") {
