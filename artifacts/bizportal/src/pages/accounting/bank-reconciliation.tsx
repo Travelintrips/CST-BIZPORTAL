@@ -8122,7 +8122,9 @@ function SheetConfigCollapsed() {
     },
     enabled:
       !companiesLoading &&
-      (isConsolidated || sheetCompanyId != null),
+      (isConsolidated || sheetCompanyId != null) &&
+      (expanded || showForm),
+    retry: false,
   });
   const { data: companiesData } = useQuery({
     queryKey: ["companies-list"],
@@ -8252,9 +8254,12 @@ function SheetConfigCollapsed() {
           <button className="w-full flex items-center justify-between gap-3 text-left" onClick={() => setExpanded(e => !e)} aria-expanded={expanded}>
             <div className="flex items-center gap-2">
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /> :
+               !configsData ? <FileText className="w-4 h-4 text-muted-foreground" /> :
                lastSyncOk ? <Wifi className="w-4 h-4 text-green-500" /> : <WifiOff className="w-4 h-4 text-orange-500" />}
               <span className="text-sm font-medium">Google Sheet</span>
-              <Badge variant="secondary" className="text-xs">{configs.length} koneksi</Badge>
+              <Badge variant="secondary" className="text-xs">
+                {configsData ? `${configs.length} koneksi` : "Buka untuk memuat"}
+              </Badge>
               {activeConfigs.length > 0 && (
                 <span className="text-xs text-muted-foreground hidden sm:inline">
                   · Sync terakhir: {fmtDateTime(activeConfigs[0]?.last_synced_at)}
@@ -8271,7 +8276,9 @@ function SheetConfigCollapsed() {
 
           {expanded && (
             <div className="mt-3 space-y-2 border-t pt-3">
-              {configs.length === 0 ? (
+              {isLoading ? (
+                <p className="text-sm text-muted-foreground text-center py-4">Memuat koneksi Google Sheet...</p>
+              ) : configs.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
                   Belum ada koneksi. Klik <strong>Tambah</strong> untuk menambahkan.
                 </p>
@@ -8515,6 +8522,12 @@ export default function BankReconciliationPage() {
   const [filterSearch,   setFilterSearch]   = useState(
     () => new URLSearchParams(window.location.search).get("search") ?? "",
   );
+  const [debouncedSearch, setDebouncedSearch] = useState(filterSearch);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedSearch(filterSearch), 400);
+    return () => window.clearTimeout(timeout);
+  }, [filterSearch]);
+  const [loadBankAccountOptions, setLoadBankAccountOptions] = useState(false);
   const [page,           setPage]           = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showQrisAuditList, setShowQrisAuditList] = useState(false);
@@ -8606,7 +8619,7 @@ export default function BankReconciliationPage() {
     filterBankAccountId,
     filterFrom,
     filterTo,
-    filterSearch,
+    debouncedSearch,
     page,
   ];
 
@@ -8689,16 +8702,20 @@ export default function BankReconciliationPage() {
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
-      if (filterSearch) params.set("search", filterSearch);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       const endpoint = clientFiltered
         ? "/api/bank-reconciliation/ready-approval-mutations"
         : "/api/bank-reconciliation/mutations";
-      const r = await fetch(`${endpoint}?${params}`, { credentials: "include" });
+      const r = await fetch(`${endpoint}?${params}`, {
+        credentials: "include",
+        signal: AbortSignal.timeout(12_000),
+      });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total?: number }>;
     },
     enabled: companyScopeReady,
     // On entry and on known transaction changes only; no background list polling.
+    retry: false,
     staleTime: 30_000,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
@@ -8712,7 +8729,8 @@ export default function BankReconciliationPage() {
       if (!response.ok) throw new Error(await response.text());
       return response.json() as Promise<{ data: ReconciliationAccount[] }>;
     },
-    enabled: qrisCompanyId != null,
+    // Account options are only needed when opening the account selector.
+    enabled: qrisCompanyId != null && loadBankAccountOptions,
     staleTime: 60_000,
   });
   const reconciliationAccounts = (reconciliationAccountsData?.data ?? []).filter(
@@ -8728,27 +8746,38 @@ export default function BankReconciliationPage() {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
-      const r = await fetch(`/api/bank-reconciliation/summary?${params}`, { credentials: "include" });
+      const r = await fetch(`/api/bank-reconciliation/summary?${params}`, {
+        credentials: "include",
+        signal: AbortSignal.timeout(12_000),
+      });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
     },
     enabled: companyScopeReady,
+    retry: false,
     staleTime: 30_000,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
   });
 
-  const { data: matchedReadinessData } = useQuery({
+  const { data: matchedReadinessData, isError: readinessError, isFetching: readinessFetching } = useQuery({
     queryKey: ["bank-reconciliation-ready-approval", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
-      const r = await fetch(`/api/bank-reconciliation/ready-approval-mutations?${params}`, { credentials: "include" });
+      const r = await fetch(`/api/bank-reconciliation/ready-approval-mutations?${params}`, {
+        credentials: "include",
+        signal: AbortSignal.timeout(12_000),
+      });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
-    enabled: companyScopeReady,
+    // Readiness is supplemental. Let the mutation list and summary become
+    // interactive first rather than starting an additional DB-heavy read.
+    enabled: companyScopeReady && !isLoading && !summaryLoading && Boolean(data) && Boolean(summary)
+      && Number(summary?.summary.find(item => item.status === "matched")?.count ?? 0) > 0,
+    retry: false,
     staleTime: 30_000,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
@@ -9475,8 +9504,9 @@ export default function BankReconciliationPage() {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
   }
   const readyApprovalMutations = (matchedReadinessData?.mutations ?? []).filter(isUiApprovalEligible);
+  const matchedCount = Number(summary?.summary.find(item => item.status === "matched")?.count ?? 0);
   summaryMap.ready_approval = {
-    count: readyApprovalMutations.length,
+    count: matchedReadinessData || matchedCount === 0 ? readyApprovalMutations.length : 0,
     amount: readyApprovalMutations.reduce((total, mutation) => total + (Number(mutation.amount) || 0), 0),
   };
 
@@ -10380,7 +10410,7 @@ export default function BankReconciliationPage() {
   const resetFilters = () => {
     setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
     setFilterBankAccountId("all");
-    setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setPage(0);
+    setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setDebouncedSearch(""); setPage(0);
   };
 
   const responseMutations = data?.mutations ?? [];
@@ -10580,6 +10610,14 @@ export default function BankReconciliationPage() {
         ) : (
           <>
             {/* ── Step Progress ─────────────────────────────────── */}
+            {matchedCount > 0 && !matchedReadinessData && (
+              <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+                {readinessFetching ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertTriangle className="h-3 w-3" />}
+                {readinessError
+                  ? "Status siap disetujui belum tersedia. Klik Refresh untuk mencoba lagi."
+                  : "Menghitung mutasi siap disetujui..."}
+              </p>
+            )}
             <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
 
             {/* ── AI Action Center ──────────────────────────────── */}
@@ -10624,6 +10662,7 @@ export default function BankReconciliationPage() {
                   <Label className="text-[10px] text-muted-foreground">Akun Rekonsiliasi</Label>
                   <Select
                     value={filterBankAccountId}
+                    onOpenChange={open => { if (open) setLoadBankAccountOptions(true); }}
                     onValueChange={value => {
                       setFilterBankAccountId(value);
                       setPage(0);
@@ -10634,6 +10673,9 @@ export default function BankReconciliationPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Semua akun</SelectItem>
+                      {reconciliationAccountsLoading && (
+                        <SelectItem value="loading-accounts" disabled>Memuat akun bank...</SelectItem>
+                      )}
                       {reconciliationAccounts.map(account => {
                         const accountNumber = account.account_number?.trim();
                         const suffix = accountNumber ? ` · ${accountNumber}` : "";
@@ -11465,7 +11507,7 @@ export default function BankReconciliationPage() {
                 <div>
                   <p className="font-medium text-red-700 dark:text-red-300">Gagal memuat mutasi bank</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Server PROD belum siap atau schema rekonsiliasi belum lengkap. Coba muat ulang.
+                    Permintaan daftar mutasi gagal atau terlalu lama. Coba Lagi, atau periksa koneksi jika berulang.
                   </p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => refetch()}>
