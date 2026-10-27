@@ -5,7 +5,7 @@ const route=readFileSync(fileURLToPath(new URL('../routes/bank-reconciliation.ts
 describe('standalone Rule AI wiring',()=>{
  it('loads active rules before fallback',()=>{expect(route).toContain('from public.recon_rules where company_id=$1 and is_active=true');expect(route.indexOf('evaluateReconRules(rules')).toBeLessThan(route.indexOf('const best = candidates[0]'));});
  it('persists explainability',()=>{expect(route).toContain("'public.recon_rules'");expect(route).toContain('engine: "bizportal-rule-ai"');expect(route).toContain("review_code='RULE_AI_MATCH'");});
- it('keeps candidate-required rules unmatched until a real candidate exists',()=>{expect(route).toContain('matchedRule.candidateRequirement !== "not_required"');expect(route).toContain("status='unmatched',reconciliation_status='unmatched'");expect(route).toContain("review_code='RULE_NO_CANONICAL_CANDIDATE'");expect(route).toContain("'RULE_NO_CANONICAL_CANDIDATE_UNMATCHED'");expect(route).toContain("RULE_MULTIPLE_CANONICAL_CANDIDATES");});
+ it('keeps candidate-required rules unmatched until a real candidate exists',()=>{expect(route).toContain('matchedRule.candidateRequirement !== "not_required"');expect(route).toContain("status='unmatched',reconciliation_status='unmatched'");expect(route).toContain("else 'RULE_NO_CANONICAL_CANDIDATE' end");expect(route).toContain("'RULE_NO_CANONICAL_CANDIDATE_UNMATCHED'");expect(route).toContain("RULE_MULTIPLE_CANONICAL_CANDIDATES");});
 
  it('allows super admin to run reconciliation matching',()=>{expect(route).toContain('"super_admin"');});
  it('enforces document requirement',()=>{expect(route).toContain('ruleResult.documentRequired');expect(route).toContain("review_code='RULE_DOCUMENT_REQUIRED'");});

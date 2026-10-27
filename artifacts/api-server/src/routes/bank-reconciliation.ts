@@ -1427,6 +1427,10 @@ async function matchLocalMutation(
   actor: ApprovalActor,
 ): Promise<"matched" | "auto_posted" | "manual_review" | "unmatched"> {
   if (mutation.company_id == null) return "unmatched";
+  // Imported/recovered statement rows without independently confirmed bank
+  // evidence may receive candidate suggestions but never unattended approval.
+  const requiresRecoveredSourceReview =
+    mutation.review_code === "SOURCE_RECOVERY_MANUAL_REVIEW";
 
   await client.query(
     `delete from public.bank_reconciliation_matches
@@ -1460,7 +1464,7 @@ async function matchLocalMutation(
 
     if (!realCandidate && matchedRule.candidateRequirement !== "not_required") {
       await client.query(
-        "update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code='RULE_NO_CANONICAL_CANDIDATE',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        "update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code=case when review_code='SOURCE_RECOVERY_MANUAL_REVIEW' then review_code else 'RULE_NO_CANONICAL_CANDIDATE' end,updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
         [mutation.id],
       );
       await client.query(
@@ -1515,7 +1519,7 @@ async function matchLocalMutation(
 
     if (ambiguousRequiredCandidates) {
       await client.query(
-        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok dan menemukan lebih dari satu kandidat canonical dengan skor setara. Pilih transaksi yang benar sebelum approve.',review_code='RULE_MULTIPLE_CANONICAL_CANDIDATES',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok dan menemukan lebih dari satu kandidat canonical dengan skor setara. Pilih transaksi yang benar sebelum approve.',review_code=case when review_code='SOURCE_RECOVERY_MANUAL_REVIEW' then review_code else 'RULE_MULTIPLE_CANONICAL_CANDIDATES' end,updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
         [mutation.id],
       );
       await client.query(
@@ -1531,6 +1535,28 @@ async function matchLocalMutation(
             candidate_requirement: matchedRule.candidateRequirement,
             real_candidate_ids: competitiveRealCandidates.map((candidate) => candidate.candidateId),
             ambiguity: true,
+          }),
+        ],
+      );
+      return "manual_review";
+    }
+
+    if (requiresRecoveredSourceReview) {
+      await client.query(
+        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason=$1,review_code='SOURCE_RECOVERY_MANUAL_REVIEW',updated_at=now() where id=$2 and status not in ('approved_pending_posting','approved','posted','void')",
+        ["Mutasi hasil pemulihan sumber: kandidat Rule AI bersifat usulan, bukan persetujuan. Verifikasi mutasi bank asli dan dokumen sebelum approval.", mutation.id],
+      );
+      await client.query(
+        "insert into public.bank_reconciliation_audit (mutation_id,action,actor,meta) values ($1,'MATCH_CREATED',$2,$3::jsonb)",
+        [
+          mutation.id,
+          actor.email,
+          JSON.stringify({
+            engine: "bizportal-rule-ai",
+            source_recovery_manual_review: true,
+            rule_id: ruleResult.ruleId,
+            candidate_ids: competitiveRealCandidates.map((candidate) => candidate.candidateId),
+            auto_approval_allowed: false,
           }),
         ],
       );
@@ -1580,7 +1606,8 @@ async function matchLocalMutation(
     // Only inbound QRIS belongs to the Sport Center settlement flow.
     // Outbound QRIS is an ordinary company payment rail (merchant expense,
     // vendor payment, etc.) and may be auto-posted by a deterministic Rule AI.
-    const autoPostEligible = isReconRuleAutoApprovalAllowed(matchedRule.id)
+    const autoPostEligible = !requiresRecoveredSourceReview
+      && isReconRuleAutoApprovalAllowed(matchedRule.id)
       && (confidence === 100 || kasScApprovedRuleAutoPost)
       && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
@@ -1642,7 +1669,7 @@ async function matchLocalMutation(
   const isAmbiguous = competitiveCandidates.length > 1;
   const nextStatus = !best
     ? "unmatched"
-    : isAmbiguous
+    : requiresRecoveredSourceReview || isAmbiguous
       ? "manual_review"
       : best.score >= 80
         ? "matched"
@@ -1689,7 +1716,9 @@ async function matchLocalMutation(
             ? "Lebih dari satu kandidat memiliki kecocokan serupa. Pilih transaksi yang benar sebelum approve."
             : best.reason)
         : null,
-      best ? (isAmbiguous ? "MULTIPLE_CANDIDATES" : "LOCAL_MATCHING") : null,
+      requiresRecoveredSourceReview
+        ? "SOURCE_RECOVERY_MANUAL_REVIEW"
+        : (best ? (isAmbiguous ? "MULTIPLE_CANDIDATES" : "LOCAL_MATCHING") : null),
       mutation.id,
     ],
   );
