@@ -7,7 +7,8 @@ const route = readFileSync(resolve(process.cwd(), "src/routes/bank-reconciliatio
 
 describe("Rule AI must not auto-approve merely because classification matched", () => {
   it("gates 100% confidence and special Kas Besar SC auto post by a separately authorized rule ID", () => {
-    expect(route).toContain("const autoPostEligible = isReconRuleAutoApprovalAllowed(matchedRule.id)");
+    expect(route).toContain("const autoPostEligible = !requiresRecoveredSourceReview");
+    expect(route).toContain("&& isReconRuleAutoApprovalAllowed(matchedRule.id)");
     expect(route).toContain("&& (confidence === 100 || kasScApprovedRuleAutoPost)");
   });
   it("gates the legacy backfill both in the scheduler and the callable worker", () => {
