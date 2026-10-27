@@ -12,7 +12,7 @@
  *  7. Rule Approval (Approval Rules)
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Mail, Shield, ArrowLeft,
   BarChart2, TrendingUp, TrendingDown, Clock, AlertCircle, CheckCircle2,
-  Search, Loader2,
+  Search, Loader2, ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 const API = "/api";
@@ -812,6 +812,10 @@ function AiRulesTab() {
   }>>([]);
   const [loadingReconAccounts, setLoadingReconAccounts] = useState(false);
   const [showInactiveRules, setShowInactiveRules] = useState(false);
+  const ruleTableScrollRef = useRef<HTMLDivElement>(null);
+  const scrollRuleTable = (direction: -1 | 1) => {
+    ruleTableScrollRef.current?.scrollBy({ left: direction * 480, behavior: "smooth" });
+  };
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -1404,7 +1408,12 @@ function AiRulesTab() {
       ) : loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="flex items-center justify-end gap-2 pb-2">
+          <span className="text-xs text-slate-400">Geser tabel untuk melihat kolom lainnya</span>
+          <Button type="button" size="sm" variant="outline" aria-label="Geser tabel ke kiri" onClick={() => scrollRuleTable(-1)} className="border-slate-600 text-slate-200"><ChevronLeft size={16} /></Button>
+          <Button type="button" size="sm" variant="outline" aria-label="Geser tabel ke kanan" onClick={() => scrollRuleTable(1)} className="border-slate-600 text-slate-200"><ChevronRight size={16} /></Button>
+        </div>
+        <div ref={ruleTableScrollRef} className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-700 text-slate-400 text-left">
