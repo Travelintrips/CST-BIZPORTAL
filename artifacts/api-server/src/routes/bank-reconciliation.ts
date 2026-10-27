@@ -380,15 +380,16 @@ router.use("/bank-reconciliation", (req, res, next) => {
   res.once("finish", () => {
     const elapsedMs = Date.now() - startedAt;
     if (res.statusCode < 400 && elapsedMs < 2_500) return;
-    const routeLabel = req.path.startsWith("/bank-reconciliation/mutations/")
+    const routePath = req.originalUrl.split("?", 1)[0];
+    const routeLabel = routePath.includes("/bank-reconciliation/mutations/")
       ? "mutation-detail"
-      : req.path.startsWith("/bank-reconciliation/mutations")
+      : routePath.endsWith("/bank-reconciliation/mutations")
         ? "mutations"
-        : req.path.startsWith("/bank-reconciliation/summary")
+        : routePath.endsWith("/bank-reconciliation/summary")
           ? "summary"
-          : req.path.startsWith("/bank-reconciliation/ready-approval-mutations")
+          : routePath.endsWith("/bank-reconciliation/ready-approval-mutations")
             ? "readiness"
-            : req.path.startsWith("/bank-reconciliation/run-matching/status")
+            : routePath.endsWith("/bank-reconciliation/run-matching/status")
               ? "matching-status"
               : "other";
     // 401/403 are authorization decisions, not server failures. Never log a
