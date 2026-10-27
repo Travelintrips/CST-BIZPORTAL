@@ -32,9 +32,10 @@ describe("bank reconciliation fast initial load and safe filters", () => {
   });
 
   it("bounds initial reads and does not retry them indefinitely", () => {
-    expect(source.match(/signal: AbortSignal\.timeout\(12_000\)/g)?.length).toBe(3);
+    expect(source.match(/signal: AbortSignal\.timeout\(12_000\)/g)?.length).toBe(1);
+    expect(source).toContain("async function fetchBankReconRead<T>");
     expect(source.match(/retry: false/g)?.length).toBeGreaterThanOrEqual(4);
-    expect(source).toContain("Permintaan daftar mutasi gagal atau terlalu lama");
+    expect(source).toContain("Permintaan melebihi 12 detik");
     expect(source).toContain("readinessError");
   });
 
