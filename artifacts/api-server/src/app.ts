@@ -50,7 +50,7 @@ if (process.env.NODE_ENV === "production") {
   app.use(express.static(publicDir, {
     index: false,
     setHeaders(res, filePath) {
-      if (/[\\/]assets[\\/][^\\/]+-[A-Za-z0-9_-]{8,}\\.(?:js|css)$/.test(filePath)) {
+      if (/[\\/]assets[\\/][^\\/]+-[A-Za-z0-9_-]{8,}\.(?:js|css)$/.test(filePath)) {
         res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       }
     },
