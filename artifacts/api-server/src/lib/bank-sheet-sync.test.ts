@@ -242,7 +242,7 @@ describe("Google Sheet bank mutation sync", () => {
     expect(storedMutations[0]).toMatchObject({ id: 666, status: "posted", journal_entry_id: 34086 });
     const writes = JSON.stringify(mocks.writeSpreadsheetValues.mock.calls);
     expect(writes).toContain("historical-posted-key");
-    expect(writes).toContain("POSTED");
+    expect(writes).toContain("RECONCILED");
   });
 
   it("does not conflate other same-day transfers with the posted fee just because amounts coincide", async () => {
