@@ -1464,7 +1464,7 @@ async function matchLocalMutation(
 
     if (!realCandidate && matchedRule.candidateRequirement !== "not_required") {
       await client.query(
-        "update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code='RULE_NO_CANONICAL_CANDIDATE',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        "update public.bank_mutations set status='unmatched',reconciliation_status='unmatched',review_reason='Rule AI cocok tetapi belum ada kandidat transaksi canonical. Mutasi tetap Belum Dicocokkan sampai kandidat tersedia.',review_code=case when review_code='SOURCE_RECOVERY_MANUAL_REVIEW' then review_code else 'RULE_NO_CANONICAL_CANDIDATE' end,updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
         [mutation.id],
       );
       await client.query(
@@ -1519,7 +1519,7 @@ async function matchLocalMutation(
 
     if (ambiguousRequiredCandidates) {
       await client.query(
-        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok dan menemukan lebih dari satu kandidat canonical dengan skor setara. Pilih transaksi yang benar sebelum approve.',review_code='RULE_MULTIPLE_CANONICAL_CANDIDATES',updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
+        "update public.bank_mutations set status='manual_review',reconciliation_status='manual_review',review_reason='Rule AI cocok dan menemukan lebih dari satu kandidat canonical dengan skor setara. Pilih transaksi yang benar sebelum approve.',review_code=case when review_code='SOURCE_RECOVERY_MANUAL_REVIEW' then review_code else 'RULE_MULTIPLE_CANONICAL_CANDIDATES' end,updated_at=now() where id=$1 and status not in ('approved_pending_posting','approved','posted','void')",
         [mutation.id],
       );
       await client.query(
@@ -1606,7 +1606,8 @@ async function matchLocalMutation(
     // Only inbound QRIS belongs to the Sport Center settlement flow.
     // Outbound QRIS is an ordinary company payment rail (merchant expense,
     // vendor payment, etc.) and may be auto-posted by a deterministic Rule AI.
-    const autoPostEligible = isReconRuleAutoApprovalAllowed(matchedRule.id)
+    const autoPostEligible = !requiresRecoveredSourceReview
+      && isReconRuleAutoApprovalAllowed(matchedRule.id)
       && (confidence === 100 || kasScApprovedRuleAutoPost)
       && matchedRule.candidateRequirement !== 'required'
       && !realCandidate
