@@ -509,7 +509,6 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
             </tbody>
           </table>
         </div>
-        </>
       )}
 
       {/* ── Add Department dialog ─────────────────────────────────────── */}
@@ -1532,6 +1531,7 @@ function AiRulesTab() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <Dialog open={showModal} onOpenChange={setShowModal}>
