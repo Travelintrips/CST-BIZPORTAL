@@ -8760,7 +8760,7 @@ export default function BankReconciliationPage() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: matchedReadinessData } = useQuery({
+  const { data: matchedReadinessData, isError: readinessError, isFetching: readinessFetching } = useQuery({
     queryKey: ["bank-reconciliation-ready-approval", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -10612,8 +10612,10 @@ export default function BankReconciliationPage() {
             {/* ── Step Progress ─────────────────────────────────── */}
             {matchedCount > 0 && !matchedReadinessData && (
               <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Menghitung mutasi siap disetujui...
+                {readinessFetching ? <Loader2 className="h-3 w-3 animate-spin" /> : <AlertTriangle className="h-3 w-3" />}
+                {readinessError
+                  ? "Status siap disetujui belum tersedia. Klik Refresh untuk mencoba lagi."
+                  : "Menghitung mutasi siap disetujui..."}
               </p>
             )}
             <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
