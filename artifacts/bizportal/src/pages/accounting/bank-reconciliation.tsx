@@ -8489,6 +8489,44 @@ function OnboardingModal() {
 //   Summary:          GET  /api/bank-reconciliation/summary
 //   Import:           POST /api/bank-reconciliation/import
 
+type BankReconReadError = Error & { httpStatus?: number };
+
+function describeBankReconReadError(error: unknown): string {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return "Permintaan melebihi 12 detik. Server mungkin sedang sibuk atau koneksi database melambat. Coba Lagi.";
+  }
+  const typed = error as BankReconReadError | null;
+  if (typed?.httpStatus === 401) {
+    return "Sesi login rekonsiliasi tidak tersedia atau kedaluwarsa (HTTP 401). Silakan login ulang ke BizPortal.";
+  }
+  if (typed?.httpStatus === 403) {
+    return "Akses rekening atau peran pengguna tidak diizinkan (HTTP 403). Periksa perusahaan dan hak akses akun.";
+  }
+  if (typed?.httpStatus && typed.httpStatus >= 500) {
+    return `Server rekonsiliasi mengalami gangguan (HTTP ${typed.httpStatus}). Data tidak diubah. Coba Lagi.`;
+  }
+  return typed?.message
+    ? `Permintaan rekonsiliasi gagal: ${typed.message.slice(0, 160)}`
+    : "Permintaan rekonsiliasi gagal. Coba Lagi.";
+}
+
+async function fetchBankReconRead<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { code?: string; error?: string } | null;
+    const message = typeof body?.error === "string" && body.error.length < 160
+      ? body.error
+      : `HTTP ${response.status}`;
+    const error = new Error(message) as BankReconReadError;
+    error.httpStatus = response.status;
+    throw error;
+  }
+  return response.json() as Promise<T>;
+}
+
 type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse" | "unmatch";
 
 export default function BankReconciliationPage() {
@@ -8706,12 +8744,7 @@ export default function BankReconciliationPage() {
       const endpoint = clientFiltered
         ? "/api/bank-reconciliation/ready-approval-mutations"
         : "/api/bank-reconciliation/mutations";
-      const r = await fetch(`${endpoint}?${params}`, {
-        credentials: "include",
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ mutations: BankMutation[]; total?: number }>;
+      return fetchBankReconRead<{ mutations: BankMutation[]; total?: number }>(`${endpoint}?${params}`);
     },
     enabled: companyScopeReady,
     // On entry and on known transaction changes only; no background list polling.
@@ -8740,18 +8773,15 @@ export default function BankReconciliationPage() {
       && Boolean(account.coa_name?.trim()),
   );
 
-  const { data: summary, isLoading: summaryLoading, isError: summaryError } = useQuery({
+  const { data: summary, isLoading: summaryLoading, error: summaryReadError } = useQuery({
     queryKey: ["bank-reconciliation-summary", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
-      const r = await fetch(`/api/bank-reconciliation/summary?${params}`, {
-        credentials: "include",
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
+      return fetchBankReconRead<{ summary: { status: string; count: string; total_amount: string }[] }>(
+        `/api/bank-reconciliation/summary?${params}`,
+      );
     },
     enabled: companyScopeReady,
     retry: false,
@@ -8766,12 +8796,9 @@ export default function BankReconciliationPage() {
       const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
-      const r = await fetch(`/api/bank-reconciliation/ready-approval-mutations?${params}`, {
-        credentials: "include",
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
+      return fetchBankReconRead<{ mutations: BankMutation[]; total: number }>(
+        `/api/bank-reconciliation/ready-approval-mutations?${params}`,
+      );
     },
     // Readiness is supplemental. Let the mutation list and summary become
     // interactive first rather than starting an additional DB-heavy read.
@@ -10600,11 +10627,14 @@ export default function BankReconciliationPage() {
               Memuat ringkasan rekonsiliasi…
             </CardContent>
           </Card>
-        ) : summaryError ? (
+        ) : summaryReadError ? (
           <Alert className="border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
             <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>
-              Ringkasan rekonsiliasi gagal dimuat. Data tidak akan ditampilkan sebagai nol sampai request berhasil.
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>Ringkasan gagal dimuat. {describeBankReconReadError(summaryReadError)}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void invalidate()}>
+                <RefreshCw className="mr-1 h-3 w-3" /> Coba Lagi Ringkasan & Mutasi
+              </Button>
             </AlertDescription>
           </Alert>
         ) : (
@@ -11507,11 +11537,11 @@ export default function BankReconciliationPage() {
                 <div>
                   <p className="font-medium text-red-700 dark:text-red-300">Gagal memuat mutasi bank</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Permintaan daftar mutasi gagal atau terlalu lama. Coba Lagi, atau periksa koneksi jika berulang.
+                    {describeBankReconReadError(error)}
                   </p>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => refetch()}>
-                  Coba Lagi
+                <Button variant="outline" size="sm" onClick={() => void invalidate()}>
+                  Coba Lagi Ringkasan & Mutasi
                 </Button>
               </CardContent>
             </Card>
