@@ -44,6 +44,8 @@ type ExistingMutation = {
   mutation_key: string | null;
   description: string | null;
   canonical_key: string | null;
+  amount: string | number | null;
+  direction: string | null;
   status: string | null;
   reconciliation_status: string | null;
   journal_entry_id: number | null;
@@ -614,7 +616,8 @@ async function syncConfig(config: SheetConfig): Promise<{
       `google-sheet-sync:${config.id}`,
     ]);
     const existingResult = await client.query<ExistingMutation>(
-      `select bm.id, bm.mutation_key, bm.canonical_key, bm.description, bm.status,
+      `select bm.id, bm.mutation_key, bm.canonical_key, bm.description,
+              bm.amount, bm.direction, bm.status,
               bm.reconciliation_status, bm.journal_entry_id,
               matched.match_score,
               matched.match_reason,
@@ -825,7 +828,29 @@ async function syncConfig(config: SheetConfig): Promise<{
         byCanonicalKey.get(item.canonical)
         ?? byCanonicalKey.get(item.legacyCanonical);
       const foundByMutationKey = byMutationKey.get(item.key);
-      const found = foundByCanonical ?? foundByMutationKey;
+      // A Sheet mutation_key is a *hint*, never authorization to overwrite
+      // or suppress a different posted bank transaction. If the same key
+      // points to a finalized record with a different amount AND description,
+      // regenerate identity from the canonical company/account/date/amount/
+      // direction/description. Same-description edits to posted transactions
+      // remain blocked instead of silently creating a duplicate.
+      const finalizedKeyConflict = !foundByCanonical && !!foundByMutationKey
+        && (
+          foundByMutationKey.journal_entry_id != null
+          || ["posted", "approved", "reconciled"].includes(
+            String(foundByMutationKey.status ?? "").toLowerCase(),
+          )
+          || ["posted", "approved", "reconciled"].includes(
+            String(foundByMutationKey.match_status ?? "").toLowerCase(),
+          )
+        )
+        && foundByMutationKey.amount != null
+        && Math.round(Math.abs(Number(foundByMutationKey.amount)) * 100)
+           !== Math.round(item.row.amount * 100)
+        && normalizeDescription(foundByMutationKey.description ?? "")
+           !== normalizeDescription(item.row.description);
+      const resolvedKey = finalizedKeyConflict ? item.canonical : item.key;
+      const found = foundByCanonical ?? (finalizedKeyConflict ? undefined : foundByMutationKey);
       if (found) {
         const mutationStatus = String(found.status ?? "").trim().toLowerCase();
         const reconciliationStatus = String(found.reconciliation_status ?? "").trim().toLowerCase();
@@ -915,7 +940,7 @@ async function syncConfig(config: SheetConfig): Promise<{
         }
 
         existing += 1;
-        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, item.key));
+        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(found, resolvedKey));
         continue;
       }
 
@@ -934,7 +959,7 @@ async function syncConfig(config: SheetConfig): Promise<{
                     null::text as match_status, null::text as match_result,
                     null::text as coa_code, null::text as coa_name`,
         [
-          item.key,
+          resolvedKey,
           item.canonical,
           item.row.transactionDate,
           item.row.description,
@@ -952,13 +977,13 @@ async function syncConfig(config: SheetConfig): Promise<{
       const mutation = inserted.rows[0];
       if (mutation) {
         imported += 1;
-        byMutationKey.set(item.key, mutation);
+        byMutationKey.set(resolvedKey, mutation);
         byCanonicalKey.set(item.canonical, mutation);
-        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(mutation, item.key));
+        mutationStatuses.set(item.row.rowNumber, toSheetMetadata(mutation, resolvedKey));
       } else {
         existing += 1;
         mutationStatuses.set(item.row.rowNumber, {
-          key: item.key,
+          key: resolvedKey,
           status: "UNMATCHED",
           description: null,
           coaCode: null,
