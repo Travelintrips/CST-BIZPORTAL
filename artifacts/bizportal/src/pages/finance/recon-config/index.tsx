@@ -509,6 +509,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {/* ── Add Department dialog ─────────────────────────────────────── */}
@@ -1408,6 +1409,7 @@ function AiRulesTab() {
       ) : loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
+        <>
         <div className="flex items-center justify-end gap-2 pb-2">
           <span className="text-xs text-slate-400">Geser tabel untuk melihat kolom lainnya</span>
           <Button type="button" size="sm" variant="outline" aria-label="Geser tabel ke kiri" onClick={() => scrollRuleTable(-1)} className="border-slate-600 text-slate-200"><ChevronLeft size={16} /></Button>
