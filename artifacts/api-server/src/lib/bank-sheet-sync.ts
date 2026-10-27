@@ -44,6 +44,7 @@ type ExistingMutation = {
   mutation_key: string | null;
   description: string | null;
   canonical_key: string | null;
+  transaction_date?: string | null;
   amount: string | number | null;
   direction: string | null;
   status: string | null;
@@ -592,6 +593,10 @@ async function syncConfig(config: SheetConfig): Promise<{
     const mutationKeys = [...new Set(prepared.map((item) => item.key))];
     const canonicalKeys = [...new Set(prepared.map((item) => item.canonical))];
     const legacyCanonicalKeys = [...new Set(prepared.map((item) => item.legacyCanonical))];
+    const economicDates = [...new Set(prepared.map((item) => item.row.transactionDate))];
+    const economicAmounts = [...new Set(prepared.map((item) => item.row.amount))];
+    const economicIdentity = (date: string, amount: number, direction: string, description: string) =>
+      [date, Math.round(Math.abs(amount) * 100), direction.toUpperCase(), normalizeDescription(description)].join("|");
     let imported = 0;
     let existing = 0;
     const lastSync = new Date().toISOString();
@@ -617,6 +622,7 @@ async function syncConfig(config: SheetConfig): Promise<{
     ]);
     const existingResult = await client.query<ExistingMutation>(
       `select bm.id, bm.mutation_key, bm.canonical_key, bm.description,
+              bm.transaction_date::text as transaction_date,
               bm.amount, bm.direction, bm.status,
               bm.reconciliation_status, bm.journal_entry_id,
               matched.match_score,
@@ -804,20 +810,50 @@ async function syncConfig(config: SheetConfig): Promise<{
             bm.mutation_key = any($2::text[])
             or bm.canonical_key = any($3::text[])
             or bm.canonical_key = any($4::text[])
-          )`,
+            -- Old imports may have a different canonical hashing algorithm.
+            -- Account + date + amount narrows economic identity candidates;
+            -- full direction and normalized description are verified below.
+            or (bm.transaction_date = any($6::date[])
+                and bm.amount = any($7::numeric[]))
+          )
+        order by
+          case
+            when bm.status = 'posted' or bm.journal_entry_id is not null then 0
+            when bm.status in ('approved', 'approved_pending_posting') then 1
+            else 2
+          end,
+          bm.id`,
       [
         config.company_id,
         mutationKeys,
         canonicalKeys,
         legacyCanonicalKeys,
         config.bank_account_id,
+        economicDates,
+        economicAmounts,
       ],
     );
     const byMutationKey = new Map<string, ExistingMutation>();
     const byCanonicalKey = new Map<string, ExistingMutation>();
+    const byEconomicIdentity = new Map<string, ExistingMutation>();
     for (const mutation of existingResult.rows) {
-      if (mutation.mutation_key) byMutationKey.set(mutation.mutation_key, mutation);
-      if (mutation.canonical_key) byCanonicalKey.set(mutation.canonical_key, mutation);
+      if (mutation.mutation_key && !byMutationKey.has(mutation.mutation_key)) {
+        byMutationKey.set(mutation.mutation_key, mutation);
+      }
+      if (mutation.canonical_key && !byCanonicalKey.has(mutation.canonical_key)) {
+        byCanonicalKey.set(mutation.canonical_key, mutation);
+      }
+      if (mutation.transaction_date && mutation.amount != null && mutation.direction && mutation.description) {
+        const identity = economicIdentity(
+          mutation.transaction_date,
+          Number(mutation.amount),
+          mutation.direction,
+          mutation.description,
+        );
+        // ORDER BY above puts the posted or approved bank row before a
+        // newly imported unmatched duplicate. The real posted row wins.
+        if (!byEconomicIdentity.has(identity)) byEconomicIdentity.set(identity, mutation);
+      }
     }
 
     for (const item of prepared) {
@@ -828,6 +864,12 @@ async function syncConfig(config: SheetConfig): Promise<{
         byCanonicalKey.get(item.canonical)
         ?? byCanonicalKey.get(item.legacyCanonical);
       const foundByMutationKey = byMutationKey.get(item.key);
+      const foundByEconomic = byEconomicIdentity.get(economicIdentity(
+        item.row.transactionDate,
+        item.row.amount,
+        item.row.direction,
+        item.row.description,
+      ));
       // A Sheet mutation_key is a *hint*, never authorization to overwrite
       // or suppress a different posted bank transaction. If the same key
       // points to a finalized record with a different amount AND description,
@@ -850,13 +892,18 @@ async function syncConfig(config: SheetConfig): Promise<{
         && normalizeDescription(foundByMutationKey.description ?? "")
            !== normalizeDescription(item.row.description);
       const resolvedKey = finalizedKeyConflict ? item.canonical : item.key;
-      const found = foundByCanonical ?? (finalizedKeyConflict ? undefined : foundByMutationKey);
+      // Content identity must take precedence when a Sheet was re-imported
+      // with a new hash. Otherwise the old posted row is duplicated, and
+      // an inactive Rule AI looks like a missing approval on the clone.
+      const found = foundByEconomic ?? foundByCanonical
+        ?? (finalizedKeyConflict ? undefined : foundByMutationKey);
       if (found) {
         const mutationStatus = String(found.status ?? "").trim().toLowerCase();
         const reconciliationStatus = String(found.reconciliation_status ?? "").trim().toLowerCase();
         const matchStatus = String(found.match_status ?? "").trim().toLowerCase();
         const canRefreshFromSheet =
           !foundByCanonical
+          && !foundByEconomic
           && foundByMutationKey?.id === found.id
           && found.journal_entry_id == null
           && ["", "new", "unmatched"].includes(mutationStatus)
@@ -979,6 +1026,12 @@ async function syncConfig(config: SheetConfig): Promise<{
         imported += 1;
         byMutationKey.set(resolvedKey, mutation);
         byCanonicalKey.set(item.canonical, mutation);
+        byEconomicIdentity.set(economicIdentity(
+          item.row.transactionDate,
+          item.row.amount,
+          item.row.direction,
+          item.row.description,
+        ), mutation);
         mutationStatuses.set(item.row.rowNumber, toSheetMetadata(mutation, resolvedKey));
       } else {
         existing += 1;
