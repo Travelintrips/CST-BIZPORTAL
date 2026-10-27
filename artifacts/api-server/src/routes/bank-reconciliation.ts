@@ -354,6 +354,8 @@ function hasQrisBankEvidenceForAutoPost(mutation: MatchingMutation): boolean {
 }
 
 async function getApprovalActor(request: Request): Promise<ApprovalActor | null> {
+  const cached = (request as Request & { bankReconActor?: ApprovalActor }).bankReconActor;
+  if (cached) return cached;
   const allowedRoles = new Set(["admin", "owner", "finance", "accounting", "accountant", "super_admin"]);
 
   if (isDevelopmentEnvironment()) {
@@ -368,6 +370,19 @@ async function getApprovalActor(request: Request): Promise<ApprovalActor | null>
   if (!user || !allowedRoles.has(user.role.toLowerCase())) return null;
   return { email: user.email, companyId: user.companyId };
 }
+
+router.use("/bank-reconciliation", async (req, res, next) => {
+  try {
+    const actor = await getApprovalActor(req);
+    if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
+    (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor = actor;
+    res.setHeader("Cache-Control", "private, no-store");
+    next();
+  } catch (error) {
+    req.log?.error({ error }, "Bank reconciliation authentication failed");
+    res.status(503).json({ error: "Authentication temporarily unavailable" });
+  }
+});
 
 function normalizeMatchText(value: unknown): string {
   return String(value ?? "")
@@ -4929,7 +4944,7 @@ const MUTATION_STATUSES = new Set([
   "void",
 ]);
 
-function buildMutationFilters(req: Request): { where: string; values: unknown[]; companyId: number | null } {
+function buildMutationFilters(req: Request, actor?: ApprovalActor): { where: string; values: unknown[]; companyId: number | null } {
   const values: unknown[] = [];
   const filters = ["true"];
   const rawCompanyId = queryString(req.query.company_id)
@@ -4942,8 +4957,12 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
   if (rawCompanyId !== null && rawCompanyId !== "" && rawCompanyId !== "all" && companyId === null) {
     throw new Error("INVALID_COMPANY");
   }
-  if (companyId !== null) {
-    values.push(companyId);
+  if (actor?.companyId != null && companyId != null && actor.companyId !== companyId) {
+    throw new Error("FORBIDDEN_COMPANY");
+  }
+  const effectiveCompanyId = actor?.companyId ?? companyId;
+  if (effectiveCompanyId !== null) {
+    values.push(effectiveCompanyId);
     filters.push(`bm.company_id = $${values.length}`);
   }
 
@@ -5037,7 +5056,7 @@ function buildMutationFilters(req: Request): { where: string; values: unknown[];
     )`);
   }
 
-  return { where: filters.join(" and "), values, companyId };
+  return { where: filters.join(" and "), values, companyId: effectiveCompanyId };
 }
 
 const mutationListColumns = `
@@ -5385,6 +5404,115 @@ const mutationListColumns = `
   null::json as qris_candidate_audit
 `;
 
+const mutationListCompactColumns = `
+  bm.id, bm.company_id, bm.bank_account_id,
+  not exists (
+    select 1
+      from public.company_bank_accounts vendor_policy_account
+      join public.chart_of_accounts vendor_policy_coa
+        on vendor_policy_coa.id = vendor_policy_account.coa_id
+       and vendor_policy_coa.company_id = vendor_policy_account.company_id
+     where vendor_policy_account.company_id = bm.company_id
+       and (
+         vendor_policy_account.id::text = bm.bank_account_id::text
+         or (
+           nullif(regexp_replace(coalesce(vendor_policy_account.account_number, ''), '[^0-9]', '', 'g'), '') is not null
+           and regexp_replace(coalesce(vendor_policy_account.account_number, ''), '[^0-9]', '', 'g') =
+               regexp_replace(coalesce(bm.bank_account_id::text, ''), '[^0-9]', '', 'g')
+         )
+       )
+       and upper(trim(coalesce(vendor_policy_coa.code, ''))) = '1-1010-CST'
+  ) as vendor_invoice_match_allowed,
+  bm.transaction_date, bm.description, bm.credit_amount, bm.debit_amount,
+  bm.amount, upper(bm.direction) as direction, bm.mutation_key,
+  bm.normalized_description, bm.provider_name, bm.provider_order_id,
+  bm.status, bm.matched_payment_id, bm.matched_order_id, bm.uploaded_proof_url,
+  bm.source, bm.import_batch_id, bm.reconciliation_status,
+  bm.linked_transaction_type, bm.linked_transaction_id, bm.journal_entry_id,
+  (select ae.status::text from public.accounting_entries ae
+    where ae.id = bm.journal_entry_id and ae.company_id = bm.company_id
+    limit 1) as journal_status,
+  '[]'::json as posted_coa_accounts,
+  '[]'::json as source_posted_coa_accounts,
+  '[]'::json as source_correction_coa_accounts,
+  (
+    select coalesce(json_agg(json_build_object(
+      'id', match.id,
+      'mutation_id', match.mutation_id,
+      'candidate_type', match.candidate_type,
+      'candidate_id', match.candidate_id,
+      'candidate_source', match.candidate_source,
+      'match_score', match.match_score,
+      'match_reason', match.match_reason,
+      'amount_match', match.amount_match,
+      'date_match', match.date_match,
+      'name_match', match.name_match,
+      'order_id_match', match.order_id_match,
+      'proof_match', match.proof_match,
+      'status', match.status,
+      'customer_name', match.customer_name,
+       'order_ref', match.order_ref,
+       'details', null
+    ) order by match.match_score desc nulls last, match.id), '[]'::json)
+    from public.bank_reconciliation_matches match
+    where match.mutation_id = bm.id
+      and match.candidate_source is not null
+      and (
+        (match.candidate_type = 'sport_payment' and match.candidate_source = 'sport_center.sport_payments')
+        or (match.candidate_type = 'sport_group_payment' and match.candidate_source = 'sport_center.booking_groups')
+        or (match.candidate_type = 'sport_company_invoice' and match.candidate_source = 'sport_center.company_invoices')
+        or (match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments')
+        or (match.candidate_type = 'vendor_invoice' and match.candidate_source = 'public.vendor_invoices')
+        or (match.candidate_type = 'payroll_item' and match.candidate_source = 'public.payroll_items')
+        or (match.candidate_type = 'cash_advance' and match.candidate_source = 'public.cash_advances')
+        or (match.candidate_type = 'qris_settlement' and match.candidate_source = 'sport_center.payment_settlement_batches')
+        or (match.candidate_type = 'recon_rule' and match.candidate_source = 'public.recon_rules')
+      )
+  ) as candidates,
+  exists (
+    select 1
+    from public.bank_reconciliation_matches approved_match
+    where approved_match.mutation_id = bm.id
+      and approved_match.status = 'approved'
+  ) as has_approved_match,
+  (
+    bm.status = 'matched'
+    and not exists (
+      select 1
+        from public.bank_reconciliation_matches approved_match
+       where approved_match.mutation_id = bm.id
+         and approved_match.status in ('approved','posted')
+    )
+    and exists (
+      select 1
+        from public.bank_reconciliation_matches rule_match
+        join public.recon_rules rule
+          on rule_match.candidate_type = 'recon_rule'
+         and rule_match.candidate_source = 'public.recon_rules'
+         and rule_match.candidate_id = rule.id
+         and rule.company_id = bm.company_id
+         and rule.is_active = true
+         and rule.candidate_requirement = 'not_required'
+         and rule.target_coa_code is not null
+       where rule_match.mutation_id = bm.id
+         and rule_match.status = 'candidate'
+         and exists (
+           select 1
+             from public.chart_of_accounts target_coa
+            where target_coa.code = rule.target_coa_code
+              and (target_coa.company_id = bm.company_id or target_coa.company_id is null)
+              and coalesce(target_coa.is_active, true) = true
+              and coalesce(target_coa.is_header, false) = false
+              and coalesce(target_coa.is_postable, true) = true
+         )
+    )
+  ) as approval_ready,
+  '[]'::json as qris_candidate_audits,
+  null::json as qris_candidate_audit
+`;
+
+// Compact card projection retains status and match flags. Full journal and
+// candidate source evidence remain available on /mutations/:mutationId.
 type MutationCandidateRow = {
   candidates?: Array<Record<string, unknown>> | null;
   [key: string]: unknown;
@@ -7736,12 +7864,19 @@ router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<voi
       return;
     }
 
+    const actor = (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor!;
+    if (actor.companyId != null && companyId != null && actor.companyId !== companyId) {
+      res.status(403).json({ error: "Company context tidak sesuai" });
+      return;
+    }
+    const scopedCompanyId = actor.companyId ?? companyId;
+    const includeDiagnostics = queryString(req.query.includeDiagnostics) !== "false";
     const requestedLimit = Number(queryString(req.query.limit) ?? 100);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 100;
     const includeCompleted = String(queryString(req.query.includeCompleted) ?? "").toLowerCase() === "true";
     const [canonicalSettlements, reviewDiagnostics] = await Promise.all([
-      listQrisCanonicalSettlements(companyId, bankAccountId, includeCompleted, limit),
-      listQrisReviewDiagnostics({ companyId, bankAccountId, limit }),
+      listQrisCanonicalSettlements(scopedCompanyId, bankAccountId, includeCompleted, limit),
+      includeDiagnostics ? listQrisReviewDiagnostics({ companyId: scopedCompanyId, bankAccountId, limit }) : Promise.resolve([]),
     ]);
     res.json({
       mode: "canonical_qris_settlement",
@@ -7776,6 +7911,29 @@ router.post("/bank-reconciliation/qris-candidates/:candidateId/approve", async (
     error: "Approval kandidat QRIS lama sudah dihapus. Approve candidate qris_settlement dengan candidate_source canonical.",
     code: "LEGACY_QRIS_APPROVAL_REMOVED",
   });
+});
+
+// Read-only lightweight snapshot. No 1000-row full hydration on every page load.
+router.get("/bank-reconciliation/ready-approval-mutations", async (req, res): Promise<void> => {
+  try {
+    const { where, values } = buildMutationFilters(
+      req, (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor,
+    );
+    const result = await pool.query(
+      `select ${mutationListCompactColumns}
+         from public.bank_mutations bm
+        where ${where} and bm.status = 'matched'
+        order by bm.transaction_date desc nulls last, bm.id desc`,
+      values,
+    );
+    res.json({ mutations: result.rows });
+  } catch (error) {
+    if (error instanceof Error && error.message === "FORBIDDEN_COMPANY") {
+      res.status(403).json({ error: "Company context tidak sesuai" }); return;
+    }
+    req.log.error({ error }, "Failed to load bank reconciliation readiness");
+    res.status(503).json({ error: "Kesiapan persetujuan tidak dapat dimuat" });
+  }
 });
 
 router.get("/bank-reconciliation/mutations/:mutationId", async (req, res): Promise<void> => {
@@ -7825,9 +7983,10 @@ router.get("/bank-reconciliation/mutations/:mutationId", async (req, res): Promi
 });
 router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => {
   try {
-    const { where, values } = buildMutationFilters(req);
+    const { where, values } = buildMutationFilters(req, (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor);
     const requestedLimit = parsePositiveInt(queryString(req.query.limit));
     const requestedOffset = Number(queryString(req.query.offset) ?? 0);
+    const compact = queryString(req.query.compact) === "1";
     const limit = Math.min(requestedLimit ?? 20, 1_000);
     const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
 
@@ -7839,7 +7998,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
     );
     const listValues = [...values, limit, offset];
     const result = await pool.query(
-      `select ${mutationListColumns}
+      `select ${compact ? mutationListCompactColumns : mutationListColumns}
          from public.bank_mutations bm
         where ${where}
         order by bm.transaction_date desc nulls last, bm.id desc
@@ -7847,8 +8006,10 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
        offset $${listValues.length}`,
       listValues,
     );
-    await hydrateMutationCandidateDetails(result.rows as MutationCandidateRow[]);
-    await hydrateQrisReviewDiagnostics(result.rows as MutationCandidateRow[]);
+    if (!compact) {
+      await hydrateMutationCandidateDetails(result.rows as MutationCandidateRow[]);
+      await hydrateQrisReviewDiagnostics(result.rows as MutationCandidateRow[]);
+    }
 
     res.json({
       mutations: result.rows,
@@ -7856,6 +8017,10 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    if (message === "FORBIDDEN_COMPANY") {
+      res.status(403).json({ error: "Company context tidak sesuai" });
+      return;
+    }
     if (message === "INVALID_COMPANY") {
       res.status(400).json({ error: "company_id tidak valid" });
       return;
@@ -7874,7 +8039,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
 
 router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
   try {
-    const { where, values } = buildMutationFilters(req);
+    const { where, values } = buildMutationFilters(req, (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor);
     const result = await pool.query(
       `select bm.status, count(*)::text as count, coalesce(sum(bm.amount), 0)::text as total_amount
          from public.bank_mutations bm
@@ -7886,6 +8051,10 @@ router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
     res.json({ summary: result.rows });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    if (message === "FORBIDDEN_COMPANY") {
+      res.status(403).json({ error: "Company context tidak sesuai" });
+      return;
+    }
     if (message === "INVALID_COMPANY") {
       res.status(400).json({ error: "company_id tidak valid" });
       return;
@@ -7969,12 +8138,18 @@ router.get("/bank-reconciliation/sheet-configs", async (req, res): Promise<void>
     return;
   }
 
+  const actor = (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor!;
+  if (actor.companyId != null && companyId != null && actor.companyId !== companyId) {
+    res.status(403).json({ error: "Company context tidak sesuai" });
+    return;
+  }
+  const scopedCompanyId = actor.companyId ?? companyId;
   try {
     const result = await pool.query<SheetConfigRow>(
       `${selectSheetConfigs}
-       ${companyId === null ? "" : "where config.company_id = $1"}
+       ${scopedCompanyId === null ? "" : "where config.company_id = $1"}
        order by config.is_active desc, config.label, config.id`,
-      companyId === null ? [] : [companyId],
+      scopedCompanyId === null ? [] : [scopedCompanyId],
     );
     res.json({ configs: result.rows });
   } catch (error) {

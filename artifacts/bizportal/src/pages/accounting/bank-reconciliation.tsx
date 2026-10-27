@@ -8517,10 +8517,10 @@ export default function BankReconciliationPage() {
   const [page,           setPage]           = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showQrisAuditList, setShowQrisAuditList] = useState(false);
-  const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(true);
+  const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(false);
+  const [showQrisResetHistory, setShowQrisResetHistory] = useState(false);
   const [expandedCanonicalSettlementIds, setExpandedCanonicalSettlementIds] = useState<number[]>([]);
   const PAGE_SIZE = 20;
-  const STATUS_FILTER_SCAN_LIMIT = 1_000;
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
@@ -8611,17 +8611,17 @@ export default function BankReconciliationPage() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
-      const hasStatusFilter = filterStatus !== "all";
+      const clientFiltered = filterStatus === "ready_approval";
       const params = new URLSearchParams({
-        limit: String(hasStatusFilter ? STATUS_FILTER_SCAN_LIMIT : PAGE_SIZE),
-        offset: String(hasStatusFilter ? 0 : page * PAGE_SIZE),
+        limit: String(PAGE_SIZE),
+        offset: String(clientFiltered ? 0 : page * PAGE_SIZE),
+        compact: "1",
       });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      // "completed" is a UI aggregate (approved + posted), not a DB status.
-      // Fetch the canonical list without a synthetic status and filter it client-side.
-      // Sending status=completed used to make PROD depend on special backend handling.
-      if (filterStatus !== "all" && filterStatus !== "completed") {
-        params.set("status", filterStatus === "ready_approval" ? "matched" : filterStatus);
+      // The backend handles completed as the posted + approved union.
+      // Readiness is the only client-filtered status, using a compact matched snapshot.
+      if (filterStatus !== "all" && !clientFiltered) {
+        params.set("status", filterStatus);
       }
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
@@ -8630,15 +8630,17 @@ export default function BankReconciliationPage() {
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
       if (filterSearch) params.set("search", filterSearch);
-      const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
+      const endpoint = clientFiltered
+        ? "/api/bank-reconciliation/ready-approval-mutations"
+        : "/api/bank-reconciliation/mutations";
+      const r = await fetch(`${endpoint}?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
+      return r.json() as Promise<{ mutations: BankMutation[]; total?: number }>;
     },
     enabled: companyScopeReady,
-    // Keep the primary mutation list in sync with approvals performed by
-    // another tab/admin. The QRIS audit query polls separately, but this list
-    // used to stay stale until a hard reload.
-    refetchInterval: 30_000,
+    // Explicit post-action invalidation remains immediate; background refresh is lighter.
+    staleTime: 30_000,
+    refetchInterval: 120_000,
     refetchOnWindowFocus: true,
   });
 
@@ -8671,21 +8673,23 @@ export default function BankReconciliationPage() {
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
     },
     enabled: companyScopeReady,
-    refetchInterval: 30_000,
+    staleTime: 30_000,
+    refetchInterval: 120_000,
   });
 
   const { data: matchedReadinessData } = useQuery({
     queryKey: ["bank-reconciliation-ready-approval", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
-      const params = new URLSearchParams({ status: "matched", limit: "1000", offset: "0" });
+      const params = new URLSearchParams();
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
-      const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
+      const r = await fetch(`/api/bank-reconciliation/ready-approval-mutations?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
     enabled: companyScopeReady,
-    refetchInterval: 30_000,
+    staleTime: 30_000,
+    refetchInterval: 120_000,
   });
 
   const {
@@ -8716,8 +8720,9 @@ export default function BankReconciliationPage() {
         candidates: QrisCandidateAudit[];
       }>;
     },
-    enabled: qrisCompanyId != null,
-    refetchInterval: 30_000,
+    enabled: qrisCompanyId != null && (showQrisAuditList || showCanonicalSettlementQueue),
+    staleTime: 30_000,
+    refetchInterval: 120_000,
   });
 
   const {
@@ -8742,8 +8747,9 @@ export default function BankReconciliationPage() {
         parseQrisResetHistory((body.rows ?? []) as Parameters<typeof parseQrisResetHistory>[0]),
       );
     },
-    enabled: qrisCompanyId != null,
-    refetchInterval: 30_000,
+    enabled: qrisCompanyId != null && showQrisResetHistory,
+    staleTime: 60_000,
+    refetchInterval: false,
   });
 
   // Legacy QRIS candidate generation was removed. Canonical settlements are
@@ -10375,12 +10381,12 @@ export default function BankReconciliationPage() {
             ? isUiApprovalEligible(mutation)
             : mutation.status === filterStatus
       );
-  const mutations = filterStatus === "all"
-    ? statusFilteredMutations
-    : statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  const total = filterStatus === "all"
-    ? (data?.total ?? 0)
-    : statusFilteredMutations.length;
+  const mutations = filterStatus === "ready_approval"
+    ? statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    : statusFilteredMutations;
+  const total = filterStatus === "ready_approval"
+    ? statusFilteredMutations.length
+    : (data?.total ?? 0);
   const totalPages  = Math.ceil(total / PAGE_SIZE);
 
   const openMutationDetail = async (mutation: BankMutation) => {
@@ -11373,7 +11379,7 @@ export default function BankReconciliationPage() {
                   size="sm"
                   variant="outline"
                   className="h-7 gap-1 text-[11px]"
-                  onClick={() => void refetchQrisResetHistory()}
+                  onClick={() => { setShowQrisResetHistory(true); void refetchQrisResetHistory(); }}
                   disabled={qrisResetHistoryLoading}
                 >
                   <RefreshCw className={`h-3 w-3 ${qrisResetHistoryLoading ? "animate-spin" : ""}`} />
@@ -11382,7 +11388,11 @@ export default function BankReconciliationPage() {
               </div>
             </CardHeader>
             <CardContent className="px-3 pb-3 pt-0">
-              {qrisResetHistoryLoading ? (
+              {!showQrisResetHistory ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => setShowQrisResetHistory(true)}>
+                  Tampilkan riwayat reset QRIS
+                </Button>
+              ) : qrisResetHistoryLoading ? (
                 <p className="py-3 text-center text-xs text-muted-foreground">Memuat riwayat...</p>
               ) : qrisResetHistoryError ? (
                 <div className="flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
