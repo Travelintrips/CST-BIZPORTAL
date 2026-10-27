@@ -8521,7 +8521,6 @@ export default function BankReconciliationPage() {
   const [showQrisResetHistory, setShowQrisResetHistory] = useState(false);
   const [expandedCanonicalSettlementIds, setExpandedCanonicalSettlementIds] = useState<number[]>([]);
   const PAGE_SIZE = 20;
-  const STATUS_FILTER_SCAN_LIMIT = 1_000;
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
@@ -8612,18 +8611,17 @@ export default function BankReconciliationPage() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
-      const hasStatusFilter = filterStatus !== "all";
+      const clientFiltered = filterStatus === "ready_approval";
       const params = new URLSearchParams({
-        limit: String(hasStatusFilter ? STATUS_FILTER_SCAN_LIMIT : PAGE_SIZE),
-        offset: String(hasStatusFilter ? 0 : page * PAGE_SIZE),
+        limit: String(PAGE_SIZE),
+        offset: String(clientFiltered ? 0 : page * PAGE_SIZE),
         compact: "1",
       });
       if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
-      // "completed" is a UI aggregate (approved + posted), not a DB status.
-      // Fetch the canonical list without a synthetic status and filter it client-side.
-      // Sending status=completed used to make PROD depend on special backend handling.
-      if (filterStatus !== "all" && filterStatus !== "completed") {
-        params.set("status", filterStatus === "ready_approval" ? "matched" : filterStatus);
+      // The backend handles completed as the posted + approved union.
+      // Readiness is the only client-filtered status, using a compact matched snapshot.
+      if (filterStatus !== "all" && !clientFiltered) {
+        params.set("status", filterStatus);
       }
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
@@ -8632,9 +8630,12 @@ export default function BankReconciliationPage() {
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
       if (filterSearch) params.set("search", filterSearch);
-      const r = await fetch(`/api/bank-reconciliation/mutations?${params}`, { credentials: "include" });
+      const endpoint = clientFiltered
+        ? "/api/bank-reconciliation/ready-approval-mutations"
+        : "/api/bank-reconciliation/mutations";
+      const r = await fetch(`${endpoint}?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
+      return r.json() as Promise<{ mutations: BankMutation[]; total?: number }>;
     },
     enabled: companyScopeReady,
     // Explicit post-action invalidation remains immediate; background refresh is lighter.
@@ -10380,12 +10381,12 @@ export default function BankReconciliationPage() {
             ? isUiApprovalEligible(mutation)
             : mutation.status === filterStatus
       );
-  const mutations = filterStatus === "all"
-    ? statusFilteredMutations
-    : statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  const total = filterStatus === "all"
-    ? (data?.total ?? 0)
-    : statusFilteredMutations.length;
+  const mutations = filterStatus === "ready_approval"
+    ? statusFilteredMutations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+    : statusFilteredMutations;
+  const total = filterStatus === "ready_approval"
+    ? statusFilteredMutations.length
+    : (data?.total ?? 0);
   const totalPages  = Math.ceil(total / PAGE_SIZE);
 
   const openMutationDetail = async (mutation: BankMutation) => {
