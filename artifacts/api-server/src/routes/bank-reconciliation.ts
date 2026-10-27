@@ -371,6 +371,35 @@ async function getApprovalActor(request: Request): Promise<ApprovalActor | null>
   return { email: user.email, companyId: user.companyId };
 }
 
+// Hostinger's runtime log viewer retains the log message but strips Pino
+// metadata. Emit a coarse endpoint, HTTP status, and duration in the message
+// itself, without credentials, query strings, mutation IDs, or financial data.
+// This makes authenticated UI failures diagnosable without weakening access.
+router.use("/bank-reconciliation", (req, res, next) => {
+  const startedAt = Date.now();
+  res.once("finish", () => {
+    const elapsedMs = Date.now() - startedAt;
+    if (res.statusCode < 400 && elapsedMs < 2_500) return;
+    const routeLabel = req.path.startsWith("/bank-reconciliation/mutations/")
+      ? "mutation-detail"
+      : req.path.startsWith("/bank-reconciliation/mutations")
+        ? "mutations"
+        : req.path.startsWith("/bank-reconciliation/summary")
+          ? "summary"
+          : req.path.startsWith("/bank-reconciliation/ready-approval-mutations")
+            ? "readiness"
+            : req.path.startsWith("/bank-reconciliation/run-matching/status")
+              ? "matching-status"
+              : "other";
+    // 401/403 are authorization decisions, not server failures. Never log a
+    // user's email, bank account, cookie, or request parameters.
+    req.log.info(
+      `BankRecon read status=${res.statusCode} route=${routeLabel} duration_ms=${elapsedMs}`,
+    );
+  });
+  next();
+});
+
 router.use("/bank-reconciliation", async (req, res, next) => {
   try {
     const actor = await getApprovalActor(req);
