@@ -8497,7 +8497,7 @@ function describeBankReconReadError(error: unknown): string {
   }
   const typed = error as BankReconReadError | null;
   if (typed?.httpStatus === 401) {
-    return "Sesi login rekonsiliasi tidak tersedia atau kedaluwarsa (HTTP 401). Silakan login ulang ke BizPortal.";
+    return "Akses rekonsiliasi ditolak (HTTP 401). Masuk ulang ke BizPortal; jika berulang, periksa izin peran pengguna.";
   }
   if (typed?.httpStatus === 403) {
     return "Akses rekening atau peran pengguna tidak diizinkan (HTTP 403). Periksa perusahaan dan hak akses akun.";
