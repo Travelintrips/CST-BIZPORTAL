@@ -34,7 +34,7 @@ import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Mail, Shield, ArrowLeft,
   BarChart2, TrendingUp, TrendingDown, Clock, AlertCircle, CheckCircle2,
-  Search, Loader2, ChevronLeft, ChevronRight,
+  Search, Loader2,
 } from "lucide-react";
 
 const API = "/api";
@@ -813,8 +813,14 @@ function AiRulesTab() {
   const [loadingReconAccounts, setLoadingReconAccounts] = useState(false);
   const [showInactiveRules, setShowInactiveRules] = useState(false);
   const ruleTableScrollRef = useRef<HTMLDivElement>(null);
-  const scrollRuleTable = (direction: -1 | 1) => {
-    ruleTableScrollRef.current?.scrollBy({ left: direction * 480, behavior: "smooth" });
+  const handleRuleTableKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const target = event.target as HTMLElement;
+    if (target.closest("input, textarea, select, [contenteditable=true], button, [role=combobox]")) return;
+    const table = ruleTableScrollRef.current;
+    if (!table || table.scrollWidth <= table.clientWidth) return;
+    event.preventDefault();
+    table.scrollBy({ left: event.key === "ArrowRight" ? 240 : -240, behavior: "smooth" });
   };
 
   const loadCoaOptions = useCallback(async () => {
@@ -1409,12 +1415,8 @@ function AiRulesTab() {
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
       ) : (
         <>
-        <div className="flex items-center justify-end gap-2 pb-2">
-          <span className="text-xs text-slate-400">Geser tabel untuk melihat kolom lainnya</span>
-          <Button type="button" size="sm" variant="outline" aria-label="Geser tabel ke kiri" onClick={() => scrollRuleTable(-1)} className="border-slate-600 text-slate-200"><ChevronLeft size={16} /></Button>
-          <Button type="button" size="sm" variant="outline" aria-label="Geser tabel ke kanan" onClick={() => scrollRuleTable(1)} className="border-slate-600 text-slate-200"><ChevronRight size={16} /></Button>
-        </div>
-        <div ref={ruleTableScrollRef} className="overflow-x-auto">
+        <div className="pb-2 text-xs text-slate-400">Klik area tabel, lalu gunakan tombol ← → pada keyboard, trackpad, atau Shift + roda mouse untuk menggeser.</div>
+        <div ref={ruleTableScrollRef} tabIndex={0} role="region" aria-label="Tabel Rule AI, gunakan panah kiri dan kanan untuk menggulir horizontal" onKeyDown={handleRuleTableKeyDown} className="overflow-x-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-orange-400">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-700 text-slate-400 text-left">
