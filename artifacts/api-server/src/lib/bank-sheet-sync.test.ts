@@ -67,6 +67,9 @@ type StoredMutation = {
   mutation_key: string | null;
   canonical_key: string | null;
   description?: string | null;
+  transaction_date?: string | null;
+  amount?: number;
+  direction?: string;
   status: string | null;
   reconciliation_status: string | null;
   journal_entry_id: number | null;
@@ -118,11 +121,20 @@ beforeEach(() => {
       const mutationKeys = (params?.[1] as string[]) ?? [];
       const canonicalKeys = (params?.[2] as string[]) ?? [];
       const legacyCanonicalKeys = (params?.[3] as string[]) ?? [];
-      return {
-        rows: storedMutations.filter((mutation) =>
+      const economicDates = (params?.[5] as string[]) ?? [];
+      const economicAmounts = (params?.[6] as number[]) ?? [];
+      const matching = storedMutations.filter((mutation) =>
           (mutation.mutation_key != null && mutationKeys.includes(mutation.mutation_key)) ||
           (mutation.canonical_key != null && canonicalKeys.includes(mutation.canonical_key)) ||
-          (mutation.canonical_key != null && legacyCanonicalKeys.includes(mutation.canonical_key)),
+          (mutation.canonical_key != null && legacyCanonicalKeys.includes(mutation.canonical_key)) ||
+          (mutation.transaction_date != null && economicDates.includes(mutation.transaction_date)
+            && mutation.amount != null && economicAmounts.includes(mutation.amount)),
+        );
+      return {
+        rows: matching.sort((a, b) =>
+          (a.status === "posted" ? 0 : a.status === "approved" ? 1 : 2)
+          - (b.status === "posted" ? 0 : b.status === "approved" ? 1 : 2)
+          || a.id - b.id,
         ),
       };
     }
@@ -170,6 +182,9 @@ beforeEach(() => {
         mutation_key: String(mutationKey),
         canonical_key: String(canonicalKey),
         description: String(description),
+        transaction_date: String(transactionDate),
+        amount: Number(amount),
+        direction: String(direction),
         status: "unmatched",
         reconciliation_status: null,
         journal_entry_id: null,
@@ -190,6 +205,70 @@ beforeEach(() => {
 });
 
 describe("Google Sheet bank mutation sync", () => {
+  it("reuses already-posted Rp2.500 even when Sheet key and historic canonical hash differ", async () => {
+    storedMutations.push({
+      id: 666,
+      mutation_key: "historical-posted-key",
+      canonical_key: "old-hashing-algorithm",
+      transaction_date: "2026-09-14",
+      description: "20260914BMRIIDJA010O9934878759 99102",
+      amount: 2500,
+      direction: "OUT",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: 34086,
+      company_id: config.company_id,
+    }, {
+      id: 434361,
+      mutation_key: "new-sheet-stale-key",
+      canonical_key: "new-canonical-generated",
+      transaction_date: "2026-09-14",
+      description: "20260914BMRIIDJA010O9934878759 99102",
+      amount: 2500,
+      direction: "OUT",
+      status: "unmatched",
+      reconciliation_status: null,
+      journal_entry_id: null,
+      company_id: config.company_id,
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal","Keterangan","Debit","Kredit","mutation_key","status_recon"],
+      ["9/14/2026","20260914BMRIIDJA010O9934878759 99102","2.500","0",
+        "new-sheet-stale-key","UNMATCHED"],
+    ]);
+    const result = await syncOneBankSheetConfig(config.id);
+    expect(result).toMatchObject({ imported: 0, existing: 1, total: 1 });
+    expect(storedMutations).toHaveLength(2);
+    expect(storedMutations[0]).toMatchObject({ id: 666, status: "posted", journal_entry_id: 34086 });
+    const writes = JSON.stringify(mocks.writeSpreadsheetValues.mock.calls);
+    expect(writes).toContain("historical-posted-key");
+    expect(writes).toContain("RECONCILED");
+  });
+
+  it("does not conflate other same-day transfers with the posted fee just because amounts coincide", async () => {
+    storedMutations.push({
+      id: 666,
+      mutation_key: "post-old",
+      canonical_key: "other-old-hash",
+      transaction_date: "2026-09-14",
+      description: "20260914BMRIIDJA010O9934878759 99102",
+      amount: 2500,
+      direction: "OUT",
+      status: "posted",
+      reconciliation_status: "reconciled",
+      journal_entry_id: 34086,
+      company_id: config.company_id,
+    });
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal","Keterangan","Debit","Kredit","mutation_key","status_recon"],
+      ["9/14/2026","20260914BMRIIDJA010O9934878759 ANOTHER FEE","2.500","0", "", ""],
+    ]);
+    const result = await syncOneBankSheetConfig(config.id);
+    expect(result).toMatchObject({ imported: 1, existing: 0 });
+    expect(storedMutations).toHaveLength(2);
+    expect(storedMutations[1]?.status).toBe("unmatched");
+  });
+
   it("keeps bank-statement Debit/Kredit semantics for bank accounts", async () => {
     mocks.readSpreadsheetValues.mockResolvedValue([
       ["Tanggal", "Keterangan", "Debit", "Kredit"],

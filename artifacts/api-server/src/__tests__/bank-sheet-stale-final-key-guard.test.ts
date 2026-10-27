@@ -10,7 +10,8 @@ describe("finalized bank statement key collisions", () => {
     expect(source).toContain("foundByMutationKey.amount != null");
     expect(source).toContain("normalizeDescription(foundByMutationKey.description ??");
     expect(source).toContain("const resolvedKey = finalizedKeyConflict ? item.canonical : item.key");
-    expect(source).toContain("const found = foundByCanonical ?? (finalizedKeyConflict ? undefined : foundByMutationKey)");
+    expect(source).toContain("const found = foundByEconomic ?? foundByCanonical");
+    expect(source).toContain("?? (finalizedKeyConflict ? undefined : foundByMutationKey)");
     expect(source).toContain("mutationStatuses.set(item.row.rowNumber, toSheetMetadata(mutation, resolvedKey))");
   });
 
