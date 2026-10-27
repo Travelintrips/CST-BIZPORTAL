@@ -284,7 +284,9 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain('summaryMap.ready_approval');
     expect(componentSource).toContain('filterStatus === "ready_approval"');
     expect(componentSource).toContain('? isUiApprovalEligible(mutation)');
-    expect(componentSource).toContain('filterStatus === "ready_approval" ? "matched" : filterStatus');
+    expect(componentSource).toContain('const clientFiltered = filterStatus === "ready_approval"');
+    expect(componentSource).toContain('"/api/bank-reconciliation/ready-approval-mutations"');
+    expect(componentSource).not.toContain('filterStatus === "ready_approval" ? "matched" : filterStatus');
   });
 
   it("keeps duplicate review actionable through explicit candidate or manual COA paths", () => {
