@@ -8524,7 +8524,8 @@ export default function BankReconciliationPage() {
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
-  const [matchingBackgroundPending, setMatchingBackgroundPending] = useState(false);
+  const [matchingAwaitingStart, setMatchingAwaitingStart] = useState(false);
+  const matchingWasRunningRef = useRef(false);
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [coaReferenceTarget,  setCoaReferenceTarget]  = useState<BankMutation | null>(null);
   const [vendorPaymentTarget, setVendorPaymentTarget] = useState<BankMutation | null>(null);
@@ -8607,6 +8608,66 @@ export default function BankReconciliationPage() {
     filterSearch,
     page,
   ];
+
+  // Query the job state on entry, but poll at 5 seconds only while the worker
+  // is running (or the just-submitted job has not reported its first state).
+  const matchingJobStatusKey = ["bank-reconciliation-matching-status", activeCompanyId] as const;
+  const matchingJobStatus = useQuery<{
+    running?: boolean;
+    status?: "idle" | "running" | "completed" | "failed";
+    error?: string | null;
+  }>({
+    queryKey: matchingJobStatusKey,
+    queryFn: async () => {
+      const response = await fetch("/api/bank-reconciliation/run-matching/status", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Status AI Matching tidak dapat dibaca.");
+      return response.json();
+    },
+    enabled: companyScopeReady,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+    refetchInterval: query =>
+      matchingAwaitingStart || query.state.data?.running === true
+        ? 5_000
+        : false,
+  });
+  const matchingBackgroundPending =
+    matchingAwaitingStart || matchingJobStatus.data?.running === true;
+
+  // A terminal job status is an event. Refresh accounting reads once, and
+  // let React Query stop polling immediately after running becomes false.
+  useEffect(() => {
+    const status = matchingJobStatus.data;
+    if (status?.running === true) {
+      matchingWasRunningRef.current = true;
+      if (matchingAwaitingStart) setMatchingAwaitingStart(false);
+      return;
+    }
+    if (!matchingWasRunningRef.current && !matchingAwaitingStart) return;
+    if (status?.status !== "completed" && status?.status !== "failed") return;
+    matchingWasRunningRef.current = false;
+    setMatchingAwaitingStart(false);
+    if (status.status === "completed") {
+      setWorkflowStage("candidates");
+      toast({ title: "AI Matching selesai", description: "Hasil matching, status, dan jurnal diperbarui." });
+    } else {
+      toast({
+        title: "AI Matching gagal",
+        description: status.error || "Periksa status job sebelum menjalankan ulang.",
+        variant: "destructive",
+      });
+    }
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] }),
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-ready-approval"] }),
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
+    ]);
+  }, [matchingJobStatus.data?.running, matchingJobStatus.data?.status, matchingAwaitingStart, activeCompanyId, qc, toast]);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
@@ -9032,51 +9093,6 @@ export default function BankReconciliationPage() {
     manualOverride?: boolean;
     overrideReason?: string;
   } | null>(null);
-
-  const waitForMatchingCompletion = async () => {
-    const deadline = Date.now() + 15 * 60 * 1000;
-    let consecutiveReadFailures = 0;
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(
-          `/api/bank-reconciliation/run-matching/status?t=${Date.now()}`,
-          {
-            credentials: "include",
-            cache: "no-store",
-            headers: { "Cache-Control": "no-cache" },
-          },
-        );
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({})) as { error?: string };
-          const retryable = [401, 408, 429, 500, 502, 503, 504].includes(response.status);
-          consecutiveReadFailures += 1;
-          if (retryable && consecutiveReadFailures < 8) {
-            await new Promise(resolve => window.setTimeout(resolve, 1500));
-            continue;
-          }
-          throw new Error(body.error || `Status matching tidak dapat dibaca (HTTP ${response.status})`);
-        }
-
-        consecutiveReadFailures = 0;
-        const status = await response.json() as {
-          running?: boolean;
-          status?: "idle" | "running" | "completed" | "failed";
-          error?: string | null;
-        };
-        if (!status.running) {
-          if (status.status === "failed") {
-            throw new Error(status.error || "AI Matching background gagal dijalankan.");
-          }
-          return;
-        }
-      } catch (error) {
-        consecutiveReadFailures += 1;
-        if (consecutiveReadFailures >= 8) throw error;
-      }
-      await new Promise(resolve => window.setTimeout(resolve, 1000));
-    }
-    throw new Error("Matching belum selesai setelah 15 menit. Proses tetap berjalan di server; muat ulang halaman untuk melihat hasil terbaru.");
-  };
 
   const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
     ["candidate_auto_matched", "candidate_review"].includes(
@@ -9517,33 +9533,26 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
-    onSuccess: async (d) => {
+    onSuccess: (result) => {
       setWorkflowStage("matching");
-      setMatchingBackgroundPending(Boolean(d.queued));
-      toast({
-        title: d.queued
-          ? "AI Matching sedang berjalan di background"
-          : `AI Matching selesai: ${d.processed} mutasi diproses`,
-        description: d.queued
-          ? "Tunggu sampai proses selesai, lalu buat kandidat QRIS secara terpisah."
-          : Number(d.auto_posted ?? 0) > 0
-            ? `${d.auto_posted} mutasi auto-approve dan auto-post oleh Rule AI.`
-            : "Tidak ada mutasi yang memenuhi seluruh syarat auto-approve dan auto-post Rule AI.",
-      });
-      invalidate();
-      try {
-        if (d.queued) await waitForMatchingCompletion();
-        setWorkflowStage("candidates");
-        toast({ title: "AI Matching selesai", description: "Sekarang Anda dapat membuat kandidat QRIS." });
-        invalidate();
-      } catch (e) {
+      if (result.queued) {
+        // The previous job may still be cached as completed. Reset the
+        // observation before watching this newly queued job.
+        matchingWasRunningRef.current = false;
+        qc.setQueryData(matchingJobStatusKey, { running: false, status: "idle" });
+        setMatchingAwaitingStart(true);
+        void qc.invalidateQueries({ queryKey: matchingJobStatusKey });
         toast({
-          title: "Gagal memantau matching",
-          description: e instanceof Error ? e.message : String(e),
-          variant: "destructive",
+          title: "AI Matching sedang berjalan",
+          description: "Status pekerjaan diperiksa setiap 5 detik sampai selesai atau gagal.",
         });
-      } finally {
-        setMatchingBackgroundPending(false);
+      } else {
+        setWorkflowStage("candidates");
+        toast({
+          title: "AI Matching selesai",
+          description: "Mutasi, jurnal, dan status persetujuan diperbarui.",
+        });
+        void invalidate();
       }
     },
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
