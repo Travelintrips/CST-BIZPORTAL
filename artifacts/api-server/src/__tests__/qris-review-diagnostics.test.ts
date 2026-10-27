@@ -39,17 +39,19 @@ describe("QRIS historical review diagnostics", () => {
     expect(diagnosticSource).toContain('const HISTORICAL_SOURCE = "historical_qris_review_snapshot"');
     expect(diagnosticSource).toContain('const LIVE_SOURCE = "live_qris_review_snapshot"');
     expect(diagnosticSource).toContain("diagnostic_amount_difference");
-    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId, bankAccountId, limit })");
+    expect(routeSource).toContain("listQrisReviewDiagnostics({ companyId: scopedCompanyId, bankAccountId, limit })");
     expect(routeSource).toContain("candidates: reviewDiagnostics");
+    expect(routeSource).toContain('includeDiagnostics ? listQrisReviewDiagnostics(');
+    expect(routeSource).toContain("actor.companyId ?? companyId");
   });
 
   it("scopes canonical and diagnostic QRIS reads to the selected reconciliation account", () => {
     expect(routeSource).toContain("bank_account_id tidak valid");
     expect(routeSource).toContain(
-      "listQrisCanonicalSettlements(companyId, bankAccountId, includeCompleted, limit)",
+      "listQrisCanonicalSettlements(scopedCompanyId, bankAccountId, includeCompleted, limit)",
     );
     expect(routeSource).toContain(
-      "listQrisReviewDiagnostics({ companyId, bankAccountId, limit })",
+      "listQrisReviewDiagnostics({ companyId: scopedCompanyId, bankAccountId, limit })",
     );
     expect(diagnosticSource).toContain("bankAccountId?: number | null");
     expect(diagnosticSource).toContain("bm.bank_account_id::text = $2::text");
