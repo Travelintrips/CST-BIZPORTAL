@@ -394,7 +394,7 @@ router.use("/bank-reconciliation", (req, res, next) => {
               : "other";
     // 401/403 are authorization decisions, not server failures. Never log a
     // user's email, bank account, cookie, or request parameters.
-    req.log.info(
+    req.log?.info?.(
       `BankRecon read status=${res.statusCode} route=${routeLabel} duration_ms=${elapsedMs}`,
     );
   });
