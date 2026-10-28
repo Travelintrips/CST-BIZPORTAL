@@ -9,7 +9,7 @@ const poolQuery = vi.hoisted(() => vi.fn(async (statement: string, _params?: unk
   }
   return { rows: [] };
 }));
-vi.mock("@workspace/db", () => ({ pool: { query: poolQuery } }));
+vi.mock("@workspace/db", () => ({ pool: { query: poolQuery, connect: vi.fn(async () => ({ query: poolQuery, release: vi.fn() })) } }));
 vi.mock("../routes/dev-auth", () => ({
   isDevelopmentEnvironment: () => true,
   getDevSession: (request: { headers: Record<string, string | undefined> }) =>
