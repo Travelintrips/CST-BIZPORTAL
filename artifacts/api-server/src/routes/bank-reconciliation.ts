@@ -5027,7 +5027,12 @@ function buildMutationFilters(req: Request, actor?: ApprovalActor): { where: str
 
   const status = queryString(req.query.status);
   if (status && status !== "all") {
-    if (status === "completed") {
+    if (status === "attention") {
+      // Default work queue: never hydrate or count completed, posted, void,
+      // or rejected rows. This is a fixed allowlist, not user-provided SQL.
+      // "matched" is not final: it still requires review/approval.
+      filters.push("bm.status in ('unmatched', 'matched', 'manual_review', 'duplicate_need_review', 'approved_pending_posting')");
+    } else if (status === "completed") {
       // Keep this as a SQL literal list instead of binding a JavaScript array.
       // The Supabase pooler rejects the parameter cast used by `ANY($n::text[])`
       // for this route, which turns an otherwise valid completed filter into a
@@ -8056,13 +8061,26 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
       values,
     );
     const listValues = [...values, limit, offset];
+    // Attention mode is prioritized for operational work; final rows do
+    // not enter the count or list. Preserve the historical date ordering for
+    // every explicit status filter and audit/history view.
+    const sortOrder = queryString(req.query.status) === "attention"
+      ? `case bm.status
+           when 'approved_pending_posting' then 0
+           when 'manual_review' then 1
+           when 'duplicate_need_review' then 2
+           when 'matched' then 3
+           when 'unmatched' then 4
+           else 5 end,
+         bm.transaction_date desc nulls last, bm.id desc`
+      : "bm.transaction_date desc nulls last, bm.id desc";
     const result = await pool.query(
       `select ${compact ? mutationListCompactColumns : mutationListColumns}
          from public.bank_mutations bm
         where ${where}
-        order by bm.transaction_date desc nulls last, bm.id desc
-        limit $${listValues.length - 1}
-       offset $${listValues.length}`,
+        order by ${sortOrder}
+        limit ${listValues.length - 1}
+       offset ${listValues.length}`,
       listValues,
     );
     if (!compact) {
