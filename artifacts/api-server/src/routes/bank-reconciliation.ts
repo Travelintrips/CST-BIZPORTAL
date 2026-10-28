@@ -371,6 +371,13 @@ async function getApprovalActor(request: Request): Promise<ApprovalActor | null>
   return { email: user.email, companyId: user.companyId };
 }
 
+type BankReconTimings = { authMs?: number; poolWaitMs?: number; countMs?: number; listMs?: number; summaryMs?: number };
+function bankReconTimings(req: Request): BankReconTimings {
+  const measured = req as Request & { bankReconTiming?: BankReconTimings };
+  return measured.bankReconTiming ?? (measured.bankReconTiming = {});
+}
+const bankReconElapsed = (start: number) => Math.round((performance.now() - start) * 10) / 10;
+
 // Hostinger's runtime log viewer retains the log message but strips Pino
 // metadata. Emit a coarse endpoint, HTTP status, and duration in the message
 // itself, without credentials, query strings, mutation IDs, or financial data.
@@ -379,7 +386,7 @@ router.use("/bank-reconciliation", (req, res, next) => {
   const startedAt = Date.now();
   res.once("finish", () => {
     const elapsedMs = Date.now() - startedAt;
-    if (res.statusCode < 400 && elapsedMs < 2_500) return;
+    if (res.statusCode < 400 && elapsedMs < 2_500 && !req.originalUrl.split("?", 1)[0].endsWith("/bank-reconciliation/summary") && !req.originalUrl.split("?", 1)[0].endsWith("/bank-reconciliation/mutations")) return;
     const routePath = req.originalUrl.split("?", 1)[0];
     const routeLabel = routePath.includes("/bank-reconciliation/mutations/")
       ? "mutation-detail"
@@ -395,7 +402,7 @@ router.use("/bank-reconciliation", (req, res, next) => {
     // 401/403 are authorization decisions, not server failures. Never log a
     // user's email, bank account, cookie, or request parameters.
     req.log?.info?.(
-      `BankRecon read status=${res.statusCode} route=${routeLabel} duration_ms=${elapsedMs}`,
+      `BankRecon read status=${res.statusCode} route=${routeLabel} duration_ms=${elapsedMs} auth_ms=${bankReconTimings(req).authMs ?? "na"} pool_wait_ms=${bankReconTimings(req).poolWaitMs ?? "na"} count_ms=${bankReconTimings(req).countMs ?? "na"} list_ms=${bankReconTimings(req).listMs ?? "na"} summary_ms=${bankReconTimings(req).summaryMs ?? "na"}`,
     );
   });
   next();
@@ -403,7 +410,9 @@ router.use("/bank-reconciliation", (req, res, next) => {
 
 router.use("/bank-reconciliation", async (req, res, next) => {
   try {
+    const authStarted = performance.now();
     const actor = await getApprovalActor(req);
+    bankReconTimings(req).authMs = bankReconElapsed(authStarted);
     if (!actor) { res.status(401).json({ error: "Unauthorized" }); return; }
     (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor = actor;
     res.setHeader("Cache-Control", "private, no-store");
@@ -8054,12 +8063,18 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
     const limit = Math.min(requestedLimit ?? 20, 1_000);
     const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
 
-    const countResult = await pool.query<{ total: string }>(
+    const poolStarted = performance.now();
+    const readClient = await pool.connect();
+    bankReconTimings(req).poolWaitMs = bankReconElapsed(poolStarted);
+    try {
+    const countStarted = performance.now();
+    const countResult = await readClient.query<{ total: string }>(
       `select count(*)::text as total
          from public.bank_mutations bm
         where ${where}`,
       values,
     );
+    bankReconTimings(req).countMs = bankReconElapsed(countStarted);
     const listValues = [...values, limit, offset];
     // Attention mode is prioritized for operational work; final rows do
     // not enter the count or list. Preserve the historical date ordering for
@@ -8074,7 +8089,8 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
            else 5 end,
          bm.transaction_date desc nulls last, bm.id desc`
       : "bm.transaction_date desc nulls last, bm.id desc";
-    const result = await pool.query(
+    const listStarted = performance.now();
+    const result = await readClient.query(
       `select ${compact ? mutationListCompactColumns : mutationListColumns}
          from public.bank_mutations bm
         where ${where}
@@ -8083,6 +8099,10 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
        offset $${listValues.length}`,
       listValues,
     );
+    bankReconTimings(req).listMs = bankReconElapsed(listStarted);
+    } finally {
+      readClient.release();
+    }
     if (!compact) {
       await hydrateMutationCandidateDetails(result.rows as MutationCandidateRow[]);
       await hydrateQrisReviewDiagnostics(result.rows as MutationCandidateRow[]);
@@ -8117,7 +8137,13 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
 router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
   try {
     const { where, values } = buildMutationFilters(req, (req as Request & { bankReconActor?: ApprovalActor }).bankReconActor);
-    const result = await pool.query(
+    const poolStarted = performance.now();
+    const readClient = await pool.connect();
+    bankReconTimings(req).poolWaitMs = bankReconElapsed(poolStarted);
+    let result;
+    try {
+    const summaryStarted = performance.now();
+    result = await readClient.query(
       `select bm.status, count(*)::text as count, coalesce(sum(bm.amount), 0)::text as total_amount
          from public.bank_mutations bm
         where ${where}
@@ -8125,6 +8151,10 @@ router.get("/bank-reconciliation/summary", async (req, res): Promise<void> => {
         order by bm.status`,
       values,
     );
+    bankReconTimings(req).summaryMs = bankReconElapsed(summaryStarted);
+    } finally {
+      readClient.release();
+    }
     res.json({ summary: result.rows });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
