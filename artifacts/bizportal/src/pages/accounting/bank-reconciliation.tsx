@@ -6509,7 +6509,7 @@ function MutationCard({
                 Sudah memiliki approved match. Gunakan Unmatch sebelum mengalokasikan ulang.
               </div>
             )}
-            {!isQris && !isClosedQrisSettlement && !isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
+            {!isQris && !isClosedQrisSettlement && canApprove(m) && !isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
               <Button
                 size="sm"
                 variant="outline"
