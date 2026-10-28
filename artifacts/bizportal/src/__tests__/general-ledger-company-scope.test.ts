@@ -24,7 +24,8 @@ describe("General Ledger company scope", () => {
     const page = source();
 
     expect(page).toContain("const scopeLabel = appliedFilters.company_id");
-    expect(page).toContain("{scopeLabel} · {total.toLocaleString(\"id-ID\")} baris");
+    expect(page).toContain("{scopeLabel} · {error ? ");
+    expect(page).toContain("jumlah baris belum tersedia");
     expect(page).not.toContain(
       'Multi-perusahaan · {total.toLocaleString("id-ID")} baris',
     );

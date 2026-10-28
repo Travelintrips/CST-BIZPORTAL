@@ -262,8 +262,14 @@ export default function AccountingHubGLPage() {
       // payment_method is already included via the loop above
       const res = await fetch(`/api/accounting/hub/general-ledger?${params}`, { credentials: "include" });
       if (!res.ok) {
-        const msg = await res.text().catch(() => "");
-        setError(`Gagal memuat data: ${res.status}${msg ? ` — ${msg}` : ""}`);
+        // Nginx 504 responds with an HTML error page. Never display it as ledger text.
+        const contentType = res.headers.get("content-type") ?? "";
+        const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
+        const reason = body && typeof body === "object" && typeof body.error === "string"
+          ? body.error.slice(0, 160) : null;
+        setError(res.status === 504 || res.status === 502 || res.status === 503
+          ? "Server Buku Besar sedang lambat (gateway timeout). Data dan saldo tidak diubah. Klik Refresh untuk mencoba lagi."
+          : `Gagal memuat Buku Besar (HTTP ${res.status})${reason ? `: ${reason}` : ""}.`);
         return;
       }
       const json = await res.json();
@@ -432,7 +438,7 @@ export default function AccountingHubGLPage() {
                   </button>
                 </span>
               )}
-              <p className="text-xs text-muted-foreground">{scopeLabel} · {total.toLocaleString("id-ID")} baris</p>
+              <p className="text-xs text-muted-foreground">{scopeLabel} · {error ? "jumlah baris belum tersedia" : `${total.toLocaleString("id-ID")} baris`}</p>
             </div>
           </div>
         </div>
@@ -443,7 +449,8 @@ export default function AccountingHubGLPage() {
 
       {error && (
         <div className="bg-red-50 border border-red-300 text-red-800 rounded-md px-4 py-3 text-sm flex items-center gap-2">
-          <span>⚠</span> {error}
+          <span>⚠</span><span>{error}</span>
+          <Button variant="outline" size="sm" onClick={() => void load(page, sortBy, sortDir, rowsPerPage)} disabled={loading}>Coba Lagi</Button>
         </div>
       )}
 
