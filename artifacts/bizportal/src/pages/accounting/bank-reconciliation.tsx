@@ -4879,7 +4879,7 @@ function CoaReferenceDialog({
               />
               <span>Saya sudah memeriksa kandidat Rule AI yang belum disetujui. Jika dilanjutkan, kandidat tersebut akan ditandai superseded dan draft jurnal dibuat untuk COA manual terpilih.</span>
             </label>
-          )
+          )}
           {isQris && canApprove(mutation) && (
             <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
               {canApplyCurrent
