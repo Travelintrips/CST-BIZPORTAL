@@ -3078,10 +3078,10 @@ function SummaryCards({
           className={`cursor-pointer transition-all hover:shadow-md ${bg} ${
             activeFilter === key ? "ring-2 ring-primary shadow-md" : ""
           }`}
-          onClick={() => key !== "_total_value" && onFilter(activeFilter === key ? "all" : key)}
+          onClick={() => key !== "_total_value" && onFilter(activeFilter === key ? "attention" : key)}
           tabIndex={key !== "_total_value" ? 0 : undefined}
           role={key !== "_total_value" ? "button" : undefined}
-          onKeyDown={e => key !== "_total_value" && e.key === "Enter" && onFilter(activeFilter === key ? "all" : key)}
+          onKeyDown={e => key !== "_total_value" && e.key === "Enter" && onFilter(activeFilter === key ? "attention" : key)}
         >
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -3317,6 +3317,8 @@ type QuickFilter = {
 
 // Endpoint filter values must match bank_mutations.status values (backend contract)
 const QUICK_FILTERS: QuickFilter[] = [
+  { label: "Perlu Ditangani",   status: "attention" },
+  { label: "Semua Mutasi",       status: "all" },
   { label: "Belum Dicocokkan",   status: "unmatched" },
   { label: "Siap Disetujui",     status: "ready_approval" },
   { label: "Review Manual",      status: "manual_review" },
@@ -3341,7 +3343,7 @@ function QuickFilterBar({
   onDir: (v: string) => void;
   onReset: () => void;
 }) {
-  const hasActive = activeStatus !== "all" || activeDir !== "all";
+  const hasActive = activeStatus !== "attention" || activeDir !== "all";
   return (
     <div className="flex flex-wrap gap-1.5 items-center">
       <span className="text-xs text-muted-foreground font-medium mr-1">Filter Cepat:</span>
@@ -3358,7 +3360,7 @@ function QuickFilterBar({
                 : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
             }`}
             onClick={() => {
-              if (f.status)    onStatus(isActive ? "all" : f.status);
+              if (f.status)    onStatus(isActive ? "attention" : f.status);
               if (f.direction) onDir(isActive ? "all" : f.direction);
             }}
           >
@@ -8591,7 +8593,8 @@ export default function BankReconciliationPage() {
     !companiesLoading && (isConsolidated || qrisCompanyId != null);
 
   // ── Filters ──────────────────────────────────────────────────────────────
-  const [filterStatus,   setFilterStatus]   = useState("all");
+  // Default list is a work queue. Final entries are fetched on explicit request.
+  const [filterStatus,   setFilterStatus]   = useState("attention");
   const [filterDir,      setFilterDir]      = useState("all");
   const [filterProvider, setFilterProvider] = useState("all");
   const [filterPaymentType, setFilterPaymentType] = useState<"all" | SportPaymentType>("all");
@@ -8788,10 +8791,10 @@ export default function BankReconciliationPage() {
       return fetchBankReconRead<{ mutations: BankMutation[]; total?: number }>(`${endpoint}?${params}`);
     },
     enabled: companyScopeReady,
-    // On entry and on known transaction changes only; no background list polling.
+    // Reuse recent open-work cache when navigating; invalidate after actions.
     retry: false,
-    staleTime: 30_000,
-    refetchOnMount: "always",
+    staleTime: 60_000,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -8826,8 +8829,8 @@ export default function BankReconciliationPage() {
     },
     enabled: companyScopeReady,
     retry: false,
-    staleTime: 30_000,
-    refetchOnMount: "always",
+    staleTime: 60_000,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -8846,8 +8849,8 @@ export default function BankReconciliationPage() {
     enabled: companyScopeReady && !isLoading && !summaryLoading && Boolean(data) && Boolean(summary)
       && Number(summary?.summary.find(item => item.status === "matched")?.count ?? 0) > 0,
     retry: false,
-    staleTime: 30_000,
-    refetchOnMount: "always",
+    staleTime: 60_000,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -10476,13 +10479,13 @@ export default function BankReconciliationPage() {
   const handlePostAllPending    = () => { setFilterStatus("approved_pending_posting"); setPage(0); };
 
   const resetFilters = () => {
-    setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
-    setFilterBankAccountId("all");
+    // Reset to unfinished work, keeping the selected bank account isolated.
+    setFilterStatus("attention"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
     setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setDebouncedSearch(""); setPage(0);
   };
 
   const responseMutations = data?.mutations ?? [];
-  const statusFilteredMutations = filterStatus === "all"
+  const statusFilteredMutations = (filterStatus === "all" || filterStatus === "attention")
     ? responseMutations
     : responseMutations.filter(mutation =>
         filterStatus === "completed"
@@ -11421,8 +11424,17 @@ export default function BankReconciliationPage() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm text-muted-foreground">
-              {isLoading ? "Memuat..." : `${total} mutasi`}
+              {isLoading ? "Memuat..." : filterStatus === "attention" ? `${total} mutasi belum selesai` : `${total} mutasi`}
             </p>
+            {filterStatus === "attention" && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                onClick={() => { setFilterStatus("all"); setPage(0); }}
+              >
+                Lihat seluruh riwayat
+              </button>
+            )}
           </div>
           {selectedQrisCandidates.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950">
