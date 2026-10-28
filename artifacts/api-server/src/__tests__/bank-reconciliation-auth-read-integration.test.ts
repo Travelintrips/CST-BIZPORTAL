@@ -94,9 +94,9 @@ describe("authenticated bank reconciliation read integration", () => {
     expect(sql[0]).toContain("bm.status in ('unmatched', 'matched', 'manual_review', 'duplicate_need_review', 'approved_pending_posting')");
     expect(sql[1]).toContain("case bm.status");
     expect(sql[1]).toContain("when 'approved_pending_posting' then 0");
-    expect(sql[1]).toContain("limit $3");
-    expect(sql[1]).toContain("offset $4");
-    expect(poolQuery.mock.calls[1][1]).toEqual([1, "attention", 20, 0]);
+    expect(sql[1]).toContain("limit $2");
+    expect(sql[1]).toContain("offset $3");
+    expect(poolQuery.mock.calls[1][1]).toEqual([1, 20, 0]);
     expect(sql[1]).not.toContain("hydrateMutationCandidateDetails");
 
     poolQuery.mockClear();
