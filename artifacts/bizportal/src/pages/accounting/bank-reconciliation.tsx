@@ -1946,7 +1946,17 @@ export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
   const hasQrisAuditMetadata = Boolean(m.qris_candidate_audit)
     || (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0);
   if (hasQrisAuditMetadata || isSettlementOwnedQrisMutation(m) || isCanonicalSettlementMutation(m)) return false;
-  return canApprove(m) && visibleCandidates(m).length === 0;
+  if (!canApprove(m) || hasApprovedReconciliationMatch(m) || requiresRealTransactionCandidate(m)) return false;
+  // A real payment/invoice/settlement is source-owned. Never silently replace
+  // that candidate with a generic journal (which could double-book revenue).
+  const hasActiveSourceCandidate = (m.candidates ?? []).some(candidate =>
+    isRealTransactionCandidate(candidate)
+    && !["superseded", "rejected", "void"].includes(String(candidate.status ?? "").toLowerCase()),
+  );
+  if (hasActiveSourceCandidate) return false;
+  // In manual review the reviewer can explicitly supersede competing Rule AI
+  // hints, with acknowledgement inside the dialog. Approved/posting remains closed.
+  return visibleCandidates(m).length === 0 || isManualReviewActionable(m);
 }
 
 export function buildBankApprovalRequestBody(input: {
@@ -4173,6 +4183,7 @@ function CoaReferenceDialog({
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
+  const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const approvalKeyRef = useRef<{ mutationId: number; coaCode: string; key: string } | null>(null);
@@ -4225,6 +4236,7 @@ function CoaReferenceDialog({
     if (!open || !mutation) return;
     setSearch("");
     setSelectedCode("");
+    setOverrideAcknowledged(false);
     setSaving(false);
     setCreatingCoa(false);
     setCreating(false);
@@ -4270,19 +4282,28 @@ function CoaReferenceDialog({
     return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
   });
   const isQris = !!mutation && isSettlementOwnedQrisMutation(mutation);
-  const canApplyCurrent =
-    !!mutation &&
-    canApprove(mutation) &&
-    (
-      isQris
-        ? !!canonicalCandidate && isCanonicalSettlementApprovalEligible(mutation)
-        : !isCanonicalSettlementMutation(mutation) &&
-          (
-            mutation.status === "manual_review"
-            || mutation.status === "duplicate_need_review"
-            || visibleCandidates(mutation).length === 0
-          )
-    );
+  const canApplyCurrent = !!mutation && (
+    isQris
+      ? !!canonicalCandidate && isCanonicalSettlementApprovalEligible(mutation)
+      : isGenericCoaSelectionEligible(mutation)
+  );
+  const requiresOverrideAcknowledgement =
+    !!mutation && canApplyCurrent && !isQris && visibleCandidates(mutation).length > 0;
+  const manualSelectionBlockedReason = !mutation || canApplyCurrent || isQris
+    ? null
+    : ["posted", "approved", "approved_pending_posting"].includes(mutation.status)
+      ? "Mutasi ini sudah memiliki approval atau jurnal. Periksa detail jurnal; gunakan prosedur Unapprove/Reversal sesuai status sebelum mengubah COA."
+      : hasApprovedReconciliationMatch(mutation)
+        ? "Sudah ada kandidat yang disetujui. COA manual tidak boleh membuat jurnal kedua."
+        : isCanonicalSettlementMutation(mutation) || isSettlementOwnedQrisMutation(mutation)
+          ? "Penerimaan QRIS wajib mengikuti settlement canonical."
+          : requiresRealTransactionCandidate(mutation)
+            ? "Rule AI mewajibkan kandidat transaksi sumber. Periksa pembayaran/invoice sebelum memilih COA manual."
+            : (mutation.candidates ?? []).some(candidate =>
+                isRealTransactionCandidate(candidate)
+                && !["superseded", "rejected", "void"].includes(String(candidate.status ?? "").toLowerCase()))
+              ? "Ada kandidat pembayaran atau invoice sumber yang belum diselesaikan. Review atau tolak kandidat tersebut terlebih dahulu agar jurnal tidak ganda."
+              : "COA manual tidak tersedia untuk status mutasi ini.";
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
@@ -4401,7 +4422,15 @@ function CoaReferenceDialog({
     if (!canApplyCurrent) {
       toast({
         title: "COA manual belum dapat dipakai",
-        description: "Pastikan mutasi belum memiliki approved match dan gunakan COA ini sebagai approval manual.",
+        description: manualSelectionBlockedReason ?? "Periksa status mutasi dan kandidat sumber.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (requiresOverrideAcknowledgement && !overrideAcknowledged) {
+      toast({
+        title: "Konfirmasi review kandidat dahulu",
+        description: "Centang persetujuan untuk mengesampingkan kandidat Rule AI yang belum disetujui.",
         variant: "destructive",
       });
       return;
@@ -4588,8 +4617,8 @@ function CoaReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-2rem)] max-w-lg min-w-0 flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 px-5 pb-3 pt-5 pr-12">
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
             Pilih COA
@@ -4599,8 +4628,8 @@ function CoaReferenceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="space-y-1.5">
+        <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto px-5 py-3">
+          <div className="min-w-0 space-y-1.5">
             <label className="text-xs font-medium">
               Pilih akun COA debit atau kredit
             </label>
@@ -4761,7 +4790,7 @@ function CoaReferenceDialog({
               </div>
             ) : (
               <>
-                <div className="max-h-52 overflow-y-auto rounded-md border">
+                <div className="max-h-52 min-w-0 w-full overflow-x-hidden overflow-y-auto rounded-md border">
                   {accountsLoading ? (
                     <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" /> Memuat daftar COA...
@@ -4777,7 +4806,7 @@ function CoaReferenceDialog({
                     visibleAccounts.map(account => (
                       <div
                         key={account.id}
-                        className={`flex w-full items-center gap-1 border-b last:border-b-0 ${
+                        className={`flex min-w-0 w-full items-center gap-1 overflow-hidden border-b last:border-b-0 ${
                           selectedCode === account.code
                             ? "bg-indigo-50 text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100"
                             : "hover:bg-muted/50"
@@ -4785,10 +4814,10 @@ function CoaReferenceDialog({
                       >
                         <button
                           type="button"
-                          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                          className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-2 text-left"
                           onClick={() => setSelectedCode(account.code)}
                         >
-                          <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
+                          <span className="w-[5.2rem] shrink-0 font-mono text-[11px] font-semibold">{account.code}</span>
                           <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
                           <span className="shrink-0 text-[10px] text-muted-foreground">{account.type}</span>
                           <span
@@ -4834,11 +4863,23 @@ function CoaReferenceDialog({
             )}
           </div>
 
-          {!canApplyCurrent && !isQris && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
-              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
+          {manualSelectionBlockedReason && (
+            <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              {manualSelectionBlockedReason}
             </p>
           )}
+          {requiresOverrideAcknowledgement && (
+            <label className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0"
+                checked={overrideAcknowledged}
+                onChange={event => setOverrideAcknowledged(event.target.checked)}
+                aria-label="Saya sudah memeriksa kandidat Rule AI dan ingin memakai COA manual"
+              />
+              <span>Saya sudah memeriksa kandidat Rule AI yang belum disetujui. Jika dilanjutkan, kandidat tersebut akan ditandai superseded dan draft jurnal dibuat untuk COA manual terpilih.</span>
+            </label>
+          )
           {isQris && canApprove(mutation) && (
             <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
               {canApplyCurrent
@@ -4848,12 +4889,12 @@ function CoaReferenceDialog({
           )}
         </div>
 
-        <DialogFooter className="flex-col gap-2 sm:flex-row">
+        <DialogFooter className="min-w-0 shrink-0 flex-wrap gap-2 border-t bg-background px-5 py-4 sm:flex-row sm:justify-end">
           <Button variant="outline" onClick={onClose}>Batal</Button>
           <Button
-            className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+            className="min-w-0 gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
             onClick={save}
-            disabled={saving || !selectedAccount || !canApplyCurrent}
+            disabled={saving || !selectedAccount || !canApplyCurrent || (requiresOverrideAcknowledgement && !overrideAcknowledged)}
           >
             {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
