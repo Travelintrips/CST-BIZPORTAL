@@ -8066,9 +8066,11 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
     const poolStarted = performance.now();
     const readClient = await pool.connect();
     bankReconTimings(req).poolWaitMs = bankReconElapsed(poolStarted);
+    let countResult: { rows: { total: string }[] };
+    let result: { rows: any[] };
     try {
     const countStarted = performance.now();
-    const countResult = await readClient.query<{ total: string }>(
+    countResult = await readClient.query<{ total: string }>(
       `select count(*)::text as total
          from public.bank_mutations bm
         where ${where}`,
@@ -8090,7 +8092,7 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
          bm.transaction_date desc nulls last, bm.id desc`
       : "bm.transaction_date desc nulls last, bm.id desc";
     const listStarted = performance.now();
-    const result = await readClient.query(
+    result = await readClient.query(
       `select ${compact ? mutationListCompactColumns : mutationListColumns}
          from public.bank_mutations bm
         where ${where}
