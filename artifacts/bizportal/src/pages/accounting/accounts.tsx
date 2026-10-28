@@ -89,6 +89,8 @@ const CR_ACTION_LABELS: Record<string, string> = {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface AccountWithCompany extends Account {
+  isHeader?: boolean;
+  isPostable?: boolean;
   companyCode: string | null;
   companyName?: string | null;
 }
@@ -746,11 +748,11 @@ export default function AccountsPage() {
     if (!isConsolidated) setFilterCompanyId(String(companyId));
   }, [companyId, isConsolidated]);
 
-  const queryKey = ["/api/accounting/accounts", filterCompanyId];
+  const queryKey = ["/api/accounting/accounts", filterCompanyId, "includeInactive"];
   const { data: accounts = [] } = useQuery<AccountWithCompany[]>({
     queryKey,
     queryFn: async ({ signal }) => {
-      const params = new URLSearchParams({ company: filterCompanyId });
+      const params = new URLSearchParams({ company: filterCompanyId, includeInactive: "true" });
       const res = await fetch(`/api/accounting/accounts?${params}`, {
         credentials: "include",
         signal,
@@ -768,6 +770,11 @@ export default function AccountsPage() {
   const [parentPopoverOpen, setParentPopoverOpen] = useState(false);
   const [editing, setEditing] = useState<AccountWithCompany | null>(null);
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [structureFilter, setStructureFilter] = useState("all");
+  const [parentFilter, setParentFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const [postingFilter, setPostingFilter] = useState("all");
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [form, setForm] = useState({
     code: "", name: "", type: "asset" as Account["type"],
@@ -836,33 +843,48 @@ export default function AccountsPage() {
   // Show company column when viewing all companies
   const showCompanyCol = filterCompanyId === "all";
 
-  const { treeFlat, searchFlat } = useMemo(() => {
-    const tree = buildTree(accounts);
-    const flat = flattenTree(tree);
-    const s = search.toLowerCase().trim();
-    if (!s) return { treeFlat: flat, searchFlat: null };
-    const searchFlat = accounts
-      .filter((a) =>
-        a.code.toLowerCase().includes(s) ||
-        a.name.toLowerCase().includes(s) ||
-        (a.companyCode ?? "").toLowerCase().includes(s)
-      )
-      .map((a) => ({ ...a, children: [], depth: 0 } as TreeNode))
-      .sort((a, b) => a.code.localeCompare(b.code));
-    return { treeFlat: flat, searchFlat };
-  }, [accounts, search]);
-
-  const displayed = search.trim() ? searchFlat! : treeFlat.filter((node) => {
-    if (!node.parentId) return true;
-    const parentCollapsed = (acc: AccountWithCompany): boolean => {
-      if (!acc.parentId) return collapsed.has(acc.id);
-      const parent = accounts.find((a) => a.id === acc.parentId);
-      return collapsed.has(acc.id) || (parent ? parentCollapsed(parent) : false);
-    };
-    const parent = accounts.find((a) => a.id === node.parentId);
-    return parent ? !parentCollapsed(parent) : true;
+  const accountById = useMemo(() => new Map(accounts.map(a => [a.id, a])), [accounts]);
+  const parentOptions = useMemo(() => accounts.filter(a => a.isHeader === true || accounts.some(child => child.parentId === a.id)).sort((a,b) => a.code.localeCompare(b.code)), [accounts]);
+  const isDescendant = (a: AccountWithCompany, parent: number) => {
+    let id = a.parentId;
+    const visited = new Set<number>();
+    while (id != null && !visited.has(id)) {
+      if (id === parent) return true;
+      visited.add(id);
+      id = accountById.get(id)?.parentId ?? null;
+    }
+    return false;
+  };
+  const hasFilters = !!search.trim() || typeFilter !== "all" || structureFilter !== "all" || parentFilter !== "all" || statusFilter !== "active" || postingFilter !== "all";
+  const filteredAccounts = accounts.filter(a => {
+    const searchText = search.toLowerCase().trim();
+    if (searchText && ![a.code, a.name, a.companyCode ?? ""].some(v => v.toLowerCase().includes(searchText))) return false;
+    if (typeFilter !== "all" && a.type !== typeFilter) return false;
+    const group = a.isHeader === true || accounts.some(child => child.parentId === a.id);
+    if (structureFilter === "parent" && !group) return false;
+    if (structureFilter === "child" && (group || !a.parentId)) return false;
+    if (structureFilter === "orphan" && a.parentId != null) return false;
+    if (parentFilter !== "all" && !isDescendant(a, Number(parentFilter))) return false;
+    if (statusFilter === "active" && !a.isActive) return false;
+    if (statusFilter === "inactive" && a.isActive) return false;
+    if (postingFilter === "postable" && a.isPostable !== true) return false;
+    if (postingFilter === "nonpostable" && a.isPostable !== false) return false;
+    return true;
   });
-
+  const treeFlat = flattenTree(buildTree(accounts.filter(a => statusFilter !== "active" || a.isActive)));
+  const displayed = hasFilters
+    ? filteredAccounts.map(a => ({ ...a, children: [], depth: 0 } as TreeNode)).sort((a,b) => a.code.localeCompare(b.code))
+    : treeFlat.filter(node => {
+        let id = node.parentId;
+        const visited = new Set<number>();
+        while (id != null && !visited.has(id)) {
+          if (collapsed.has(id)) return false;
+          visited.add(id);
+          id = accountById.get(id)?.parentId ?? null;
+        }
+        return true;
+      });
+  const parentIds = treeFlat.filter(a => a.children.length > 0).map(a => a.id);
   const isParent = (node: TreeNode) => node.children.length > 0;
   // Total columns: Kode + Nama + [Perusahaan?] + Tipe + Status + Aksi
   const colSpan = showCompanyCol ? 6 : 5;
@@ -1056,6 +1078,19 @@ export default function AccountsPage() {
                   </div>
                 </div>
 
+                <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
+<Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger aria-label="Filter TypeFilter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Semua Jenis</SelectItem>{Object.entries(TYPE_LABELS).map(([key,label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}</SelectContent></Select>
+<Select value={structureFilter} onValueChange={setStructureFilter}><SelectTrigger aria-label="Filter StructureFilter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Semua Struktur</SelectItem><SelectItem value="parent">Parent / Grup</SelectItem><SelectItem value="child">Child</SelectItem><SelectItem value="orphan">Tanpa Parent</SelectItem></SelectContent></Select>
+<Select value={parentFilter} onValueChange={setParentFilter}><SelectTrigger aria-label="Filter ParentFilter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Semua Parent</SelectItem>{parentOptions.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.code} — {a.name}</SelectItem>)}</SelectContent></Select>
+<Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger aria-label="Filter StatusFilter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Semua Status</SelectItem><SelectItem value="active">Aktif</SelectItem><SelectItem value="inactive">Nonaktif</SelectItem></SelectContent></Select>
+<Select value={postingFilter} onValueChange={setPostingFilter}><SelectTrigger aria-label="Filter PostingFilter"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Semua Posting</SelectItem><SelectItem value="postable">Bisa Posting</SelectItem><SelectItem value="nonpostable">Tidak Bisa Posting</SelectItem></SelectContent></Select>
+                </div>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setCollapsed(new Set())}>Expand All</Button>
+                  <Button size="sm" variant="outline" onClick={() => setCollapsed(new Set(parentIds))}>Collapse All</Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setSearch("");setTypeFilter("all");setStructureFilter("all");setParentFilter("all");setStatusFilter("active");setPostingFilter("all"); }}>Reset Filter</Button>
+                  <span className="text-xs text-muted-foreground">{filteredAccounts.length} dari {accounts.length} akun</span>
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1071,11 +1106,11 @@ export default function AccountsPage() {
                     {displayed.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={colSpan} className="text-center text-muted-foreground py-8">
-                          {search ? "Tidak ada hasil pencarian" : "Tidak ada akun"}
+                          {hasFilters ? "Tidak ada COA yang sesuai filter" : "Tidak ada akun"}
                         </TableCell>
                       </TableRow>
                     ) : displayed.map((a) => {
-                      const isGroup = isParent(a);
+                      const isGroup = hasFilters ? (a.isHeader === true || accounts.some(child => child.parentId === a.id)) : isParent(a);
                       const isCollapsed = collapsed.has(a.id);
                       const indent = a.depth * 20;
 
@@ -1087,7 +1122,7 @@ export default function AccountsPage() {
                         >
                           <TableCell className="font-mono text-sm">
                             <div style={{ paddingLeft: indent }} className="flex items-center gap-1">
-                              {isGroup && !search.trim() ? (
+                              {isGroup && !hasFilters ? (
                                 <button
                                   onClick={() => toggleCollapse(a.id)}
                                   className="text-muted-foreground hover:text-foreground"

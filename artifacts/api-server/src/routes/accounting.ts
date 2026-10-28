@@ -403,7 +403,9 @@ function reportError(req: Request, res: Parameters<Parameters<IRouter["get"]>[1]
 router.get("/accounting/accounts", async (req, res): Promise<void> => {
   try {
     const values: QueryValue[] = [];
-    let where = "where coalesce(a.is_active, true) = true";
+    // Only the COA management screen opts in to inactive accounts.
+    const includeInactive = req.query.includeInactive === "true";
+    let where = includeInactive ? "where true" : "where coalesce(a.is_active, true) = true";
     const companyId = requestedCompanyId(req);
     if (companyId !== null) {
       values.push(companyId);
