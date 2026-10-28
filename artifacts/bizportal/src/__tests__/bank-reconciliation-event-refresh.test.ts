@@ -53,7 +53,10 @@ describe("bank reconciliation event-based refresh", () => {
   });
 
   it("retains load-on-entry and a manual full refresh", () => {
-    expect(source.match(/refetchOnMount: "always"/g)?.length).toBeGreaterThanOrEqual(4);
+    // Status polling and optional QRIS may always probe, but expensive
+    // mutation/summary/readiness queries reuse recent cache on remount.
+    expect(source.match(/refetchOnMount: true/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(source).toContain('const [filterStatus,   setFilterStatus]   = useState("attention")');
     expect(source).toContain('onClick={() => void invalidate()} title="Refresh"');
     expect(source).toContain("qrisCompanyId != null && (showQrisAuditList || showCanonicalSettlementQueue)");
   });
