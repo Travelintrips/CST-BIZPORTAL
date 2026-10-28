@@ -3,7 +3,7 @@ import http, { type Server } from "node:http";
 import { type AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-const poolQuery = vi.hoisted(() => vi.fn(async (statement: string) => {
+const poolQuery = vi.hoisted(() => vi.fn(async (statement: string, _params?: unknown[]) => {
   if (statement.toLowerCase().includes("count(*)::text as total")) {
     return { rows: [{ total: "0" }] };
   }
