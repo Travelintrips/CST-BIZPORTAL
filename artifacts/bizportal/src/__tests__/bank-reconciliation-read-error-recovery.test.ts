@@ -25,13 +25,17 @@ describe("Bank Reconciliation read error recovery", () => {
     expect(page).toContain("fetchBankReconRead<{ mutations: BankMutation[]; total: number }>");
   });
 
-  it("recovers both primary list and summary on either error", () => {
+  it("recovers summary and list independently while preserving a manual full refresh", () => {
     expect(page).toContain("error: summaryReadError");
     expect(page).toContain(") : summaryReadError ? (");
     expect(page).toContain("describeBankReconReadError(summaryReadError)");
     expect(page).toContain("describeBankReconReadError(error)");
-    expect(page.match(/Coba Lagi Ringkasan & Mutasi/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(page.match(/onClick=\{\(\) => void invalidate\(\)\}/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(page).toContain("Coba Lagi Ringkasan");
+    expect(page).toContain("Coba Lagi Daftar Mutasi");
+    expect(page).toContain("onClick={() => void refetchSummary()}");
+    expect(page).toContain("onClick={() => void refetch()}");
+    expect(page).toContain("Jumlah mutasi belum tersedia");
+    expect(page.match(/onClick=\{\(\) => void invalidate\(\)\}/g)?.length).toBeGreaterThanOrEqual(1);
   });
 
   it("preserves event-based polling, and transaction mutations remain untouched", () => {

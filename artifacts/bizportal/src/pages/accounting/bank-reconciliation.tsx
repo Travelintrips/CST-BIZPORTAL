@@ -8817,7 +8817,7 @@ export default function BankReconciliationPage() {
       && Boolean(account.coa_name?.trim()),
   );
 
-  const { data: summary, isLoading: summaryLoading, error: summaryReadError } = useQuery({
+  const { data: summary, isLoading: summaryLoading, error: summaryReadError, refetch: refetchSummary } = useQuery({
     queryKey: ["bank-reconciliation-summary", activeCompanyId, filterBankAccountId],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -10676,8 +10676,8 @@ export default function BankReconciliationPage() {
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
               <span>Ringkasan gagal dimuat. {describeBankReconReadError(summaryReadError)}</span>
-              <Button type="button" variant="outline" size="sm" onClick={() => void invalidate()}>
-                <RefreshCw className="mr-1 h-3 w-3" /> Coba Lagi Ringkasan & Mutasi
+              <Button type="button" variant="outline" size="sm" onClick={() => void refetchSummary()}>
+                <RefreshCw className="mr-1 h-3 w-3" /> Coba Lagi Ringkasan
               </Button>
             </AlertDescription>
           </Alert>
@@ -11424,7 +11424,7 @@ export default function BankReconciliationPage() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm text-muted-foreground">
-              {isLoading ? "Memuat..." : filterStatus === "attention" ? `${total} mutasi belum selesai` : `${total} mutasi`}
+              {isLoading ? "Memuat..." : error ? "Jumlah mutasi belum tersedia" : filterStatus === "attention" ? `${total} mutasi belum selesai` : `${total} mutasi`}
             </p>
             {filterStatus === "attention" && (
               <button
@@ -11593,8 +11593,8 @@ export default function BankReconciliationPage() {
                     {describeBankReconReadError(error)}
                   </p>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => void invalidate()}>
-                  Coba Lagi Ringkasan & Mutasi
+                <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                  Coba Lagi Daftar Mutasi
                 </Button>
               </CardContent>
             </Card>
