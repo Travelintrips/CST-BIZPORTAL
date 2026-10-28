@@ -84,6 +84,31 @@ describe("authenticated bank reconciliation read integration", () => {
     expect(poolQuery).not.toHaveBeenCalled();
   });
 
+  it("uses an authenticated server-side work queue that never includes final statuses", async () => {
+    poolQuery.mockClear();
+    const open = await get("/api/bank-reconciliation/mutations?company_id=1&status=attention&compact=1&limit=20", true);
+    expect(open.status).toBe(200);
+    const sql = poolQuery.mock.calls.map(([statement]) => statement);
+    expect(sql).toHaveLength(2); // paginated count + compact 20-row list
+    expect(sql[0]).toContain("bm.company_id = $1");
+    expect(sql[0]).toContain("bm.status in ('unmatched', 'matched', 'manual_review', 'duplicate_need_review', 'approved_pending_posting')");
+    expect(sql[1]).toContain("case bm.status");
+    expect(sql[1]).toContain("when 'approved_pending_posting' then 0");
+    expect(sql[1]).toContain("limit $2");
+    expect(sql[1]).toContain("offset $3");
+    expect(sql[1]).not.toContain("hydrateMutationCandidateDetails");
+
+    poolQuery.mockClear();
+    const closed = await get("/api/bank-reconciliation/mutations?company_id=1&status=completed&compact=1", true);
+    expect(closed.status).toBe(200);
+    expect(poolQuery.mock.calls[0][0]).toContain("bm.status in ('posted', 'approved')");
+
+    poolQuery.mockClear();
+    expect((await get("/api/bank-reconciliation/mutations?status=attention&company_id=2", true)).status).toBe(403);
+    expect(poolQuery).not.toHaveBeenCalled();
+    expect((await get("/api/bank-reconciliation/mutations?status=unrecognized", true)).status).toBe(400);
+  });
+
   it("preserves authenticated mutation, summary and readiness access for the user's company", async () => {
     expect((await get("/api/bank-reconciliation/mutations?compact=1", true)).status).toBe(200);
     expect((await get("/api/bank-reconciliation/summary", true)).status).toBe(200);
