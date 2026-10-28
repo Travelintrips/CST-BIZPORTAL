@@ -8079,8 +8079,8 @@ router.get("/bank-reconciliation/mutations", async (req, res): Promise<void> => 
          from public.bank_mutations bm
         where ${where}
         order by ${sortOrder}
-        limit ${listValues.length - 1}
-       offset ${listValues.length}`,
+        limit $${listValues.length - 1}
+       offset $${listValues.length}`,
       listValues,
     );
     if (!compact) {
