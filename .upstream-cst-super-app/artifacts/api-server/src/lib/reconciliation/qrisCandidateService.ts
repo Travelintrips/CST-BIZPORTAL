@@ -462,6 +462,9 @@ export async function generateQrisCandidates(options: {
            sp.amount,
            CASE
              WHEN settlement_config.calculation_method = 'fixed_fee' THEN 0
+             WHEN LOWER(COALESCE(settlement_config.provider_code, '')) = 'mandiri_direct'
+               AND (COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at) AT TIME ZONE 'Asia/Jakarta')::date >= DATE '2026-10-01'
+               AND sp.amount <= 100000 THEN 0
              ELSE COALESCE(settlement_config.mdr_rate, 0)
            END,
            CASE
