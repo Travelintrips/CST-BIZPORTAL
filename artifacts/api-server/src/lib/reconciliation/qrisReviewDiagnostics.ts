@@ -99,6 +99,12 @@ function paymentMdr(payment: QrisPaymentRow): number {
   // A provider-level rate is only an estimate when the source amount is absent.
   const recorded = payment.mdr_amount == null ? null : safeNumber(payment.mdr_amount);
   if (recorded != null && recorded >= 0) return money(recorded);
+  // UME Mandiri QRIS exemption applies per payment, never to the batch total.
+  // Only estimate when no persisted MDR exists; preserve recorded accounting evidence.
+  const paidDate = dateOnly(payment.paid_at ?? payment.confirmed_at ?? payment.created_at);
+  if (payment.provider_code === "mandiri_direct"
+      && paidDate != null && paidDate >= "2026-10-01"
+      && gross > 0 && gross <= 100000) return 0;
   const rate = safeNumber(payment.mdr_rate) ?? 0.007;
   return money(gross * rate);
 }
