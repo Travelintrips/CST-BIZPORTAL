@@ -1033,12 +1033,22 @@ async function buildInTransaction(
         sum + Number(paymentJournals.get(paymentId)?.effective_gross_amount ?? 0),
       0,
     );
+    // Apply the universal QRIS <= Rp100,000 exemption per payment, not per batch.
+    // Keep older payment dates unchanged; only apply from 2026-10-01.
+    const chargeableGrossAmount = eligiblePayments.reduce((sum, payment) => {
+      const amount = Number(paymentJournals.get(payment.id)?.effective_gross_amount ?? 0);
+      const date = String(payment.payment_date ?? "").slice(0, 10);
+      return sum + (date >= "2026-10-01" && amount <= 100000 ? 0 : amount);
+    }, 0);
+    const shouldExempt = calculationMethod === "percentage_of_gross"
+      && String(settlementConfig.provider_code ?? "").toLowerCase() === "mandiri_direct";
+    const mdrBase = shouldExempt ? chargeableGrossAmount : grossAmount;
     const calculation = rowOrThrow(
       await client.execute(sql`
         SELECT *
         FROM sport_center.calculate_settlement_mdr(
-          ${grossAmount},
-          ${effectiveMdrRate},
+          ${mdrBase > 0 ? mdrBase : grossAmount},
+          ${shouldExempt && mdrBase === 0 ? 0 : effectiveMdrRate},
           ${effectiveFixedFee},
           ${Number(settlementConfig.fee_tax_rate ?? 0)},
           ${settlementConfig.fee_tax_inclusive === true},
