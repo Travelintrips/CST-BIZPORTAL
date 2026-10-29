@@ -183,7 +183,7 @@ describe("production session signing fallback", () => {
 });
 
 describe("disabled insecure development login", () => {
-  it.each([{}, { email: allowedEmail }, { email: "not-allowed@example.com" }])(
+  it.each([ { email: "" }, { email: allowedEmail }, { email: "not-allowed@example.com" }])(
     "refuses email-only login without minting cookies", async (payload) => {
       const response = await requestApi("POST", "/api/auth/dev-login", payload);
       expect(response.status).toBe(403);
