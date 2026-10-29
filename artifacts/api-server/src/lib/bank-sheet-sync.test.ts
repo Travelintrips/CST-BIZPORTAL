@@ -91,6 +91,7 @@ const config = {
   bank_account_id: 77,
   bank_account_number: null,
   account_type: "bank",
+  slash_date_order: null as "MDY" | "DMY" | null,
 };
 
 let storedMutations: StoredMutation[];
@@ -98,6 +99,7 @@ let nextMutationId: number;
 
 beforeEach(() => {
   config.account_type = "bank";
+  config.slash_date_order = null;
   storedMutations = [];
   nextMutationId = 100;
   mocks.poolQuery.mockReset();
@@ -351,6 +353,22 @@ describe("Google Sheet bank mutation sync", () => {
     );
 
     expect(insertCalls[2]?.[1]?.[2]).toBe("2026-10-01");
+  });
+
+  it("respects an explicit MDY sheet setting even when cash-ledger rows suggest DMY", async () => {
+    config.account_type = "cash";
+    config.slash_date_order = "MDY";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Keluar", "Masuk"],
+      ["08/11/2026", "Transfer ke TRI WISUDO", "150000", "0"],
+      ["08/13/2026", "August bank expense", "150000", "0"],
+    ]);
+    await syncOneBankSheetConfig(config.id);
+    const insertCalls = mocks.clientQuery.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into public.bank_mutations"),
+    );
+    expect(insertCalls[0]?.[1]?.[2]).toBe("2026-08-11");
+    expect(insertCalls[1]?.[1]?.[2]).toBe("2026-08-13");
   });
 
   it("keeps US MM/DD/YYYY dates when month-first evidence exists", async () => {

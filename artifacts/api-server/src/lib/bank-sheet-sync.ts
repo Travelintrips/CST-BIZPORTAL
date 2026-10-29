@@ -16,6 +16,7 @@ type SheetConfig = {
   bank_account_id: number | null;
   bank_account_number: string | null;
   account_type: string | null;
+  slash_date_order?: "MDY" | "DMY" | null;
 };
 
 function assertProductionSheetSourceAllowed(config: Pick<SheetConfig, "tab_name">): void {
@@ -318,7 +319,7 @@ function mutationDirection(
   return isCashLedger ? (debit > 0 ? "IN" : "OUT") : (debit > 0 ? "OUT" : "IN");
 }
 
-function parseRows(rows: string[][], accountType: string | null = null): {
+function parseRows(rows: string[][], accountType: string | null = null, explicitSlashDateOrder: SlashDateOrder | null = null): {
   mutations: ParsedMutation[];
   headers: string[];
   keyColumn: number;
@@ -395,7 +396,9 @@ function parseRows(rows: string[][], accountType: string | null = null): {
     }
   }
 
-  const slashDateOrder = inferSlashDateOrder(
+  // An explicit per-sheet setting takes precedence over heuristic inference.
+  // MM/DD/YYYY and DD/MM/YYYY can be indistinguishable for days 1–12.
+  const slashDateOrder = explicitSlashDateOrder ?? inferSlashDateOrder(
     rows,
     dateColumn,
     start,
@@ -565,7 +568,7 @@ async function syncConfig(config: SheetConfig): Promise<{
   const client = await pool.connect();
   try {
     const rows = await readSpreadsheetValues(config.sheet_id, config.tab_name);
-    const parsed = parseRows(rows, config.account_type);
+    const parsed = parseRows(rows, config.account_type, config.slash_date_order ?? null);
     if (parsed.mutations.length === 0) {
       await markConfigSync(config.id, "success");
       return {
@@ -1085,7 +1088,8 @@ export async function syncOneBankSheetConfig(configId: number) {
   const result = await pool.query<SheetConfig>(
     `select config.id, config.company_id, config.sheet_id, config.tab_name, config.label,
             config.bank_account_id, config.bank_account_number,
-            cba.account_type
+            cba.account_type,
+            (to_jsonb(config)->>'slash_date_order') as slash_date_order
        from public.bank_sheet_configs config
        left join public.company_bank_accounts cba on cba.id = config.bank_account_id
       where config.id = $1 and config.is_active = true`,
@@ -1105,7 +1109,8 @@ export async function syncAllBankSheetConfigs(companyId?: number) {
   const result = await pool.query<SheetConfig>(
     `select config.id, config.company_id, config.sheet_id, config.tab_name, config.label,
             config.bank_account_id, config.bank_account_number,
-            cba.account_type
+            cba.account_type,
+            (to_jsonb(config)->>'slash_date_order') as slash_date_order
        from public.bank_sheet_configs config
        left join public.company_bank_accounts cba on cba.id = config.bank_account_id
       where config.is_active = true
