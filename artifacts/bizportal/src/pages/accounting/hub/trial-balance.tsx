@@ -184,7 +184,8 @@ export default function AccountingHubTrialBalancePage() {
   const totDebit  = rows.reduce((s, r) => s + Number(r.total_debit), 0);
   const totCredit = rows.reduce((s, r) => s + Number(r.total_credit), 0);
   const totBal    = rows.reduce((s, r) => s + Number(r.balance), 0);
-  const balanced  = Math.abs(totDebit - totCredit) < 1;
+  // A failed or empty request must never be reported as a balanced ledger.
+  const balanced = !error && !loading && rows.length > 0 && Math.abs(totDebit - totCredit) < 1;
 
   // Find account codes that appear more than once (same account, different companies)
   const codeCounts: Record<string, number> = {};
@@ -416,8 +417,8 @@ export default function AccountingHubTrialBalancePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`text-xs font-semibold px-2 py-1 rounded ${balanced ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-            {balanced ? "✓ Seimbang" : "✗ Tidak Seimbang"}
+          <span className={`text-xs font-semibold px-2 py-1 rounded ${error || loading || rows.length === 0 ? "bg-slate-100 text-slate-600" : balanced ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+            {error ? "Data gagal dimuat" : loading ? "Memuat..." : rows.length === 0 ? "Belum ada data" : balanced ? "✓ Seimbang" : "✗ Tidak Seimbang"}
           </span>
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />Refresh
