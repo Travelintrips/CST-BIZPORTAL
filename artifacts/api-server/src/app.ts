@@ -34,17 +34,18 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-if (process.env.NODE_ENV === "production") {
+{
   const distDir = path.dirname(fileURLToPath(import.meta.url));
   const publicDir = path.join(distDir, "public");
   const indexFile = path.join(publicDir, "index.html");
 
-  if (!existsSync(indexFile)) {
+  if (process.env.NODE_ENV === "production" && !existsSync(indexFile)) {
     throw new Error(
       `Production frontend bundle is missing: ${indexFile}. Run the root build before starting the app.`,
     );
   }
 
+  if (existsSync(indexFile)) {
   // Built Vite assets have content-hashed names: cache them across repeat visits.
   // HTML, API responses, and non-fingerprinted files retain their current policy.
   app.use(express.static(publicDir, {
@@ -72,6 +73,7 @@ if (process.env.NODE_ENV === "production") {
       }
     });
   });
+  }
 }
 
 export default app;
