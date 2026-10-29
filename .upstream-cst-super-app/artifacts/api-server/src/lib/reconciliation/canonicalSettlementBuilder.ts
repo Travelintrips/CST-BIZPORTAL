@@ -1042,6 +1042,7 @@ async function buildInTransaction(
         paymentDate: String(payment.payment_date ?? "").slice(0, 10),
       })),
     );
+
     const shouldExempt = calculationMethod === "percentage_of_gross"
       && String(settlementConfig.provider_code ?? "").toLowerCase() === "mandiri_direct";
     const mdrBase = shouldExempt ? chargeableGrossAmount : grossAmount;
