@@ -182,67 +182,17 @@ describe("production session signing fallback", () => {
   });
 });
 
-describe("development login bridge", () => {
-  it.each([
-    ["404", { kind: "response", statusCode: 404 } as const],
-    ["5xx", { kind: "response", statusCode: 503 } as const],
-    ["transport errors", { kind: "transport-error" } as const],
-  ])("creates a local session when the optional upstream returns %s", async (_label, behavior) => {
-    mockUpstreamLogin(behavior);
-
-    const loginResponse = await requestApi("POST", "/api/auth/dev-login", {
-      email: allowedEmail,
-    });
-
-    expect(loginResponse.status).toBe(200);
-    expect(JSON.parse(loginResponse.body)).toMatchObject({
-      user: { email: allowedEmail },
-    });
-
-    const setCookie = loginResponse.headers["set-cookie"]?.[0];
-    expect(setCookie).toMatch(/^bizportal_dev_session=[^;]+;/);
-
-    const sessionCookie = setCookie?.split(";", 1)[0];
-    const userResponse = await requestApi("GET", "/api/auth/user", undefined, sessionCookie);
-    expect(userResponse.status).toBe(200);
-    expect(JSON.parse(userResponse.body)).toMatchObject({
-      user: { email: allowedEmail },
-    });
-  });
-
-  it("creates a local session without contacting a legacy upstream", async () => {
-    const upstreamRequest = mockUpstreamLogin({
-      kind: "response",
-      statusCode: 401,
-    });
-
-    const loginResponse = await requestApi("POST", "/api/auth/dev-login", {
-      email: allowedEmail,
-    });
-
-    expect(loginResponse.status).toBe(200);
-    expect(JSON.parse(loginResponse.body)).toMatchObject({
-      user: { email: allowedEmail },
-    });
-    expect(loginResponse.headers["set-cookie"]?.[0]).toMatch(/^bizportal_dev_session=[^;]+;/);
-    expect(upstreamRequest).not.toHaveBeenCalled();
-  });
-
-  it("blocks an email that is not on the development allowlist", async () => {
-    const upstreamRequest = mockUpstreamLogin({
-      kind: "response",
-      statusCode: 200,
-    });
-
-    const loginResponse = await requestApi("POST", "/api/auth/dev-login", {
-      email: "not-allowed@example.com",
-    });
-
-    expect(loginResponse.status).toBe(403);
-    expect(JSON.parse(loginResponse.body)).toEqual({
-      error: "Email belum diizinkan untuk Dev Login.",
-    });
-    expect(loginResponse.headers["set-cookie"]).toBeUndefined();
-    expect(upstreamRequest).not.toHaveBeenCalled();
+describe("disabled insecure development login", () => {
+  it.each([ { email: "" }, { email: allowedEmail }, { email: "not-allowed@example.com" }])(
+    "refuses email-only login without minting cookies", async (payload) => {
+      const response = await requestApi("POST", "/api/auth/dev-login", payload);
+      expect(response.status).toBe(403);
+      expect(JSON.parse(response.body)).toEqual({ error: "Use verified Supabase Auth login." });
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    },
+  );
+  it("does not expose configured DEV users", async () => {
+    const response = await requestApi("GET", "/api/auth/dev-users");
+    expect(response.status).toBe(404);
   });
 });

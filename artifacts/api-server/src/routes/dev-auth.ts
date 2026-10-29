@@ -378,11 +378,8 @@ export function createDevAuthRouter(): Router {
   const router = Router();
 
   router.post("/auth/supabase-exchange", async (request, response): Promise<void> => {
-    if (isDevelopmentEnvironment()) {
-      response.status(404).json({ error: "Not found" });
-      return;
-    }
-
+    // Supabase-verified sessions are supported for DEV and PROD.
+    // No email-only DEV login is permitted on public hosting.
     const accessToken =
       typeof request.body?.access_token === "string"
         ? request.body.access_token.trim()
@@ -426,52 +423,12 @@ export function createDevAuthRouter(): Router {
     }
   });
 
-  router.get("/auth/dev-users", (_request, response) => {
-    if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
-    return response.json({ users: getDevUsers() });
-  });
-
-  router.post("/auth/dev-login", async (request, response) => {
-    if (!isDevelopmentEnvironment()) return response.status(404).json({ error: "Not found" });
-
-    const email =
-      typeof request.body?.email === "string"
-        ? request.body.email.trim().toLowerCase()
-        : "";
-    const configuredUsers = getDevUsers();
-    // An empty email is the intentional development auto-login path. Prefer
-    // an explicitly configured admin, then fall back to the first dev user.
-    const user = email
-      ? configuredUsers.find((candidate) => candidate.email === email)
-      : configuredUsers.find((candidate) => candidate.role === "admin") ?? configuredUsers[0];
-
-    if (!getSessionSecret()) {
-      return response.status(503).json({
-        error: "Dev login belum aktif: SESSION_SECRET harus tersedia.",
-      });
-    }
-    if (configuredUsers.length === 0) {
-      return response.status(503).json({
-        error: "Dev login belum dikonfigurasi: DEV_LOGIN_EMAILS masih kosong.",
-      });
-    }
-    if (!user) {
-      return response.status(403).json({
-        error: "Email belum diizinkan untuk Dev Login.",
-      });
-    }
-
-    const now = Date.now();
-    setSessionCookie(response, {
-      ...user,
-      issuedAt: now,
-      expiresAt: now + DEV_SESSION_TTL_SECONDS * 1000,
-    });
-    return response.json({ user });
-  });
+  // Legacy email-only login could impersonate any configured DEV admin.
+  router.get("/auth/dev-users", (_request, response) => response.status(404).json({ error: "Not found" }));
+  router.post("/auth/dev-login", (_request, response) => response.status(403).json({ error: "Use verified Supabase Auth login." }));
 
   router.get("/auth/user", async (request, response, next): Promise<void> => {
-    if (!isDevelopmentEnvironment()) {
+    {
       const session = getProductionSession(request);
       if (!session) {
         response.status(401).json({ error: "Unauthorized" });
@@ -491,11 +448,6 @@ export function createDevAuthRouter(): Router {
       return;
     }
 
-    const user = getDevSession(request);
-    if (user) {
-      response.json({ user });
-      return;
-    }
     next();
   });
 

@@ -17,12 +17,8 @@ export async function authenticateAdmin(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const user = isDevelopmentEnvironment()
-      ? getDevSession(request)
-      : (() => {
-          const session = getProductionSession(request);
-          return session ? getProductionUser(session) : Promise.resolve(null);
-        })();
+    const session = getProductionSession(request);
+    const user = session ? getProductionUser(session) : Promise.resolve(null);
     const resolvedUser = await user;
 
     if (!resolvedUser) {
