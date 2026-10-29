@@ -13,7 +13,8 @@ router.post("/sport-center/group-payments/:paymentId/allocate", authenticateAdmi
     res.status(404).json({ error: "Not found" });
     return;
   }
-  const raw = req.params.paymentId;
+  const rawParam = req.params.paymentId;
+  const raw = typeof rawParam === "string" ? rawParam : "";
   const paymentId = Number(raw);
   const groupRef = typeof req.body?.groupRef === "string" ? req.body.groupRef.trim() : "";
   if (!/^[1-9]\d*$/.test(raw ?? "") || !Number.isSafeInteger(paymentId) || !groupRef || groupRef.length > 128) {
