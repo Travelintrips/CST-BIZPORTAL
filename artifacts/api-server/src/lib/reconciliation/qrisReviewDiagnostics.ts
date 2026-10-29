@@ -1,3 +1,4 @@
+import { estimatedUmeQrisMdr } from "./qrisUmeMdr.js";
 import { pool } from "@workspace/db";
 
 type QrisDiagnosticRow = Record<string, unknown> & {
@@ -102,11 +103,10 @@ function paymentMdr(payment: QrisPaymentRow): number {
   // UME Mandiri QRIS exemption applies per payment, never to the batch total.
   // Only estimate when no persisted MDR exists; preserve recorded accounting evidence.
   const paidDate = dateOnly(payment.paid_at ?? payment.confirmed_at ?? payment.created_at);
-  if (payment.provider_code === "mandiri_direct"
-      && paidDate != null && paidDate >= "2026-10-01"
-      && gross > 0 && gross <= 100000) return 0;
   const rate = safeNumber(payment.mdr_rate) ?? 0.007;
-  return money(gross * rate);
+  return money(estimatedUmeQrisMdr({
+    gross, rate, paidDate, providerCode: payment.provider_code,
+  }));
 }
 
 function paymentNet(payment: QrisPaymentRow): number {
