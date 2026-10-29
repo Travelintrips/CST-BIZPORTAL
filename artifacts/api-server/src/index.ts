@@ -12,17 +12,17 @@ import {
 } from "./routes/dev-auth";
 
 const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
+const parsedPort = rawPort != null && /^\d+$/.test(rawPort.trim())
+  ? Number(rawPort.trim())
+  : NaN;
+// Hostinger can replace a configured DEV port with its masking placeholder.
+// In development only, use the configured default when the runtime provides
+// that exact placeholder. Never do this for production or arbitrary input.
+const maskedDevPort = process.env["APP_ENV"] === "development"
+  && rawPort === "********";
+const port = maskedDevPort ? 8080 : parsedPort;
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("Invalid PORT environment configuration.");
 }
 
 const host = process.env["HOST"]?.trim() || "0.0.0.0";
