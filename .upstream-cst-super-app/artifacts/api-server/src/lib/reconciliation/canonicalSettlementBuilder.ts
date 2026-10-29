@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { checkQrisApprovalRule } from "./qrisApprovalRule.js";
+import { mandiriQrisChargeableGross } from "./qrisMdrPolicy.js";
 
 /**
  * Canonical Sport Center settlement builder.
@@ -1035,11 +1036,12 @@ async function buildInTransaction(
     );
     // Apply the universal QRIS <= Rp100,000 exemption per payment, not per batch.
     // Keep older payment dates unchanged; only apply from 2026-10-01.
-    const chargeableGrossAmount = eligiblePayments.reduce((sum, payment) => {
-      const amount = Number(paymentJournals.get(payment.id)?.effective_gross_amount ?? 0);
-      const date = String(payment.payment_date ?? "").slice(0, 10);
-      return sum + (date >= "2026-10-01" && amount <= 100000 ? 0 : amount);
-    }, 0);
+    const chargeableGrossAmount = mandiriQrisChargeableGross(
+      eligiblePayments.map((payment) => ({
+        amount: Number(paymentJournals.get(payment.id)?.effective_gross_amount ?? 0),
+        paymentDate: String(payment.payment_date ?? "").slice(0, 10),
+      })),
+    );
     const shouldExempt = calculationMethod === "percentage_of_gross"
       && String(settlementConfig.provider_code ?? "").toLowerCase() === "mandiri_direct";
     const mdrBase = shouldExempt ? chargeableGrossAmount : grossAmount;
