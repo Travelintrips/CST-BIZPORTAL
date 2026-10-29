@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import groupPaymentAllocationsRouter from "./group-payment-allocations";
 import companiesRouter from "./companies";
 import bankReconciliationRouter from "./bank-reconciliation";
 import reconClassificationRouter from "./recon-classification";
@@ -32,6 +33,7 @@ router.get("/", (_request, response) => {
 });
 
 router.use(healthRouter);
+router.use(groupPaymentAllocationsRouter);
 
 router.use(createDevAuthRouter());
 
