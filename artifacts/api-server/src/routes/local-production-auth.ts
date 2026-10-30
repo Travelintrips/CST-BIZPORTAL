@@ -230,11 +230,6 @@ router.post("/auth/email-login", async (
   response: Response,
   next: NextFunction,
 ): Promise<void> => {
-  if (isDevelopmentEnvironment()) {
-    next();
-    return;
-  }
-
   const email = typeof request.body?.email === "string"
     ? request.body.email.trim().toLowerCase()
     : "";
@@ -274,11 +269,6 @@ router.post("/auth/email-otp/send", async (
   response: Response,
   next: NextFunction,
 ): Promise<void> => {
-  if (isDevelopmentEnvironment()) {
-    next();
-    return;
-  }
-
   const email = normalizeEmail(request.body?.email);
   if (!isValidEmail(email)) {
     response.status(400).json({ error: "Masukkan email admin yang valid." });
@@ -346,11 +336,6 @@ router.post("/auth/email-otp/verify", async (
   response: Response,
   next: NextFunction,
 ): Promise<void> => {
-  if (isDevelopmentEnvironment()) {
-    next();
-    return;
-  }
-
   const email = normalizeEmail(request.body?.email);
   const code = typeof request.body?.code === "string" ? request.body.code.trim() : "";
   if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
