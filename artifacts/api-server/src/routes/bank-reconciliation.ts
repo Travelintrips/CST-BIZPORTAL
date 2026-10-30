@@ -7972,6 +7972,41 @@ router.get("/bank-reconciliation/qris-candidates", async (req, res): Promise<voi
   }
 });
 
+// Read-only per-mutation QRIS review. Never prepares or posts a settlement.
+router.get("/bank-reconciliation/:mutationId/qris-review", async (req, res): Promise<void> => {
+  const mutationId = parsePositiveInt(req.params.mutationId);
+  if (mutationId === null) {
+    res.status(400).json({ error: "ID mutasi tidak valid", code: "INVALID_MUTATION_ID" });
+    return;
+  }
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const found = await pool.query<{ company_id: number | null }>(
+      "select company_id from public.bank_mutations where id = $1", [mutationId],
+    );
+    const mutation = found.rows[0];
+    if (!mutation) {
+      res.status(404).json({ error: "Mutasi tidak ditemukan" });
+      return;
+    }
+    if (actor.companyId != null && actor.companyId !== mutation.company_id) {
+      res.status(403).json({ error: "Company context tidak sesuai" });
+      return;
+    }
+    const candidates = await listQrisReviewDiagnostics({
+      mutationIds: [mutationId], companyId: mutation.company_id, limit: 50,
+    });
+    res.json({ mutationId, reviewOnly: true, candidates });
+  } catch (error) {
+    req.log.error({ error, mutationId }, "Unable to load QRIS review evidence");
+    res.status(500).json({ error: "Bukti pembayaran QRIS tidak dapat dimuat" });
+  }
+});
+
 router.post("/bank-reconciliation/qris-candidates/generate", async (_req, res): Promise<void> => {
   res.status(410).json({
     error: "Generator kandidat QRIS lama sudah dihapus. Gunakan settlement canonical Sport Center.",
