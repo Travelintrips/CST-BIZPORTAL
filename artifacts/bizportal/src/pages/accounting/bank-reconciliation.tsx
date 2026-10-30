@@ -9762,6 +9762,36 @@ export default function BankReconciliationPage() {
     },
   });
 
+  // Reviewing payment candidates is read-only; preparing a settlement is a separate action.
+  const reviewQrisPayments = async (mutationId: number) => {
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/qris-review`, {
+        credentials: "include",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.error ?? "Gagal membaca kandidat QRIS");
+      const candidates = (Array.isArray(body?.candidates) ? body.candidates : []) as QrisCandidateAudit[];
+      const refreshed = await refetch();
+      const mutation = refreshed.data?.mutations.find((item) => item.id === mutationId);
+      if (mutation) {
+        setDetailMutation({
+          ...mutation,
+          qris_candidate_audits: candidates,
+          qris_candidate_audit: candidates[0] ?? null,
+        });
+      }
+      if (candidates.length === 0 || !candidates.some((c) => (c.payment_items ?? []).length > 0)) {
+        toast({ title: "Belum ada pembayaran QRIS yang memenuhi periode",
+          description: "Tidak ada booking untuk ditampilkan. Periksa tanggal, provider, dan status pembayaran." });
+      } else {
+        toast({ title: "Kandidat pembayaran untuk review",
+          description: "Daftar booking dibuka tanpa menyetujui settlement atau membuat jurnal." });
+      }
+    } catch (error) {
+      toast({ title: "Gagal membuka kandidat QRIS", description: error instanceof Error ? error.message : "Kesalahan membaca data", variant: "destructive" });
+    }
+  };
+
   const approveQrisBatchMut = useMutation({
     mutationFn: async ({
       candidateId,
@@ -11678,7 +11708,7 @@ export default function BankReconciliationPage() {
                       : undefined
                   }
           onGenerateQrisCandidates={(mutationId) => {
-                    if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+                    if (mutationId != null) void reviewQrisPayments(mutationId);
                   }}
                     qrisGenerationPending={prepareQrisCanonicalMut.isPending || qrisRepairMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
@@ -11968,7 +11998,7 @@ export default function BankReconciliationPage() {
             : undefined
         }
         onGenerateQrisCandidates={(mutationId) => {
-          if (mutationId != null) prepareQrisCanonicalMut.mutate(mutationId);
+          if (mutationId != null) void reviewQrisPayments(mutationId);
         }}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
