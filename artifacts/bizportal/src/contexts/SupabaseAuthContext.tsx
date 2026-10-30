@@ -273,14 +273,25 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
+  // An auth event can be replayed for the same token (including on startup).
+  // Do not repeatedly exchange a token that the server has already rejected.
+  const lastExchangedTokenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!supabase) return;
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        lastExchangedTokenRef.current = null;
+        return;
+      }
       if (
         (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION")
         && session?.access_token
+        && session.access_token !== lastExchangedTokenRef.current
       ) {
-        await exchangeToken(session.access_token);
+        const token = session.access_token;
+        // Set synchronously before the asynchronous exchange to prevent duplicates.
+        lastExchangedTokenRef.current = token;
+        void exchangeToken(token);
       }
     });
     return () => subscription.unsubscribe();

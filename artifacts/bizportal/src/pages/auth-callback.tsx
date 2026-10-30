@@ -49,12 +49,11 @@ export default function AuthCallbackPage() {
             const base = getBase();
             setTimeout(() => { window.location.replace(base); }, 300);
           } else {
+            // Leave the error visible instead of bouncing to home/login again.
             setStatus("error");
-            setTimeout(() => { window.location.replace(getBase()); }, 1500);
           }
         } catch {
           setStatus("error");
-          setTimeout(() => { window.location.replace(getBase()); }, 1500);
         }
       }
     }
@@ -68,7 +67,6 @@ export default function AuthCallbackPage() {
         setTimeout(() => window.close(), 1000);
       } else {
         setStatus("error");
-        setTimeout(() => { window.location.replace(getBase()); }, 1500);
       }
     }
 
