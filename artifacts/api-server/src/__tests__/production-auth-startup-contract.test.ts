@@ -45,6 +45,26 @@ describe("production auth startup contract", () => {
     expect(initSource).not.toContain("AbortController");
   });
 
+  it("supports verified signed sessions on DEV without granting anonymous access", () => {
+    const initStart = authSource.indexOf("export async function initializeProductionSessionSigning");
+    const initEnd = authSource.indexOf("function getDevIdentitySecret", initStart);
+    expect(authSource.slice(initStart, initEnd)).not.toContain("if (isDevelopmentEnvironment()) return");
+
+    const readerStart = authSource.indexOf("export function getProductionSession");
+    const readerEnd = authSource.indexOf("function getSupabaseConfig", readerStart);
+    const reader = authSource.slice(readerStart, readerEnd);
+    expect(reader).not.toContain("if (isDevelopmentEnvironment()) return null");
+    expect(reader).toContain("decodeSignedCookie<ProductionSession>");
+    expect(reader).toContain("session.expiresAt <= Date.now()");
+
+    const exchangeStart = authSource.indexOf('router.post("/auth/supabase-exchange"');
+    const exchangeEnd = authSource.indexOf('router.get("/auth/dev-users"', exchangeStart);
+    const exchange = authSource.slice(exchangeStart, exchangeEnd);
+    expect(exchange).toContain("await initializeProductionSessionSigning()");
+    expect(exchange).toContain("verifySupabaseAccessToken(accessToken)");
+    expect(exchange).toContain("setProductionSessionCookie(response, productionSession)");
+  });
+
   it("keeps authentication fail-closed at the request boundary", () => {
     const routeStart = localAuthSource.indexOf('router.post("/auth/email-login"');
     const routeEnd = localAuthSource.indexOf('router.get("/auth/admin/users-password-status"', routeStart);
