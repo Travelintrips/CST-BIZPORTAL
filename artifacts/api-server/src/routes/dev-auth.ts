@@ -205,8 +205,6 @@ export function getDevSession(request: Request): DevAuthUser | null {
 }
 
 export function getProductionSession(request: Request): ProductionSession | null {
-  if (isDevelopmentEnvironment()) return null;
-
   const session = decodeSignedCookie<ProductionSession>(request, PRODUCTION_SESSION_COOKIE);
   if (
     !session ||
@@ -415,12 +413,9 @@ export function createDevAuthRouter(): Router {
   });
 
   router.get("/auth/user", async (request, response, next): Promise<void> => {
-    if (!isDevelopmentEnvironment()) {
-      const session = getProductionSession(request);
-      if (!session) {
-        response.status(401).json({ error: "Unauthorized" });
-        return;
-      }
+    // Verified password/OTP sessions take precedence in both environments.
+    const session = getProductionSession(request);
+    if (session) {
       try {
         const user = await getProductionUser(session);
         if (!user) {
@@ -429,18 +424,20 @@ export function createDevAuthRouter(): Router {
         }
         response.json({ user });
       } catch (error) {
-        request.log.error({ error }, "Failed to load production auth user");
+        request.log.error({ error }, "Failed to load authenticated user");
         response.status(503).json({ error: "Authorization service unavailable" });
       }
       return;
     }
 
-    const user = getDevSession(request);
-    if (user) {
-      response.json({ user });
-      return;
+    if (isDevelopmentEnvironment()) {
+      const devUser = getDevSession(request);
+      if (devUser) {
+        response.json({ user: devUser });
+        return;
+      }
     }
-    next();
+    response.status(401).json({ error: "Unauthorized" });
   });
 
   router.get("/users/me", (request, response, next) => {
