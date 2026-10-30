@@ -66,10 +66,10 @@ describe("production auth startup contract", () => {
   });
 
   it("keeps verified email and OTP authentication reachable on DEV", () => {
-    for (const [path, next] of [
-      ['/auth/email-login', '/auth/admin/users-password-status'],
-      ['/auth/email-otp/send', '/auth/email-otp/verify'],
-      ['/auth/email-otp/verify', '/auth/wa-otp/send'],
+    for (const path of [
+      '/auth/email-login',
+      '/auth/email-otp/send',
+      '/auth/email-otp/verify',
     ]) {
       const start = localAuthSource.indexOf('router.post("' + path + '"');
       const end = localAuthSource.indexOf('router.', start + 12);
