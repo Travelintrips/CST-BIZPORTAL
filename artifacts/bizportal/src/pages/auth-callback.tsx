@@ -13,6 +13,7 @@ function getBase(): string {
  */
 export default function AuthCallbackPage() {
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  const [errorMessage, setErrorMessage] = useState("Login gagal. Silakan coba lagi.");
 
   useEffect(() => {
     if (!supabase) {
@@ -49,12 +50,13 @@ export default function AuthCallbackPage() {
             const base = getBase();
             setTimeout(() => { window.location.replace(base); }, 300);
           } else {
+            const body = await res.json().catch(() => null) as { error?: string; message?: string } | null;
+            setErrorMessage(body?.error ?? body?.message ?? `Login ditolak oleh server (HTTP ${res.status}).`);
             setStatus("error");
-            setTimeout(() => { window.location.replace(getBase()); }, 1500);
           }
         } catch {
+          setErrorMessage("Koneksi ke server autentikasi gagal. Coba kembali setelah koneksi pulih.");
           setStatus("error");
-          setTimeout(() => { window.location.replace(getBase()); }, 1500);
         }
       }
     }
@@ -67,8 +69,8 @@ export default function AuthCallbackPage() {
         setStatus("error");
         setTimeout(() => window.close(), 1000);
       } else {
+        setErrorMessage("Sesi Supabase tidak ditemukan atau callback kedaluwarsa.");
         setStatus("error");
-        setTimeout(() => { window.location.replace(getBase()); }, 1500);
       }
     }
 
@@ -113,7 +115,10 @@ export default function AuthCallbackPage() {
           <p className="text-sm text-green-600">Login berhasil. Mengalihkan...</p>
         )}
         {status === "error" && (
-          <p className="text-sm text-destructive">Login gagal. Tutup tab ini dan coba lagi.</p>
+          <div className="space-y-3">
+              <p role="alert" className="text-sm text-destructive">{errorMessage}</p>
+              <a href={getBase()} className="inline-block text-sm underline">Kembali ke halaman login</a>
+            </div>
         )}
       </div>
     </div>
