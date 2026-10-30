@@ -132,6 +132,26 @@ describe("local production email OTP authentication", () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
 
+  it("keeps email and OTP validation reachable when APP_ENV is development", async () => {
+    const originalAppEnv = process.env.APP_ENV;
+    const originalNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.APP_ENV = "development";
+      process.env.NODE_ENV = "production";
+      const password = await request(server, "/auth/email-login", {});
+      const otp = await request(server, "/auth/email-otp/send", {});
+      expect(password.status).toBe(400);
+      expect(otp.status).toBe(400);
+      expect(password.headers["set-cookie"]).toBeUndefined();
+      expect(otp.headers["set-cookie"]).toBeUndefined();
+    } finally {
+      if (originalAppEnv === undefined) delete process.env.APP_ENV;
+      else process.env.APP_ENV = originalAppEnv;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
   it("keeps owner password login available through the production session path", async () => {
     const password = "owner-password";
     const passwordHash = await hash(password, 4);
