@@ -68,7 +68,6 @@ function getSessionSecret(): string | null {
 }
 
 export async function initializeProductionSessionSigning(): Promise<void> {
-  if (isDevelopmentEnvironment()) return;
   if (getSessionSecret()) return;
   if (productionSessionInitialization) {
     await productionSessionInitialization;
@@ -261,7 +260,6 @@ export function getDevSession(request: Request): DevAuthUser | null {
 }
 
 export function getProductionSession(request: Request): ProductionSession | null {
-  if (isDevelopmentEnvironment()) return null;
 
   const session = decodeSignedCookie<ProductionSession>(request, PRODUCTION_SESSION_COOKIE);
   if (
@@ -388,12 +386,8 @@ export function createDevAuthRouter(): Router {
       response.status(401).json({ error: "Session Supabase tidak tersedia." });
       return;
     }
-    if (!getSessionSecret()) {
-      response.status(503).json({ error: "Konfigurasi session server belum tersedia." });
-      return;
-    }
-
     try {
+      await initializeProductionSessionSigning();
       const verified = await verifySupabaseAccessToken(accessToken);
       if (!verified) {
         response.status(401).json({ error: "Session Supabase tidak valid atau sudah berakhir." });
