@@ -16,9 +16,17 @@ function canExecute(command, env) {
 
 const ua = process.env.npm_config_user_agent || '';
 const viaNpm = ua.startsWith('npm/');
-const pnpm = viaNpm
-  ? ['npx', ['--yes', 'pnpm@10.33.0']]
-  : ['pnpm', []];
+// Avoid npx inside Hostinger's npm lifecycle: nested npm can contend for idealTree.
+// Use the provisioned pnpm first, or the Node package-manager shim.
+const pnpm = canExecute('pnpm', process.env)
+  ? ['pnpm', []]
+  : canExecute('corepack', process.env)
+    ? ['corepack', ['pnpm']]
+    : null;
+
+if (!pnpm) {
+  throw new Error('pnpm is unavailable; provision pnpm 10 before Hostinger build (do not invoke npx from npm lifecycle).');
+}
 
 if (viaNpm) {
   run(pnpm[0], [...pnpm[1], 'install', '--frozen-lockfile']);
