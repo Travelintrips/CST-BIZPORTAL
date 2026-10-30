@@ -65,6 +65,20 @@ describe("production auth startup contract", () => {
     expect(exchange).toContain("setProductionSessionCookie(response, productionSession)");
   });
 
+  it("keeps verified email and OTP authentication reachable on DEV", () => {
+    for (const path of [
+      '/auth/email-login',
+      '/auth/email-otp/send',
+      '/auth/email-otp/verify',
+    ]) {
+      const start = localAuthSource.indexOf('router.post("' + path + '"');
+      const end = localAuthSource.indexOf('router.', start + 12);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const route = localAuthSource.slice(start, end === -1 ? undefined : end);
+      expect(route).not.toContain('if (isDevelopmentEnvironment()) {\n    next();');
+    }
+  });
+
   it("keeps authentication fail-closed at the request boundary", () => {
     const routeStart = localAuthSource.indexOf('router.post("/auth/email-login"');
     const routeEnd = localAuthSource.indexOf('router.get("/auth/admin/users-password-status"', routeStart);
