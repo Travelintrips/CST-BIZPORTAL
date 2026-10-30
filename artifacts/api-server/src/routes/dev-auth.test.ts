@@ -7,10 +7,11 @@ import http, {
 import { type AddressInfo } from "node:net";
 import https from "node:https";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import app from "../app";
 import {
   initializeProductionSessionSigning,
+  getProductionSession,
   setProductionSessionCookie,
 } from "./dev-auth";
 
@@ -179,6 +180,30 @@ describe("production session signing fallback", () => {
     expect(cookies[0]).toMatch(/^bizportal_supabase_session=[^;]+;/);
     expect(cookies[0]).toContain("HttpOnly");
     expect(cookies[0]).toContain("Secure");
+  });
+});
+
+
+describe("DEV signed session cookie round trip", () => {
+  it("reads a valid signed session in DEV and rejects a tampered cookie", async () => {
+    await initializeProductionSessionSigning();
+    const cookies: string[] = [];
+    const response = {
+      append: (_name: string, value: string) => {
+        cookies.push(value);
+        return response;
+      },
+    } as unknown as Response;
+    const session = {
+      id: "admin-1", email: allowedEmail,
+      issuedAt: Date.now(), expiresAt: Date.now() + 60_000,
+    };
+    setProductionSessionCookie(response, session);
+    const cookiePair = cookies[0].split(";")[0];
+    expect(getProductionSession({ headers: { cookie: cookiePair } } as Request)).toMatchObject(session);
+    const altered = cookiePair.slice(0, -1) + (cookiePair.endsWith("A") ? "B" : "A");
+    expect(getProductionSession({ headers: { cookie: altered } } as Request)).toBeNull();
+    expect(getProductionSession({ headers: {} } as Request)).toBeNull();
   });
 });
 
