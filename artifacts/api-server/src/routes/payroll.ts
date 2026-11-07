@@ -86,6 +86,7 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
     const items = await pool.query(
       `SELECT pi.id, pi.employee_id, pi.base_salary, pi.allowance, pi.gross_salary,
               pi.kasbon_deduction, pi.total_deductions, pi.net_salary,
+              pi.bpjs_jht_employee, pi.bpjs_kes_employee, pi.pph21, pi.other_deductions,
               e.first_name, e.last_name
          FROM public.payroll_items pi
          JOIN public.employees e ON e.id = pi.employee_id AND e.company_id = $1
@@ -101,6 +102,8 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
           id: Number(row.id), employeeId: Number(row.employee_id),
           baseSalary: row.base_salary, allowance: row.allowance,
           grossSalary: row.gross_salary, kasbonDeduction: row.kasbon_deduction,
+          bpjsJhtEmployee: row.bpjs_jht_employee, bpjsKesEmployee: row.bpjs_kes_employee,
+          pph21: row.pph21, otherDeductions: row.other_deductions,
           totalDeductions: row.total_deductions, netSalary: row.net_salary,
         },
         employee: { firstName: row.first_name, lastName: row.last_name },
