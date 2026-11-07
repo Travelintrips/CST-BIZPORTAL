@@ -4,8 +4,8 @@ import { authorizePayrollCompany } from "./payroll-access";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 /**
- * Standalone Payroll adapter: read-only until the legacy calculation,
- * kasbon allocation and accounting-posting services are ported and tested.
+ * Standalone Payroll adapter: scoped reads and opt-in DEV-only Draft writes.
+ * Production writes, calculation, kasbon settlement and accounting posting remain disabled.
  * DO NOT fabricate calculated or paid statuses from a reduced implementation.
  */
 const router: IRouter = Router();
