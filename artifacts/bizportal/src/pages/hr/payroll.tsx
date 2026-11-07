@@ -131,7 +131,7 @@ export default function PayrollWorkspace() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Gaji Karyawan</h1>
-          <p className="text-sm text-muted-foreground">Payroll multi-company — draft dan perhitungan, tanpa posting pembayaran otomatis.</p>
+          <p className="text-sm text-muted-foreground">Payroll multi-company — baca riwayat dan rincian gaji. Semua perubahan ditahan sampai backend DEV PASS.</p>
         </div>
         <Button variant="outline" disabled={companyId == null || loading || busy} onClick={async () => {
           if (companyId === null) return;
@@ -164,7 +164,7 @@ export default function PayrollWorkspace() {
             <label className="text-sm">Tahun
               <input aria-label="Tahun payroll" className="mt-1 block w-28 rounded-md border bg-background p-2" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
-            <Button disabled={busy || loading || runs.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>Buat Draft</Button>
+            <Button disabled title="Menunggu validasi payroll backend" onClick={() => perform("create")}>Buat Draft (Belum Aktif)</Button>
           </CardContent>
         </Card>
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -192,8 +192,8 @@ export default function PayrollWorkspace() {
                     <div key={label} className="rounded-md border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="font-semibold">{value}</p></div>)}
                 </div>
                 {draft && <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" disabled={busy} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
-                  <Button variant="outline" disabled={busy || !detail.items.length} onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
+                  <Button variant="outline" disabled title="Menunggu validasi data karyawan" onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
+                  <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
                 </div>}
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm">
                   <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th></tr></thead>
@@ -202,7 +202,7 @@ export default function PayrollWorkspace() {
                       <td className="p-2 text-right">{money(item.baseSalary)}</td><td className="p-2 text-right">{money(item.allowance)}</td>
                       <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td></tr>)}</tbody>
                 </table></div>
-                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Persetujuan, pencatatan pembayaran, dan slip gaji akan diaktifkan hanya setelah uji backend serta rekonsiliasi lulus.</p>
+                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan, kalkulasi, persetujuan, pembayaran, dan slip gaji dinonaktifkan hingga integrasi backend serta uji rekonsiliasi lulus.</p>
               </>}
             </CardContent>
           </Card>
