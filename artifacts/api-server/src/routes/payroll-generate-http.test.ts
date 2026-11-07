@@ -83,7 +83,8 @@ describe("DEV payroll generation", () => {
     expect(sql).toContain("e.company_id = $2");
     expect(sql).toContain("NOT EXISTS");
     expect(sql).toContain("FOR UPDATE");
-    expect(sql).not.toMatch(/UPDATE|DELETE|accounting_entries|cash_advances|salary_payments/);
+    expect(mock.queries.some(q => /^\\s*(?:UPDATE|DELETE)\\s/i.test(q))).toBe(false);
+    expect(sql).not.toMatch(/accounting_entries|cash_advances|salary_payments/);
     expect(mock.queries.at(-1)).toBe("COMMIT");
     expect(mock.released).toBe(1);
   });
