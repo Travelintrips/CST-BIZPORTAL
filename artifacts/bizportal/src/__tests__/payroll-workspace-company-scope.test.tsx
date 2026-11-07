@@ -85,4 +85,26 @@ describe("Payroll workspace company isolation and HRD filters", () => {
     expect(urls.filter((url) => url.includes("companyId=all")).length).toBe(0);
     expect(urls.filter((url) => url.includes("companyId=22")).length).toBeGreaterThan(0);
   });
+
+  it("ignores stale company A API responses arriving after company B is selected", async () => {
+    let releaseA!: (response: Response) => void;
+    const delayedA = new Promise<Response>((resolve) => { releaseA = resolve; });
+    const regularFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const target = new URL(String(url), "http://localhost");
+      if (target.searchParams.get("companyId") === "11" && target.pathname === "/api/payroll/runs") return delayedA;
+      return regularFetch(url);
+    }));
+    const page = render(<PayrollWorkspace />);
+    await waitFor(() => expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([url]) => String(url).includes("companyId=11"))).toBe(true));
+    companyState.id = 22;
+    page.rerender(<PayrollWorkspace />);
+    await screen.findByText("09/2026");
+    releaseA(successfulResponse({ runs: runs[11] }));
+    await waitFor(() => {
+      expect(screen.queryByText("11/2026")).toBeNull();
+      expect(screen.getByText("09/2026")).toBeTruthy();
+      expect(screen.getByText("Perusahaan 22")).toBeTruthy();
+    });
+  });
 });
