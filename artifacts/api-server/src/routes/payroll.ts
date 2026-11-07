@@ -114,8 +114,76 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
 
 // Calculate, approval, salary disbursement and journal posting are deliberately
 // absent from this adapter. Requests fail closed instead of mutating financial data.
-router.post("/payroll/runs", (_req, res) => {
-  res.status(501).json({ message: "Pembuatan payroll belum diaktifkan sampai migrasi dan pengujian DEV selesai." });
+router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
+  res.json({
+    companyId: req.payrollCompanyId,
+    canCreateDraft: isDevelopmentEnvironment()
+      && process.env.PAYROLL_DEV_DRAFT_ENABLED === "true"
+      && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? ""),
+    canGenerate: false,
+    canCalculate: false,
+    canApprove: false,
+    canPay: false,
+  });
+});
+
+/**
+ * DEV-only opt-in. No payroll_items, cash-advance, payment or journal writes.
+ * Serializes duplicate period creation with a transaction-scoped advisory lock.
+ */
+router.post("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
+  if (!isDevelopmentEnvironment() || process.env.PAYROLL_DEV_DRAFT_ENABLED !== "true") {
+    res.status(501).json({ message: "Pembuatan draft payroll belum diaktifkan untuk lingkungan ini." });
+    return;
+  }
+  if (!["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? "")) {
+    res.status(403).json({ message: "Tidak berwenang membuat periode payroll." });
+    return;
+  }
+  const { month, year, notes } = req.body ?? {};
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2020 || year > 2100
+    || (notes !== undefined && (typeof notes !== "string" || notes.length > 500))) {
+    res.status(400).json({ message: "Bulan, tahun, atau catatan tidak valid." });
+    return;
+  }
+  const companyId = req.payrollCompanyId!;
+  let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
+  let activeTransaction = false;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    activeTransaction = true;
+    await client.query("SELECT pg_advisory_xact_lock($1::integer, $2::integer)", [companyId, year * 100 + month]);
+    const existing = await client.query(
+      "SELECT id FROM public.payroll_runs WHERE company_id = $1 AND month = $2 AND year = $3 LIMIT 1",
+      [companyId, month, year],
+    );
+    if (existing.rowCount) {
+      await client.query("ROLLBACK");
+      activeTransaction = false;
+      res.status(409).json({ message: "Periode payroll perusahaan ini sudah ada." });
+      return;
+    }
+    const inserted = await client.query(
+      `INSERT INTO public.payroll_runs (company_id, month, year, notes, status)
+       VALUES ($1, $2, $3, $4, 'draft')
+       RETURNING id, company_id, month, year, status, posting_status, accounting_entry_id, payment_entry_id`,
+      [companyId, month, year, notes?.trim() || null],
+    );
+    await client.query("COMMIT");
+    activeTransaction = false;
+    res.status(201).json({ run: serializeRun(inserted.rows[0]) });
+  } catch (error) {
+    if (activeTransaction && client) {
+      try { await client.query("ROLLBACK"); } catch (rollbackError) {
+        req.log.error({ rollbackError }, "Payroll draft rollback failed");
+      }
+    }
+    req.log.error({ error, companyId }, "Payroll draft create failed");
+    res.status(503).json({ message: "Draft payroll tidak dapat dibuat." });
+  } finally {
+    client?.release();
+  }
 });
 router.post("/payroll/runs/:id/generate-items", (_req, res) => {
   res.status(501).json({ message: "Generate payroll belum diaktifkan sampai validasi master karyawan selesai." });
