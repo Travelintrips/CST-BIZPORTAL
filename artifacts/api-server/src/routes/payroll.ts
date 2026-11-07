@@ -30,7 +30,8 @@ async function authorize(request: PayrollRequest, response: Response, next: Next
   }
 }
 
-const positiveId = (raw: string | undefined): number | null => {
+const positiveId = (raw: unknown): number | null => {
+  if (typeof raw !== "string") return null;
   if (!raw || !/^[1-9][0-9]*$/.test(raw)) return null;
   const value = Number(raw);
   return Number.isSafeInteger(value) ? value : null;
