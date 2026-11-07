@@ -49,6 +49,7 @@ export default function PayrollWorkspace() {
     ? Number(activeCompanyId) : null;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [canCreateDraft, setCanCreateDraft] = useState(false);
+  const [canGenerate, setCanGenerate] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
@@ -72,6 +73,7 @@ export default function PayrollWorkspace() {
   useEffect(() => {
     setRuns([]);
     setCanCreateDraft(false);
+    setCanGenerate(false);
     setSelectedId(null);
     setDetail(null);
     setError("");
@@ -81,12 +83,13 @@ export default function PayrollWorkspace() {
     setLoading(true);
     Promise.all([
       api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${companyId}`),
-      api<{ companyId: number; canCreateDraft: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
+      api<{ companyId: number; canCreateDraft: boolean; canGenerate: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
     ])
       .then(([{ runs: result }, capabilities]) => {
         if (cancelled) return;
         setRuns(result.filter((r) => r.companyId === companyId));
         setCanCreateDraft(capabilities.companyId === companyId && capabilities.canCreateDraft === true);
+        setCanGenerate(capabilities.companyId === companyId && capabilities.canGenerate === true);
       })
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -201,7 +204,7 @@ export default function PayrollWorkspace() {
                     <div key={label} className="rounded-md border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="font-semibold">{value}</p></div>)}
                 </div>
                 {draft && <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" disabled title="Menunggu validasi data karyawan" onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
+                  <Button variant="outline" disabled={!canGenerate || busy} title={canGenerate ? "Muat karyawan aktif ke Draft DEV" : "Menunggu verifikasi backend DEV"} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
                   <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
                 </div>}
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm">
@@ -211,7 +214,7 @@ export default function PayrollWorkspace() {
                       <td className="p-2 text-right">{money(item.baseSalary)}</td><td className="p-2 text-right">{money(item.allowance)}</td>
                       <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td></tr>)}</tbody>
                 </table></div>
-                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan, kalkulasi, persetujuan, pembayaran, dan slip gaji dinonaktifkan hingga integrasi backend serta uji rekonsiliasi lulus.</p>
+                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan Draft dan memuat karyawan hanya tersedia di DEV saat diizinkan server. Kalkulasi, persetujuan, pembayaran, dan slip gaji masih dinonaktifkan.</p>
               </>}
             </CardContent>
           </Card>
