@@ -79,7 +79,7 @@ describe("payroll HTTP isolation", () => {
     state.actor = { id: "u1", email: "user@example.test", role: "finance", companyId: 1, firstName: null, lastName: null };
     const list = await fetch(root + "/api/payroll/runs?companyId=1");
     expect(list.status).toBe(200);
-    expect((await list.json()).runs[0].companyId).toBe(1);
+    expect(((await list.json()) as { runs: Array<{ companyId: number }> }).runs[0].companyId).toBe(1);
     const foreign = await fetch(root + "/api/payroll/runs/9?companyId=1");
     expect(foreign.status).toBe(404);
     const own = await fetch(root + "/api/payroll/runs/8?companyId=1");
