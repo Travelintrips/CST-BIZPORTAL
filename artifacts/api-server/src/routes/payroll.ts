@@ -231,7 +231,7 @@ router.post("/payroll/runs/:id/generate-items", async (req: PayrollRequest, res)
       const invalid = await client.query(
         `SELECT count(*)::integer AS invalid_count FROM public.employees
          WHERE company_id = $1 AND status = 'active' AND deleted_at IS NULL
-           AND (salary IS NULL OR salary <= 0 OR salary <> salary)`,
+           AND (salary IS NULL OR salary <= 0 OR salary::text IN ('NaN', 'Infinity', '-Infinity'))`,
         [companyId],
       );
       if (Number(invalid.rows[0]?.invalid_count ?? 0) > 0) {
