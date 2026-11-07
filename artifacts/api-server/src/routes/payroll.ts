@@ -309,7 +309,7 @@ router.patch("/payroll/runs/:id/items/:itemId", async (req: PayrollRequest, res)
     }
     const amount = Number(raw);
     if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000_000_000 ||
-        Math.round(amount * 100) !== amount * 100) {
+        Math.abs(amount * 100 - Math.round(amount * 100)) > 0.000001) {
       res.status(400).json({ message: `Nilai ${field} harus positif dan maksimal dua desimal.` }); return;
     }
     updates[field] = amount;
