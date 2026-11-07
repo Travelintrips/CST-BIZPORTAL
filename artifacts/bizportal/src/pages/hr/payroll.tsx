@@ -48,6 +48,7 @@ export default function PayrollWorkspace() {
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
+  const [canCreateDraft, setCanCreateDraft] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
@@ -70,6 +71,7 @@ export default function PayrollWorkspace() {
 
   useEffect(() => {
     setRuns([]);
+    setCanCreateDraft(false);
     setSelectedId(null);
     setDetail(null);
     setError("");
@@ -77,8 +79,15 @@ export default function PayrollWorkspace() {
     if (companyId == null) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true);
-    api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${companyId}`)
-      .then(({ runs: result }) => { if (!cancelled) setRuns(result.filter((r) => r.companyId === companyId)); })
+    Promise.all([
+      api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${companyId}`),
+      api<{ companyId: number; canCreateDraft: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
+    ])
+      .then(([{ runs: result }, capabilities]) => {
+        if (cancelled) return;
+        setRuns(result.filter((r) => r.companyId === companyId));
+        setCanCreateDraft(capabilities.companyId === companyId && capabilities.canCreateDraft === true);
+      })
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -131,7 +140,7 @@ export default function PayrollWorkspace() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Gaji Karyawan</h1>
-          <p className="text-sm text-muted-foreground">Payroll multi-company — baca riwayat dan rincian gaji. Semua perubahan ditahan sampai backend DEV PASS.</p>
+          <p className="text-sm text-muted-foreground">Payroll multi-company — riwayat dan rincian. Pembuatan draft hanya tersedia di DEV saat diizinkan server.</p>
         </div>
         <Button variant="outline" disabled={companyId == null || loading || busy} onClick={async () => {
           if (companyId === null) return;
@@ -164,7 +173,7 @@ export default function PayrollWorkspace() {
             <label className="text-sm">Tahun
               <input aria-label="Tahun payroll" className="mt-1 block w-28 rounded-md border bg-background p-2" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
-            <Button disabled title="Menunggu validasi payroll backend" onClick={() => perform("create")}>Buat Draft (Belum Aktif)</Button>
+            <Button disabled={!canCreateDraft || busy || loading || runs.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{canCreateDraft ? "Buat Draft DEV" : "Buat Draft (Belum Aktif)"}</Button>
           </CardContent>
         </Card>
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
