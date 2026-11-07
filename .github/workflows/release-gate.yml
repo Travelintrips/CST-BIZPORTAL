@@ -92,4 +92,17 @@ jobs:
           fi
 
           curl -fsS http://127.0.0.1:3000/ >/dev/null
+
+          # An unauthed Payroll request must reach the real Payroll router
+          # and fail closed (401), never fall through to standalone 404.
+          # This catches builds that serve frontend/health but omit Payroll.
+          for route in /api/payroll/runs?companyId=1 /api/payroll/capabilities?companyId=1; do
+            status=$(curl -sS --max-time 5 -o /tmp/payroll-route-smoke-body -w '%{http_code}' "http://127.0.0.1:3000$route")
+            if [ "$status" != "401" ]; then
+              echo "PAYROLL_ROUTE_SMOKE_FAIL: $route returned $status, expected 401"
+              cat /tmp/payroll-route-smoke-body
+              exit 1
+            fi
+          done
+          echo "PAYROLL_ROUTE_SMOKE_PASS"
           cat /tmp/bizportal-runtime.log
