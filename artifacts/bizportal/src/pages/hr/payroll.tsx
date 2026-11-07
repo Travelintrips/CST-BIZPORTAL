@@ -1,3 +1,4 @@
+import React from "react";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useCompany } from "@/contexts/CompanyContext";
@@ -23,6 +24,10 @@ type PayrollItem = {
     allowance: string;
     grossSalary: string;
     kasbonDeduction: string;
+    bpjsJhtEmployee: string;
+    bpjsKesEmployee: string;
+    pph21: string;
+    otherDeductions: string;
     totalDeductions: string;
     netSalary: string;
   };
@@ -50,6 +55,9 @@ export default function PayrollWorkspace() {
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [canCreateDraft, setCanCreateDraft] = useState(false);
   const [canGenerate, setCanGenerate] = useState(false);
+  const [canEditItems, setCanEditItems] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
@@ -74,6 +82,9 @@ export default function PayrollWorkspace() {
     setRuns([]);
     setCanCreateDraft(false);
     setCanGenerate(false);
+    setCanEditItems(false);
+    setEditingItemId(null);
+    setEditValues({});
     setSelectedId(null);
     setDetail(null);
     setError("");
@@ -83,13 +94,14 @@ export default function PayrollWorkspace() {
     setLoading(true);
     Promise.all([
       api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${companyId}`),
-      api<{ companyId: number; canCreateDraft: boolean; canGenerate: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
+      api<{ companyId: number; canCreateDraft: boolean; canGenerate: boolean; canEditItems: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
     ])
       .then(([{ runs: result }, capabilities]) => {
         if (cancelled) return;
         setRuns(result.filter((r) => r.companyId === companyId));
         setCanCreateDraft(capabilities.companyId === companyId && capabilities.canCreateDraft === true);
         setCanGenerate(capabilities.companyId === companyId && capabilities.canGenerate === true);
+        setCanEditItems(capabilities.companyId === companyId && capabilities.canEditItems === true);
       })
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -132,6 +144,51 @@ export default function PayrollWorkspace() {
   }
 
   const draft = detail?.run.status === "draft";
+  const editableFields = [
+    ["baseSalary", "Gaji Pokok"], ["allowance", "Tunjangan"],
+    ["bpjsJhtEmployee", "BPJS JHT"], ["bpjsKesEmployee", "BPJS Kesehatan"],
+    ["pph21", "PPh21"], ["otherDeductions", "Potongan Lain"],
+  ] as const;
+
+  function beginEditing(item: PayrollItem["item"]) {
+    const values: Record<string, string> = {};
+    for (const [field] of editableFields) values[field] = String(item[field] ?? 0);
+    setEditValues(values);
+    setEditingItemId(item.id);
+    setError("");
+  }
+
+  async function saveEditedItem(itemId: number) {
+    if (busy || companyId == null || selectedId == null || !canEditItems ||
+      detail?.run.companyId !== companyId || detail.run.status !== "draft") return;
+    const updates: Record<string, number> = {};
+    for (const [field, label] of editableFields) {
+      const raw = editValues[field]?.trim() ?? "";
+      if (!/^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$/.test(raw)) {
+        setError(`Nilai ${label} tidak valid.`);
+        return;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value > 1_000_000_000_000) {
+        setError(`Nilai ${label} melebihi batas.`);
+        return;
+      }
+      updates[field] = value;
+    }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await api(runUrl(selectedId, `/items/${itemId}`), {
+        method: "PATCH", body: JSON.stringify(updates),
+      });
+      await refresh(companyId, selectedId);
+      setEditingItemId(null);
+      setNotice("Komponen gaji Draft berhasil diperbarui.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal memperbarui gaji.");
+    } finally {
+      setBusy(false);
+    }
+  }
   const totals = detail?.items.reduce((sum, { item }) => ({
     gross: sum.gross + Number(item.grossSalary || 0),
     advances: sum.advances + Number(item.kasbonDeduction || 0),
@@ -208,13 +265,24 @@ export default function PayrollWorkspace() {
                   <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
                 </div>}
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm">
-                  <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th></tr></thead>
+                  <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th>{draft && canEditItems && <th className="p-2 text-right">Tindakan</th>}</tr></thead>
                   <tbody>{detail.items.map(({ item, employee }) =>
-                    <tr key={item.id} className="border-b"><td className="p-2">{employee ? `${employee.firstName} ${employee.lastName}` : `ID ${item.employeeId}`}</td>
+                    <React.Fragment key={item.id}><tr className="border-b"><td className="p-2">{employee ? `${employee.firstName} ${employee.lastName}` : `ID ${item.employeeId}`}</td>
                       <td className="p-2 text-right">{money(item.baseSalary)}</td><td className="p-2 text-right">{money(item.allowance)}</td>
-                      <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td></tr>)}</tbody>
+                      <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td>
+                      {draft && canEditItems && <td className="p-2 text-right"><Button size="sm" variant="outline" disabled={busy} onClick={() => beginEditing(item)}>Edit</Button></td>}
+                    </tr>
+                    {draft && canEditItems && editingItemId === item.id && <tr className="border-b"><td colSpan={6} className="p-3">
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {editableFields.map(([field, label]) => <label key={field} className="text-xs">{label}
+                          <input className="mt-1 block w-full rounded border bg-background p-2" type="number" min="0" max="1000000000000" step="0.01" value={editValues[field] ?? ""} onChange={(event) => setEditValues((previous) => ({ ...previous, [field]: event.target.value }))}/>
+                        </label>)}
+                      </div>
+                      <div className="mt-3 flex gap-2"><Button size="sm" disabled={busy} onClick={() => saveEditedItem(item.id)}>Simpan Draft</Button>
+                        <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditingItemId(null)}>Batal</Button></div>
+                    </td></tr>}</React.Fragment>)}</tbody>
                 </table></div>
-                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan Draft dan memuat karyawan hanya tersedia di DEV saat diizinkan server. Kalkulasi, persetujuan, pembayaran, dan slip gaji masih dinonaktifkan.</p>
+                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan Draft dan memuat karyawan hanya tersedia di DEV saat diizinkan server. Edit komponen hanya aktif di DEV. Perhitungan kasbon otomatis, persetujuan, pembayaran, dan slip gaji masih dinonaktifkan.</p>
               </>}
             </CardContent>
           </Card>
