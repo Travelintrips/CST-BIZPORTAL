@@ -370,6 +370,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       children: [
         { titleKey: "Daftar Biaya",        href: "/expense",                            icon: Receipt },
         { titleKey: "Dana Karyawan",       href: "/expense/dana-karyawan",              icon: Users },
+        { titleKey: "Gaji Karyawan",       href: "/hr/payroll",                          icon: Wallet },
         { titleKey: "Kasbon Karyawan",     href: "/expense/kasbon",                     icon: DollarSign },
         { titleKey: "Dana Talangan",       href: "/expense/talangan",                   icon: Wallet },
         { titleKey: "Aset Tetap",          href: "/expense/fixed-assets",               icon: Landmark },
