@@ -20,7 +20,8 @@ describe("payroll cross-company isolation", () => {
   });
 
   it("permits explicitly selected companies for privileged multi-company roles", () => {
-    expect(authorizePayrollCompany(admin, "2")).toBe(2);
+    expect(authorizePayrollCompany(admin, "2")).toBeNull();
+    expect(authorizePayrollCompany(admin, "1")).toBe(1);
     expect(authorizePayrollCompany({ role: "owner", companyId: 1 }, "3")).toBe(3);
     expect(authorizePayrollCompany({ role: "super_admin", companyId: null }, "4")).toBe(4);
   });
