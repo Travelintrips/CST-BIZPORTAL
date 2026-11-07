@@ -1,5 +1,5 @@
 import React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +52,13 @@ export default function PayrollWorkspace() {
   const { activeCompany, activeCompanyId, isConsolidated, isLoading: companyLoading } = useCompany();
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
+  const companyIdRef = useRef(companyId);
+  companyIdRef.current = companyId;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [runSearch, setRunSearch] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
+  const [capabilitiesScope, setCapabilitiesScope] = useState<number | null>(null);
   const [canCreateDraft, setCanCreateDraft] = useState(false);
   const [canGenerate, setCanGenerate] = useState(false);
   const [canEditItems, setCanEditItems] = useState(false);
@@ -71,15 +77,24 @@ export default function PayrollWorkspace() {
 
   async function refresh(scopeCompanyId: number, id?: number | null) {
     const response = await api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${scopeCompanyId}`);
+    // A manual refresh or DEV draft write can outlive a company change.
+    // Never put the old company's response back into the new workspace.
+    if (companyIdRef.current !== scopeCompanyId) return;
     setRuns(response.runs.filter((r) => r.companyId === scopeCompanyId));
     if (id != null) {
       const chosen = response.runs.find((r) => r.id === id && r.companyId === scopeCompanyId);
-      setDetail(chosen ? await api<RunDetail>(`/api/payroll/runs/${id}?companyId=${scopeCompanyId}`) : null);
+      const nextDetail = chosen ? await api<RunDetail>(`/api/payroll/runs/${id}?companyId=${scopeCompanyId}`) : null;
+      if (companyIdRef.current !== scopeCompanyId) return;
+      setDetail(nextDetail?.run.companyId === scopeCompanyId ? nextDetail : null);
     }
   }
 
   useEffect(() => {
     setRuns([]);
+    setStatusFilter("all");
+    setRunSearch("");
+    setEmployeeSearch("");
+    setCapabilitiesScope(null);
     setCanCreateDraft(false);
     setCanGenerate(false);
     setCanEditItems(false);
@@ -99,6 +114,7 @@ export default function PayrollWorkspace() {
       .then(([{ runs: result }, capabilities]) => {
         if (cancelled) return;
         setRuns(result.filter((r) => r.companyId === companyId));
+        setCapabilitiesScope(capabilities.companyId === companyId ? companyId : null);
         setCanCreateDraft(capabilities.companyId === companyId && capabilities.canCreateDraft === true);
         setCanGenerate(capabilities.companyId === companyId && capabilities.canGenerate === true);
         setCanEditItems(capabilities.companyId === companyId && capabilities.canEditItems === true);
@@ -143,7 +159,7 @@ export default function PayrollWorkspace() {
     } finally { setBusy(false); }
   }
 
-  const draft = detail?.run.status === "draft";
+  const draft = detail?.run.companyId === companyId && detail.run.status === "draft";
   const editableFields = [
     ["baseSalary", "Gaji Pokok"], ["allowance", "Tunjangan"],
     ["bpjsJhtEmployee", "BPJS JHT"], ["bpjsKesEmployee", "BPJS Kesehatan"],
@@ -189,7 +205,28 @@ export default function PayrollWorkspace() {
       setBusy(false);
     }
   }
-  const totals = detail?.items.reduce((sum, { item }) => ({
+  // Render-time scope guard: even before React runs effects for a company switch,
+  // never render the previous company's payroll rows, salary totals or capabilities.
+  const scopedRuns = runs.filter((run) => run.companyId === companyId);
+  const scopedDetail = detail?.run.companyId === companyId ? detail : null;
+  const createAllowed = canCreateDraft && capabilitiesScope === companyId;
+  const generateAllowed = canGenerate && capabilitiesScope === companyId;
+  const editAllowed = canEditItems && capabilitiesScope === companyId;
+  const statusCounts = scopedRuns.reduce<Record<string, number>>((counts, run) => {
+    const status = run.status.toLowerCase();
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const statusOptions = ["all", ...Object.keys(statusCounts).sort()];
+  const filteredRuns = scopedRuns.filter((run) =>
+    (statusFilter === "all" || run.status.toLowerCase() === statusFilter) &&
+    (`${String(run.month).padStart(2, "0")}/${run.year} #${run.id}`.toLowerCase().includes(runSearch.trim().toLowerCase()))
+  );
+  const filteredItems = (scopedDetail?.items ?? []).filter(({ item, employee }) =>
+    `${employee?.firstName ?? ""} ${employee?.lastName ?? ""} ${item.employeeId}`.toLowerCase()
+      .includes(employeeSearch.trim().toLowerCase())
+  );
+  const totals = scopedDetail?.items.reduce((sum, { item }) => ({
     gross: sum.gross + Number(item.grossSalary || 0),
     advances: sum.advances + Number(item.kasbonDeduction || 0),
     net: sum.net + Number(item.netSalary || 0),
@@ -233,15 +270,30 @@ export default function PayrollWorkspace() {
             <label className="text-sm">Tahun
               <input aria-label="Tahun payroll" className="mt-1 block w-28 rounded-md border bg-background p-2" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
-            <Button disabled={!canCreateDraft || busy || loading || runs.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{canCreateDraft ? "Buat Draft DEV" : "Buat Draft (Belum Aktif)"}</Button>
+            <Button disabled={!createAllowed || busy || loading || scopedRuns.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{createAllowed ? "Buat Draft DEV" : "Buat Draft (Belum Aktif)"}</Button>
           </CardContent>
         </Card>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Ringkasan periode payroll">
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Total Periode</p><p className="text-2xl font-semibold">{scopedRuns.length}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Draft</p><p className="text-2xl font-semibold">{statusCounts.draft ?? 0}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Approved (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.approved ?? 0}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Paid (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.paid ?? 0}</p></div>
+        </div>
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
           <Card><CardHeader><CardTitle className="text-lg">Riwayat Periode</CardTitle></CardHeader>
             <CardContent className="space-y-2">
+              <label className="block text-xs text-muted-foreground">Cari periode atau ID
+                <input className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" placeholder="Contoh: 11/2026 atau #12" value={runSearch} onChange={(e) => setRunSearch(e.target.value)} />
+              </label>
+              <label className="block text-xs text-muted-foreground">Filter status
+                <select aria-label="Filter status payroll" className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                  {statusOptions.map((status) => <option key={status} value={status}>{status === "all" ? `Semua (${scopedRuns.length})` : `${status} (${statusCounts[status] ?? 0})`}</option>)}
+                </select>
+              </label>
               {loading && <Loader2 className="h-5 w-5 animate-spin" />}
-              {!loading && runs.length === 0 && <p className="text-sm text-muted-foreground">Belum ada periode.</p>}
-              {runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedId(run.id)}
+              {!loading && scopedRuns.length === 0 && <p className="text-sm text-muted-foreground">Belum ada periode.</p>}
+              {!loading && scopedRuns.length > 0 && filteredRuns.length === 0 && <p className="text-sm text-muted-foreground">Tidak ada periode sesuai filter.</p>}
+              {filteredRuns.map((run) => <button key={run.id} type="button" onClick={() => setSelectedId(run.id)}
                 className={`flex w-full items-center justify-between rounded-md border p-3 text-left text-sm ${run.id === selectedId ? "border-primary bg-primary/10" : "hover:bg-muted"}`}>
                 <span>{String(run.month).padStart(2, "0")}/{run.year} <span className="text-muted-foreground">#{run.id}</span></span>
                 <Badge variant="secondary">{run.status}</Badge>
@@ -250,29 +302,32 @@ export default function PayrollWorkspace() {
           </Card>
           <Card><CardHeader><CardTitle className="text-lg">Rincian Payroll</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              {!detail || detail.run.id !== selectedId ? <p className="text-sm text-muted-foreground">Pilih periode untuk melihat perhitungan.</p> : <>
-                {detail.integrityError && <div role="alert" className="flex gap-2 rounded-md border border-red-500/40 p-3 text-sm text-red-500"><AlertTriangle className="h-4 w-4 shrink-0" />{detail.integrityError}</div>}
+              {!scopedDetail || scopedDetail.run.id !== selectedId ? <p className="text-sm text-muted-foreground">Pilih periode untuk melihat perhitungan.</p> : <>
+                {scopedDetail.integrityError && <div role="alert" className="flex gap-2 rounded-md border border-red-500/40 p-3 text-sm text-red-500"><AlertTriangle className="h-4 w-4 shrink-0" />{scopedDetail.integrityError}</div>}
                 <div className="flex flex-wrap gap-2">
-                  <Badge>{detail.run.status}</Badge>
-                  <Badge variant="outline">Posting: {detail.run.postingStatus || "pending"}</Badge>
+                  <Badge>{scopedDetail.run.status}</Badge>
+                  <Badge variant="outline">Posting: {scopedDetail.run.postingStatus || "pending"}</Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  {[[ "Karyawan", detail.items.length.toString() ], [ "Gaji Kotor", money(totals.gross) ], [ "Kasbon", money(totals.advances) ], [ "Gaji Bersih", money(totals.net) ]].map(([label, value]) =>
+                  {[[ "Karyawan", scopedDetail.items.length.toString() ], [ "Gaji Kotor", money(totals.gross) ], [ "Kasbon", money(totals.advances) ], [ "Gaji Bersih", money(totals.net) ]].map(([label, value]) =>
                     <div key={label} className="rounded-md border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="font-semibold">{value}</p></div>)}
                 </div>
                 {draft && <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" disabled={!canGenerate || busy} title={canGenerate ? "Muat karyawan aktif ke Draft DEV" : "Menunggu verifikasi backend DEV"} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
+                  <Button variant="outline" disabled={!generateAllowed || busy} title={generateAllowed ? "Muat karyawan aktif ke Draft DEV" : "Menunggu verifikasi backend DEV"} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
                   <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
                 </div>}
+                <label className="block text-xs text-muted-foreground">Cari nama atau ID karyawan
+                  <input aria-label="Cari karyawan payroll" className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" placeholder="Cari karyawan pada periode ini" value={employeeSearch} onChange={(e) => setEmployeeSearch(e.target.value)} />
+                </label>
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm">
-                  <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th>{draft && canEditItems && <th className="p-2 text-right">Tindakan</th>}</tr></thead>
-                  <tbody>{detail.items.map(({ item, employee }) =>
+                  <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th>{draft && editAllowed && <th className="p-2 text-right">Tindakan</th>}</tr></thead>
+                  <tbody>{filteredItems.length === 0 && <tr><td colSpan={draft && editAllowed ? 6 : 5} className="p-3 text-center text-muted-foreground">Tidak ada karyawan sesuai pencarian.</td></tr>}{filteredItems.map(({ item, employee }) =>
                     <React.Fragment key={item.id}><tr className="border-b"><td className="p-2">{employee ? `${employee.firstName} ${employee.lastName}` : `ID ${item.employeeId}`}</td>
                       <td className="p-2 text-right">{money(item.baseSalary)}</td><td className="p-2 text-right">{money(item.allowance)}</td>
                       <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td>
-                      {draft && canEditItems && <td className="p-2 text-right"><Button size="sm" variant="outline" disabled={busy} onClick={() => beginEditing(item)}>Edit</Button></td>}
+                      {draft && editAllowed && <td className="p-2 text-right"><Button size="sm" variant="outline" disabled={busy} onClick={() => beginEditing(item)}>Edit</Button></td>}
                     </tr>
-                    {draft && canEditItems && editingItemId === item.id && <tr className="border-b"><td colSpan={6} className="p-3">
+                    {draft && editAllowed && editingItemId === item.id && <tr className="border-b"><td colSpan={6} className="p-3">
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         {editableFields.map(([field, label]) => <label key={field} className="text-xs">{label}
                           <input className="mt-1 block w-full rounded border bg-background p-2" type="number" min="0" max="1000000000000" step="0.01" value={editValues[field] ?? ""} onChange={(event) => setEditValues((previous) => ({ ...previous, [field]: event.target.value }))}/>
