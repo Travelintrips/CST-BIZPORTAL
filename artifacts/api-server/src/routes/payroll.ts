@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { pool } from "@workspace/db";
+import { authorizePayrollCompany } from "./payroll-access";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 /**
@@ -9,17 +10,6 @@ import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEn
  */
 const router: IRouter = Router();
 type PayrollRequest = Request & { payrollActor?: DevAuthUser; payrollCompanyId?: number };
-const privileged = new Set(["admin", "owner", "super_admin"]);
-
-export function authorizePayrollCompany(actor: DevAuthUser | null, rawCompanyId: unknown): number | null {
-  if (!actor || !["admin", "owner", "super_admin", "finance", "accounting"].includes(actor.role.toLowerCase())) return null;
-  if (typeof rawCompanyId !== "string" || !/^[1-9][0-9]*$/.test(rawCompanyId)) return null;
-  const companyId = Number(rawCompanyId);
-  if (!Number.isSafeInteger(companyId)) return null;
-  if (!privileged.has(actor.role.toLowerCase()) && actor.companyId !== companyId) return null;
-  return companyId;
-}
-
 async function authorize(request: PayrollRequest, response: Response, next: NextFunction): Promise<void> {
   try {
     const actor = isDevelopmentEnvironment()
