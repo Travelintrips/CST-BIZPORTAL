@@ -133,4 +133,32 @@ describe("Payroll workspace company isolation and HRD filters", () => {
     await screen.findByText("BETA TEST");
     expect(screen.queryByText("ALFA TEST")).toBeNull();
   });
+  it("discards a pending manual refresh for company A after switching to B", async () => {
+    const realFetch = globalThis.fetch;
+    let releaseRefresh!: (response: Response) => void;
+    let manualRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => { manualRefreshStarted = resolve; });
+    const pending = new Promise<Response>((resolve) => { releaseRefresh = resolve; });
+    let listRequestsA = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const parsed = new URL(String(url), "http://localhost");
+      if (parsed.pathname === "/api/payroll/runs" && parsed.searchParams.get("companyId") === "11") {
+        listRequestsA += 1;
+        if (listRequestsA === 2) { manualRefreshStarted(); return pending; }
+      }
+      return realFetch(url);
+    }));
+    const page = render(<PayrollWorkspace />);
+    await screen.findByText("11/2026");
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await refreshStarted;
+    companyState.id = 22;
+    page.rerender(<PayrollWorkspace />);
+    await screen.findByText("09/2026");
+    releaseRefresh(successfulResponse({ runs: runs[11] }));
+    await waitFor(() => {
+      expect(screen.queryByText("11/2026")).toBeNull();
+      expect(screen.getByText("09/2026")).toBeTruthy();
+    });
+  });
 });

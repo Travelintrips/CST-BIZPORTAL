@@ -1,5 +1,5 @@
 import React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +52,8 @@ export default function PayrollWorkspace() {
   const { activeCompany, activeCompanyId, isConsolidated, isLoading: companyLoading } = useCompany();
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
+  const companyIdRef = useRef(companyId);
+  companyIdRef.current = companyId;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [runSearch, setRunSearch] = useState("");
@@ -74,10 +76,15 @@ export default function PayrollWorkspace() {
 
   async function refresh(scopeCompanyId: number, id?: number | null) {
     const response = await api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${scopeCompanyId}`);
+    // A manual refresh or DEV draft write can outlive a company change.
+    // Never put the old company's response back into the new workspace.
+    if (companyIdRef.current !== scopeCompanyId) return;
     setRuns(response.runs.filter((r) => r.companyId === scopeCompanyId));
     if (id != null) {
       const chosen = response.runs.find((r) => r.id === id && r.companyId === scopeCompanyId);
-      setDetail(chosen ? await api<RunDetail>(`/api/payroll/runs/${id}?companyId=${scopeCompanyId}`) : null);
+      const nextDetail = chosen ? await api<RunDetail>(`/api/payroll/runs/${id}?companyId=${scopeCompanyId}`) : null;
+      if (companyIdRef.current !== scopeCompanyId) return;
+      setDetail(nextDetail?.run.companyId === scopeCompanyId ? nextDetail : null);
     }
   }
 
