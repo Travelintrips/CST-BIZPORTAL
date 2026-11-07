@@ -8,6 +8,6 @@ export function authorizePayrollCompany(actor: PayrollActor | null, rawCompanyId
   if (typeof rawCompanyId !== "string" || !/^[1-9][0-9]*$/.test(rawCompanyId)) return null;
   const companyId = Number(rawCompanyId);
   if (!Number.isSafeInteger(companyId)) return null;
-  if (!["admin", "owner", "super_admin"].includes(role) && actor.companyId !== companyId) return null;
+  if (!["owner", "super_admin"].includes(role) && actor.companyId !== companyId) return null;
   return companyId;
 }
