@@ -123,6 +123,9 @@ router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
     canGenerate: isDevelopmentEnvironment()
       && process.env.PAYROLL_DEV_GENERATE_ENABLED === "true"
       && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? ""),
+    canEditItems: isDevelopmentEnvironment()
+      && process.env.PAYROLL_DEV_ITEM_EDIT_ENABLED === "true"
+      && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? ""),
     canCalculate: false,
     canApprove: false,
     canPay: false,
@@ -271,6 +274,118 @@ router.post("/payroll/runs/:id/generate-items", async (req: PayrollRequest, res)
     res.status(503).json({ message: "Daftar payroll tidak dapat dibuat." });
   }
 });
+/**
+ * DEV-only edits to non-kasbon salary fields. Recompute net in one transaction.
+ * Do not settle advances or post any ledger changes.
+ */
+router.patch("/payroll/runs/:id/items/:itemId", async (req: PayrollRequest, res): Promise<void> => {
+  if (!isDevelopmentEnvironment() || process.env.PAYROLL_DEV_ITEM_EDIT_ENABLED !== "true") {
+    res.status(501).json({ message: "Edit komponen gaji belum diaktifkan." }); return;
+  }
+  if (!["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? "")) {
+    res.status(403).json({ message: "Tidak berwenang mengubah gaji." }); return;
+  }
+  const runId = positiveId(req.params.id);
+  const itemId = positiveId(req.params.itemId);
+  if (!runId || !itemId) { res.status(400).json({ message: "ID payroll/item tidak valid." }); return; }
+
+  const fields = ["baseSalary", "allowance", "bpjsJhtEmployee", "bpjsKesEmployee", "pph21", "otherDeductions"] as const;
+  const data = req.body;
+  if (!data || typeof data !== "object" || Array.isArray(data) ||
+      Object.keys(data).length === 0 || Object.keys(data).some((key) => !fields.includes(key as typeof fields[number]))) {
+    res.status(400).json({ message: "Hanya komponen gaji yang diizinkan dapat diubah." }); return;
+  }
+  const updates: Record<string, number> = {};
+  for (const field of fields) {
+    if (!(field in data)) continue;
+    const raw = data[field];
+    if ((typeof raw !== "number" && typeof raw !== "string") ||
+        (typeof raw === "string" && !/^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$/.test(raw)) ||
+        raw === "") {
+      res.status(400).json({ message: `Nilai ${field} tidak valid.` }); return;
+    }
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000_000_000 ||
+        Math.round(amount * 100) !== amount * 100) {
+      res.status(400).json({ message: `Nilai ${field} harus positif dan maksimal dua desimal.` }); return;
+    }
+    updates[field] = amount;
+  }
+
+  const companyId = req.payrollCompanyId!;
+  try {
+    const client = await pool.connect();
+    let activeTransaction = false;
+    try {
+      await client.query("BEGIN");
+      activeTransaction = true;
+      await client.query("SELECT pg_advisory_xact_lock($1::integer, $2::integer)", [companyId, -runId]);
+      const run = await client.query(
+        "SELECT id, status FROM public.payroll_runs WHERE company_id = $1 AND id = $2 FOR UPDATE", [companyId, runId],
+      );
+      if (!run.rowCount) {
+        await client.query("ROLLBACK"); activeTransaction = false;
+        res.status(404).json({ message: "Periode bukan milik perusahaan ini." }); return;
+      }
+      if (run.rows[0].status !== "draft") {
+        await client.query("ROLLBACK"); activeTransaction = false;
+        res.status(409).json({ message: "Item hanya dapat diubah ketika periode Draft." }); return;
+      }
+      const itemResult = await client.query(
+        `SELECT pi.id, pi.base_salary, pi.allowance, pi.bpjs_jht_employee, pi.bpjs_kes_employee,
+                pi.pph21, pi.other_deductions, pi.kasbon_deduction
+         FROM public.payroll_items pi
+         JOIN public.employees e ON e.id = pi.employee_id AND e.company_id = $1
+         WHERE pi.id = $2 AND pi.run_id = $3 FOR UPDATE OF pi`,
+        [companyId, itemId, runId],
+      );
+      if (!itemResult.rowCount) {
+        await client.query("ROLLBACK"); activeTransaction = false;
+        res.status(404).json({ message: "Item bukan milik perusahaan ini." }); return;
+      }
+      const item = itemResult.rows[0];
+      const take = (field: typeof fields[number], column: string) => updates[field] ?? Number(item[column]);
+      const base = take("baseSalary", "base_salary");
+      const allowance = take("allowance", "allowance");
+      const bpjsJht = take("bpjsJhtEmployee", "bpjs_jht_employee");
+      const bpjsKes = take("bpjsKesEmployee", "bpjs_kes_employee");
+      const pph21 = take("pph21", "pph21");
+      const other = take("otherDeductions", "other_deductions");
+      const kasbon = Number(item.kasbon_deduction);
+      const gross = base + allowance;
+      const deductions = bpjsJht + bpjsKes + pph21 + other + kasbon;
+      const net = gross - deductions;
+      if (![gross, deductions, net].every(Number.isFinite) || net < 0) {
+        await client.query("ROLLBACK"); activeTransaction = false;
+        res.status(409).json({ message: "Potongan lebih besar dari gaji kotor." }); return;
+      }
+      const result = await client.query(
+        `UPDATE public.payroll_items
+         SET base_salary=$1, allowance=$2, bpjs_jht_employee=$3, bpjs_kes_employee=$4,
+             pph21=$5, other_deductions=$6, gross_salary=$7, total_deductions=$8, net_salary=$9
+         WHERE id=$10 AND run_id=$11 RETURNING id, base_salary, allowance, gross_salary,
+             total_deductions, net_salary, kasbon_deduction`,
+        [base, allowance, bpjsJht, bpjsKes, pph21, other, gross, deductions, net, itemId, runId],
+      );
+      await client.query("COMMIT");
+      activeTransaction = false;
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      if (activeTransaction) {
+        try { await client.query("ROLLBACK"); } catch (rollbackError) {
+          req.log.error({ rollbackError }, "Payroll item edit rollback failed");
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    req.log.error({ error, companyId, runId, itemId }, "Payroll item edit failed");
+    res.status(503).json({ message: "Item payroll tidak dapat diubah." });
+  }
+});
+
 router.post("/payroll/runs/:id/calculate", (_req, res) => {
   res.status(501).json({ message: "Perhitungan kasbon belum diporting dan belum diverifikasi." });
 });
