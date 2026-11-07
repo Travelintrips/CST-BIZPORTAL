@@ -45,7 +45,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function PayrollWorkspace() {
   const { activeCompany, activeCompanyId, isConsolidated, isLoading: companyLoading } = useCompany();
-  const companyId = !isConsolidated && Number.isSafeInteger(activeCompanyId) && Number(activeCompanyId) > 0
+  const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
