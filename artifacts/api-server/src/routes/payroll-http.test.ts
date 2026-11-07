@@ -84,7 +84,7 @@ describe("payroll HTTP isolation", () => {
     expect(foreign.status).toBe(404);
     const own = await fetch(root + "/api/payroll/runs/8?companyId=1");
     expect(own.status).toBe(200);
-    expect((await own.json()).run.companyId).toBe(1);
+    expect(((await own.json()) as { run: { companyId: number } }).run.companyId).toBe(1);
     expect(state.queries.every((query) => Number(query.values[0]) === 1)).toBe(true);
   });
 
