@@ -12,12 +12,12 @@ const router: IRouter = Router();
 type PayrollRequest = Request & { payrollActor?: DevAuthUser; payrollCompanyId?: number };
 async function authorize(request: PayrollRequest, response: Response, next: NextFunction): Promise<void> {
   try {
-    const actor = isDevelopmentEnvironment()
-      ? getDevSession(request)
-      : await (async () => {
-          const session = getProductionSession(request);
-          return session ? getProductionUser(session) : null;
-        })();
+    // BizPortal uses Supabase-exchanged application sessions in both DEV and PROD.
+    // The isolated DEV cookie remains an explicit development-only fallback.
+    const session = getProductionSession(request);
+    const actor = session
+      ? await getProductionUser(session)
+      : isDevelopmentEnvironment() ? getDevSession(request) : null;
     if (!actor) { response.status(401).json({ message: "Sesi tidak tersedia." }); return; }
     const companyId = authorizePayrollCompany(actor, request.query.companyId);
     if (companyId === null) { response.status(403).json({ message: "Akses payroll perusahaan ditolak." }); return; }
