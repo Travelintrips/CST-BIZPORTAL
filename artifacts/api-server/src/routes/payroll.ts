@@ -147,42 +147,45 @@ router.post("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => 
     return;
   }
   const companyId = req.payrollCompanyId!;
-  let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
-  let activeTransaction = false;
   try {
-    client = await pool.connect();
-    await client.query("BEGIN");
-    activeTransaction = true;
-    await client.query("SELECT pg_advisory_xact_lock($1::integer, $2::integer)", [companyId, year * 100 + month]);
-    const existing = await client.query(
-      "SELECT id FROM public.payroll_runs WHERE company_id = $1 AND month = $2 AND year = $3 LIMIT 1",
-      [companyId, month, year],
-    );
-    if (existing.rowCount) {
-      await client.query("ROLLBACK");
-      activeTransaction = false;
-      res.status(409).json({ message: "Periode payroll perusahaan ini sudah ada." });
-      return;
-    }
-    const inserted = await client.query(
-      `INSERT INTO public.payroll_runs (company_id, month, year, notes, status)
-       VALUES ($1, $2, $3, $4, 'draft')
-       RETURNING id, company_id, month, year, status, posting_status, accounting_entry_id, payment_entry_id`,
-      [companyId, month, year, notes?.trim() || null],
-    );
-    await client.query("COMMIT");
-    activeTransaction = false;
-    res.status(201).json({ run: serializeRun(inserted.rows[0]) });
-  } catch (error) {
-    if (activeTransaction && client) {
-      try { await client.query("ROLLBACK"); } catch (rollbackError) {
-        req.log.error({ rollbackError }, "Payroll draft rollback failed");
+    const client = await pool.connect();
+    let activeTransaction = false;
+    try {
+      await client.query("BEGIN");
+      activeTransaction = true;
+      await client.query("SELECT pg_advisory_xact_lock($1::integer, $2::integer)", [companyId, year * 100 + month]);
+      const existing = await client.query(
+        "SELECT id FROM public.payroll_runs WHERE company_id = $1 AND month = $2 AND year = $3 LIMIT 1",
+        [companyId, month, year],
+      );
+      if (existing.rowCount) {
+        await client.query("ROLLBACK");
+        activeTransaction = false;
+        res.status(409).json({ message: "Periode payroll perusahaan ini sudah ada." });
+        return;
       }
+      const inserted = await client.query(
+        `INSERT INTO public.payroll_runs (company_id, month, year, notes, status)
+         VALUES ($1, $2, $3, $4, 'draft')
+         RETURNING id, company_id, month, year, status, posting_status, accounting_entry_id, payment_entry_id`,
+        [companyId, month, year, notes?.trim() || null],
+      );
+      await client.query("COMMIT");
+      activeTransaction = false;
+      res.status(201).json({ run: serializeRun(inserted.rows[0]) });
+    } catch (error) {
+      if (activeTransaction) {
+        try { await client.query("ROLLBACK"); } catch (rollbackError) {
+          req.log.error({ rollbackError }, "Payroll draft rollback failed");
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
     }
+  } catch (error) {
     req.log.error({ error, companyId }, "Payroll draft create failed");
     res.status(503).json({ message: "Draft payroll tidak dapat dibuat." });
-  } finally {
-    client?.release();
   }
 });
 router.post("/payroll/runs/:id/generate-items", (_req, res) => {
