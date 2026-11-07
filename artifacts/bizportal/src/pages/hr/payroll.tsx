@@ -53,6 +53,9 @@ export default function PayrollWorkspace() {
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
   const [runs, setRuns] = useState<PayrollRun[]>([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [runSearch, setRunSearch] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
   const [canCreateDraft, setCanCreateDraft] = useState(false);
   const [canGenerate, setCanGenerate] = useState(false);
   const [canEditItems, setCanEditItems] = useState(false);
@@ -80,6 +83,9 @@ export default function PayrollWorkspace() {
 
   useEffect(() => {
     setRuns([]);
+    setStatusFilter("all");
+    setRunSearch("");
+    setEmployeeSearch("");
     setCanCreateDraft(false);
     setCanGenerate(false);
     setCanEditItems(false);
@@ -189,6 +195,20 @@ export default function PayrollWorkspace() {
       setBusy(false);
     }
   }
+  const statusCounts = runs.reduce<Record<string, number>>((counts, run) => {
+    const status = run.status.toLowerCase();
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const statusOptions = ["all", ...Object.keys(statusCounts).sort()];
+  const filteredRuns = runs.filter((run) =>
+    (statusFilter === "all" || run.status.toLowerCase() === statusFilter) &&
+    (`${String(run.month).padStart(2, "0")}/${run.year} #${run.id}`.toLowerCase().includes(runSearch.trim().toLowerCase()))
+  );
+  const filteredItems = (detail?.items ?? []).filter(({ item, employee }) =>
+    `${employee?.firstName ?? ""} ${employee?.lastName ?? ""} ${item.employeeId}`.toLowerCase()
+      .includes(employeeSearch.trim().toLowerCase())
+  );
   const totals = detail?.items.reduce((sum, { item }) => ({
     gross: sum.gross + Number(item.grossSalary || 0),
     advances: sum.advances + Number(item.kasbonDeduction || 0),
@@ -236,12 +256,27 @@ export default function PayrollWorkspace() {
             <Button disabled={!canCreateDraft || busy || loading || runs.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{canCreateDraft ? "Buat Draft DEV" : "Buat Draft (Belum Aktif)"}</Button>
           </CardContent>
         </Card>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Ringkasan periode payroll">
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Total Periode</p><p className="text-2xl font-semibold">{runs.length}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Draft</p><p className="text-2xl font-semibold">{statusCounts.draft ?? 0}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Approved (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.approved ?? 0}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Paid (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.paid ?? 0}</p></div>
+        </div>
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
           <Card><CardHeader><CardTitle className="text-lg">Riwayat Periode</CardTitle></CardHeader>
             <CardContent className="space-y-2">
+              <label className="block text-xs text-muted-foreground">Cari periode atau ID
+                <input className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" placeholder="Contoh: 11/2026 atau #12" value={runSearch} onChange={(e) => setRunSearch(e.target.value)} />
+              </label>
+              <label className="block text-xs text-muted-foreground">Filter status
+                <select aria-label="Filter status payroll" className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                  {statusOptions.map((status) => <option key={status} value={status}>{status === "all" ? `Semua (${runs.length})` : `${status} (${statusCounts[status] ?? 0})`}</option>)}
+                </select>
+              </label>
               {loading && <Loader2 className="h-5 w-5 animate-spin" />}
               {!loading && runs.length === 0 && <p className="text-sm text-muted-foreground">Belum ada periode.</p>}
-              {runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedId(run.id)}
+              {!loading && runs.length > 0 && filteredRuns.length === 0 && <p className="text-sm text-muted-foreground">Tidak ada periode sesuai filter.</p>}
+              {filteredRuns.map((run) => <button key={run.id} type="button" onClick={() => setSelectedId(run.id)}
                 className={`flex w-full items-center justify-between rounded-md border p-3 text-left text-sm ${run.id === selectedId ? "border-primary bg-primary/10" : "hover:bg-muted"}`}>
                 <span>{String(run.month).padStart(2, "0")}/{run.year} <span className="text-muted-foreground">#{run.id}</span></span>
                 <Badge variant="secondary">{run.status}</Badge>
@@ -264,9 +299,12 @@ export default function PayrollWorkspace() {
                   <Button variant="outline" disabled={!canGenerate || busy} title={canGenerate ? "Muat karyawan aktif ke Draft DEV" : "Menunggu verifikasi backend DEV"} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
                   <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
                 </div>}
+                <label className="block text-xs text-muted-foreground">Cari nama atau ID karyawan
+                  <input aria-label="Cari karyawan payroll" className="mt-1 block w-full rounded-md border bg-background p-2 text-sm" placeholder="Cari karyawan pada periode ini" value={employeeSearch} onChange={(e) => setEmployeeSearch(e.target.value)} />
+                </label>
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm">
                   <thead><tr className="border-b"><th className="p-2">Karyawan</th><th className="p-2 text-right">Gaji Pokok</th><th className="p-2 text-right">Tunjangan</th><th className="p-2 text-right">Kasbon</th><th className="p-2 text-right">Bersih</th>{draft && canEditItems && <th className="p-2 text-right">Tindakan</th>}</tr></thead>
-                  <tbody>{detail.items.map(({ item, employee }) =>
+                  <tbody>{filteredItems.length === 0 && <tr><td colSpan={draft && canEditItems ? 6 : 5} className="p-3 text-center text-muted-foreground">Tidak ada karyawan sesuai pencarian.</td></tr>}{filteredItems.map(({ item, employee }) =>
                     <React.Fragment key={item.id}><tr className="border-b"><td className="p-2">{employee ? `${employee.firstName} ${employee.lastName}` : `ID ${item.employeeId}`}</td>
                       <td className="p-2 text-right">{money(item.baseSalary)}</td><td className="p-2 text-right">{money(item.allowance)}</td>
                       <td className="p-2 text-right">{money(item.kasbonDeduction)}</td><td className="p-2 text-right font-medium">{money(item.netSalary)}</td>
