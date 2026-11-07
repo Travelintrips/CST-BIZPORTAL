@@ -107,4 +107,30 @@ describe("Payroll workspace company isolation and HRD filters", () => {
       expect(screen.getByText("Perusahaan 22")).toBeTruthy();
     });
   });
+  it("never displays a late company A payroll detail after switching to company B", async () => {
+    let releaseDetailA!: (response: Response) => void;
+    const delayedDetailA = new Promise<Response>((resolve) => { releaseDetailA = resolve; });
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const target = new URL(String(url), "http://localhost");
+      if (target.pathname === "/api/payroll/runs/101" && target.searchParams.get("companyId") === "11") return delayedDetailA;
+      return originalFetch(url);
+    }));
+    const page = render(<PayrollWorkspace />);
+    await screen.findByText("11/2026");
+    fireEvent.click(screen.getByText("11/2026").closest("button")!);
+    await waitFor(() => expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([url]) => String(url).includes("/runs/101?companyId=11"))).toBe(true));
+    companyState.id = 22;
+    page.rerender(<PayrollWorkspace />);
+    await screen.findByText("09/2026");
+    releaseDetailA(successfulResponse(details[101]));
+    await waitFor(() => {
+      expect(screen.queryByText("ALFA TEST")).toBeNull();
+      expect(screen.queryByText("11/2026")).toBeNull();
+      expect(screen.getByText("Perusahaan 22")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("09/2026").closest("button")!);
+    await screen.findByText("BETA TEST");
+    expect(screen.queryByText("ALFA TEST")).toBeNull();
+  });
 });
