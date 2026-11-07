@@ -88,7 +88,7 @@ describe("DEV payroll draft HTTP guard", () => {
     process.env.PAYROLL_DEV_DRAFT_ENABLED = "true";
     const response = await create({ month: 11, year: 2026 });
     expect(response.status).toBe(201);
-    const payload = await response.json();
+    const payload = await response.json() as { run: { companyId: number; month: number; year: number; status: string } };
     expect(payload.run).toMatchObject({ companyId: 1, month: 11, year: 2026, status: "draft" });
     expect(state.calls.map((c) => c.sql.trim().split(" ")[0])).toEqual([
       "BEGIN", "SELECT", "SELECT", "INSERT", "COMMIT",
