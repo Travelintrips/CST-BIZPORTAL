@@ -6,10 +6,6 @@ type ScopedPayrollRequest = Request & {
   payrollActor?: { role: string };
 };
 
-const codes = [
-  "bpjs_jht_employee", "bpjs_kes_employee", "pph21",
-  "other_deductions", "kasbon_deduction",
-] as const;
 const fields = [
   "baseSalary","allowance","bpjsJhtEmployee","bpjsKesEmployee","pph21",
   "otherDeductions","kasbonDeduction",
