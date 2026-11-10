@@ -59,13 +59,16 @@ describe("Standalone Payroll PROD compensation UI",()=>{
   expect(save.disabled).toBe(true);
   for(const [name,value] of [
     ["Gaji Pokok",reference.baseSalary],["Tunjangan (termasuk uang makan)",reference.allowance],
-    ["Potongan Kasbon",reference.kasbonDeduction],["BPJS JHT",reference.bpjsJhtEmployee],
+    ["Potongan Kasbon / Cicilan Gaji",reference.kasbonDeduction],["BPJS JHT",reference.bpjsJhtEmployee],
     ["BPJS Kesehatan",reference.bpjsKesEmployee],["PPh21",reference.pph21],
     ["Potongan Lainnya",reference.otherDeductions],
   ])fireEvent.change(screen.getByLabelText(name),{target:{value}});
   expect(save.disabled).toBe(true);
   fireEvent.change(screen.getByLabelText("Sumber komponen gaji"),{target:{value:"Catatan kasbon HR"}});
   await waitFor(()=>expect(save.disabled).toBe(false));
+  expect(screen.getByText(/bukan total kasbon yang diterima/)).toBeTruthy();
+  expect(screen.getByText(/Tidak otomatis dari Rekonsiliasi Bank/)).toBeTruthy();
+  expect(screen.getByText(/bukan tanggal pencairan atau jadwal pelunasan/)).toBeTruthy();
   expect(screen.getByText(/Rp\s*5.574.999,75/)).toBeTruthy();
   expect(payloads.filter(x=>x.method==="PUT")).toHaveLength(0);
  });
@@ -77,7 +80,7 @@ describe("Standalone Payroll PROD compensation UI",()=>{
   await screen.findByLabelText("Gaji Pokok");
   for(const [name,value] of [
     ["Gaji Pokok",reference.baseSalary],["Tunjangan (termasuk uang makan)",reference.allowance],
-    ["Potongan Kasbon",reference.kasbonDeduction],["BPJS JHT",reference.bpjsJhtEmployee],
+    ["Potongan Kasbon / Cicilan Gaji",reference.kasbonDeduction],["BPJS JHT",reference.bpjsJhtEmployee],
     ["BPJS Kesehatan",reference.bpjsKesEmployee],["PPh21",reference.pph21],
     ["Potongan Lainnya",reference.otherDeductions],
   ])fireEvent.change(screen.getByLabelText(name),{target:{value}});
@@ -91,6 +94,8 @@ describe("Standalone Payroll PROD compensation UI",()=>{
   expect(puts[0].path).toBe("/api/payroll/components/61");
   expect(puts[0].body).toMatchObject(reference);
   expect(puts[0].body.notes).toBe("Catatan kasbon HR");
+  expect((globalThis.confirm as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/BUKAN total pinjaman/);
+  expect((globalThis.confirm as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/Rekonsiliasi Bank/);
   expect(payloads.filter(x=>x.method!=="GET"&&x.method!=="PUT")).toHaveLength(0);
  });
 });
