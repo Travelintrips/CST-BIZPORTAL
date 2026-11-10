@@ -239,6 +239,7 @@ export default function PayrollWorkspace() {
           <h1 className="text-2xl font-bold">Gaji Karyawan</h1>
           <p className="text-sm text-muted-foreground">Payroll multi-company — riwayat dan rincian. Pembuatan draft hanya tersedia di DEV saat diizinkan server.</p>
         </div>
+        <a className="rounded-md border px-3 py-2 text-sm hover:bg-muted" href="/hr/payroll-components">Atur Gaji &amp; Potongan</a>
         <Button variant="outline" disabled={companyId == null || loading || busy} onClick={async () => {
           if (companyId === null) return;
           setLoading(true); setError("");
