@@ -404,6 +404,13 @@ function parseRows(rows: string[][], accountType: string | null = null): {
   const result: ParsedMutation[] = [];
   for (const [offset, row] of rows.slice(start).entries()) {
     if (!row?.some((cell) => String(cell ?? "").trim())) continue;
+    // Explicit SC test-only ledger rows must NEVER create BizPortal bank mutations,
+    // matching candidates or journals, even on an automatic Sheet sync.
+    // A double marker (description + status) guards against accidental skipping.
+    const desc = String(row[descriptionColumn] ?? "").trim();
+    const reconStatus = statusColumn >= 0 ? String(row[statusColumn] ?? "").trim().toUpperCase() : "";
+    const key = keyColumn >= 0 ? String(row[keyColumn] ?? "").trim() : "";
+    if (/^SC-TEST-(?:IN|OUT):[ ]/.test(desc) && reconStatus === "SC_TEST_ONLY" && !key) continue;
     const date = parseDate(String(row[dateColumn] ?? ""), slashDateOrder);
     const debit = parseAmount(String(row[debitColumn] ?? ""));
     const credit = parseAmount(String(row[creditColumn] ?? ""));

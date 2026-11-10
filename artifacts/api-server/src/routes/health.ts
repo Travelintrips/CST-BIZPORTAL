@@ -19,6 +19,12 @@ router.get("/healthz", (_req, res) => {
   res.json(data);
 });
 
+// Public, read-only proof that the SC_TEST_ONLY import exclusion is deployed.
+// Do not add any credential, environment value or database access here.
+router.get("/health/sc-test-guard", (_req, res) => {
+  res.json({ status: "ok", guard: "sc-test-only-v1" });
+});
+
 router.get("/health/smtp", async (_req, res) => {
   try {
     const config = await resolveSmtpConfig();
