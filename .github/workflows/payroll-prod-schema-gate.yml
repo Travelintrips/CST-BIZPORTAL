@@ -1,0 +1,109 @@
+name: Payroll PROD schema isolation gate
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/20261110131000_payroll_standalone_components_prod.sql"
+      - "artifacts/api-server/src/routes/payroll-standalone-components.ts"
+      - "artifacts/api-server/src/routes/payroll-standalone-components.test.ts"
+      - ".github/workflows/payroll-prod-schema-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-payroll-tables:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: payroll_qa
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 65433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d payroll_qa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 65433
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: payroll_qa
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if missing
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Build isolated company / employee fixture
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon NOLOGIN;
+          CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE qa_payroll NOLOGIN;
+          CREATE TABLE public.employees(id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL);
+          INSERT INTO public.employees(id,company_id) VALUES (61,1),(62,2);
+          SQL
+      - name: Run additive migration against real PostgreSQL
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261110131000_payroll_standalone_components_prod.sql
+      - name: Assert RLS, privileges, and cross-company isolation
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE n INTEGER;
+          BEGIN
+            SELECT count(*) INTO n FROM pg_class
+             WHERE oid IN ('public.payroll_salary_profiles'::regclass,'public.payroll_deduction_settings'::regclass)
+               AND relrowsecurity=true AND relforcerowsecurity=true;
+            IF n <> 2 THEN RAISE EXCEPTION 'Missing FORCE RLS on Payroll config tables'; END IF;
+            IF has_table_privilege('anon','public.payroll_salary_profiles','SELECT')
+               OR has_table_privilege('authenticated','public.payroll_deduction_settings','SELECT')
+            THEN RAISE EXCEPTION 'Public Data API can read salary config'; END IF;
+          END $$;
+          GRANT USAGE ON SCHEMA public TO qa_payroll;
+          GRANT SELECT,INSERT,UPDATE ON public.payroll_salary_profiles,public.payroll_deduction_settings TO qa_payroll;
+          GRANT USAGE,SELECT ON SEQUENCE public.payroll_salary_profiles_id_seq,public.payroll_deduction_settings_id_seq TO qa_payroll;
+          INSERT INTO public.payroll_salary_profiles(company_id,employee_id,effective_from,base_salary,allowance)
+          VALUES (1,61,'2026-11-01',5000000,1000000),(2,62,'2026-11-01',7000000,500000);
+          SET ROLE qa_payroll;
+          DO $$
+          DECLARE n INTEGER;
+          BEGIN
+            SELECT count(*) INTO n FROM public.payroll_salary_profiles;
+            IF n <> 0 THEN RAISE EXCEPTION 'Unscoped salary config was readable'; END IF;
+          END $$;
+          BEGIN;
+          SELECT set_config('app.payroll_company_id','1',true);
+          DO $$
+          DECLARE n INTEGER; denied BOOLEAN := FALSE;
+          BEGIN
+            SELECT count(*) INTO n FROM public.payroll_salary_profiles;
+            IF n <> 1 THEN RAISE EXCEPTION 'Cross-company salary config disclosed: %',n; END IF;
+            BEGIN
+              INSERT INTO public.payroll_deduction_settings(company_id,employee_id,effective_from,code,amount)
+              VALUES (2,62,'2026-11-01','kasbon_deduction',100000);
+            EXCEPTION WHEN insufficient_privilege THEN
+              denied := TRUE;
+            END;
+            IF NOT denied THEN RAISE EXCEPTION 'Cross-company Payroll deduction was permitted'; END IF;
+            INSERT INTO public.payroll_deduction_settings(company_id,employee_id,effective_from,code,amount)
+            VALUES (1,61,'2026-11-01','kasbon_deduction',100000);
+            SELECT count(*) INTO n FROM public.payroll_deduction_settings;
+            IF n <> 1 THEN RAISE EXCEPTION 'Own-company Payroll deduction was blocked'; END IF;
+          END $$;
+          ROLLBACK;
+          RESET ROLE;
+          SQL
