@@ -79,7 +79,7 @@ describe("PROD standalone Payroll components — isolation and exact cash advanc
   state.failInsertAt=0;state.insertCount=0;state.profile=null;state.deductionRows=[];
   delete process.env.PAYROLL_PROD_COMPONENTS_ENABLED;
  });
- afterEach(()=>{delete process.env.PAYROLL_PROD_COMPONENTS_ENABLED});
+ afterEach(()=>{delete process.env.PAYROLL_PROD_COMPONENTS_ENABLED;vi.unstubAllEnvs()});
  const url=(suffix="61")=>root+"/api/payroll/components/"+suffix;
  const save=(body:unknown,path=url())=>fetch(path,{
   method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),
@@ -95,6 +95,14 @@ describe("PROD standalone Payroll components — isolation and exact cash advanc
   expect((await fetch(url())).status).toBe(404);
   expect((await fetch(root+"/api/payroll/components/employees")).status).toBe(404);
   expect(state.queries).toHaveLength(0);
+ });
+ it("opens only in explicit production environment and supports a false kill switch",async()=>{
+  vi.stubEnv("NODE_ENV","production");vi.stubEnv("APP_ENV","production");
+  expect((await fetch(url())).status).toBe(200);
+  process.env.PAYROLL_PROD_COMPONENTS_ENABLED="false";
+  expect((await fetch(url())).status).toBe(404);
+  expect((await save(example)).status).toBe(501);
+  expect(state.queries.every(q=>!q.sql.includes("INSERT"))).toBe(true);
  });
  it("requires Owner or Super Admin, rejects other roles before SQL",async()=>{
   process.env.PAYROLL_PROD_COMPONENTS_ENABLED="true";
