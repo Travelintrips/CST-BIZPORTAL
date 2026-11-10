@@ -9,7 +9,7 @@ BPJS JHT, BPJS Kesehatan, PPh21, potongan lainnya, dan gaji bersih.
 3. Jalankan migrasi tambah-dua-tabel `supabase/migrations/20261110131000_payroll_standalone_components_prod.sql`
    menggunakan operator SQL berwenang. Periksa RLS, grants, indeks, foreign key; kedua tabel baru awalnya kosong.
 4. Setelah migrasi, deploy kode PROD. Fitur konfigurasi baru aktif hanya jika NODE_ENV=production
-   DAN APP_ENV=production; backend membatasi akses ke Owner/Super Admin. 
+   dan APP_ENV tidak berisi development (APP_ENV boleh kosong); backend membatasi akses ke Owner/Super Admin. 
    Set `PAYROLL_PROD_COMPONENTS_ENABLED=false` sebagai **kill switch** untuk menonaktifkannya segera jika diperlukan.
 5. Verifikasi `/api/health/live`, halaman Payroll lama, serta 21 item historis tetap utuh.
 6. Verifikasi akses Owner/Super Admin dan penolakan admin/finance, serta hasil baca awal dua tabel baru.
