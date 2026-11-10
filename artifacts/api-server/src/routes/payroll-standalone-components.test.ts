@@ -97,7 +97,11 @@ describe("PROD standalone Payroll components — isolation and exact cash advanc
   expect(state.queries).toHaveLength(0);
  });
  it("opens only in explicit production environment and supports a false kill switch",async()=>{
-  vi.stubEnv("NODE_ENV","production");vi.stubEnv("APP_ENV","production");
+  vi.stubEnv("NODE_ENV","production");vi.stubEnv("APP_ENV","development");
+  expect((await fetch(url())).status).toBe(404);
+  vi.stubEnv("APP_ENV","production");
+  expect((await fetch(url())).status).toBe(200);
+  vi.stubEnv("APP_ENV","");
   expect((await fetch(url())).status).toBe(200);
   process.env.PAYROLL_PROD_COMPONENTS_ENABLED="false";
   expect((await fetch(url())).status).toBe(404);
