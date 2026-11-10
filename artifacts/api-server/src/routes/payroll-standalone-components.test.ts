@@ -18,8 +18,12 @@ vi.mock("@workspace/db",()=>({
     state.queries.push({sql,args});
     if(sql==="COMMIT"){state.committed++;return {rowCount:0,rows:[]};}
     if(sql==="ROLLBACK"){state.rolledBack++;return {rowCount:0,rows:[]};}
-    if(sql.includes("FROM public.employees")&&sql.includes("WHERE company_id=$1 AND id=$2")){
-      return {rowCount:state.employeeExists&&args[0]===5&&args[1]===61?1:0,rows:state.employeeExists?[{id:61}]:[]};
+    if(sql.includes("SELECT id FROM public.employees")&&sql.includes("status='active'")){
+      const put=sql.includes("FOR UPDATE");
+      const companyId=Number(args[put?0:1]);
+      const employeeId=Number(args[put?1:0]);
+      const match=state.employeeExists&&companyId===5&&employeeId===61;
+      return {rowCount:match?1:0,rows:match?[{id:61}]:[]};
     }
     if(sql.includes("FROM public.employees")&&sql.includes("ORDER BY first_name")){
       return {rowCount:1,rows:[{id:61,firstName:"QA",lastName:"TEST"}]};
