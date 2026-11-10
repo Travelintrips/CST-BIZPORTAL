@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { pool } from "@workspace/db";
 import { authorizePayrollCompany } from "./payroll-access";
+import { registerStandalonePayrollComponents } from "./payroll-standalone-components";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 /**
@@ -55,6 +56,8 @@ function serializeRun(row: Record<string, unknown>) {
 }
 
 router.use("/payroll", authorize);
+// Independent compensation configuration; never imports cash-advance/journal routes.
+registerStandalonePayrollComponents(router);
 
 router.get("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
   const companyId = req.payrollCompanyId!;
