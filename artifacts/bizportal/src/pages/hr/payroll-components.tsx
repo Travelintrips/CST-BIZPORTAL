@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 const fields = [
   {key:"baseSalary", label:"Gaji Pokok"},
   {key:"allowance", label:"Tunjangan (termasuk uang makan)"},
-  {key:"kasbonDeduction", label:"Potongan Kasbon"},
+  {key:"kasbonDeduction", label:"Potongan Kasbon / Cicilan Gaji"},
   {key:"bpjsJhtEmployee", label:"BPJS JHT"},
   {key:"bpjsKesEmployee", label:"BPJS Kesehatan"},
   {key:"pph21", label:"PPh21"},
@@ -104,7 +104,12 @@ export default function PayrollStandaloneComponents(){
     (kasbon===0n||((notes.trim().length>=5)&&notes.length<=500));
   async function save(){
     if(!ready||validCompany===null||!selected||!calc)return;
-    if(!window.confirm("Simpan komponen gaji karyawan ini di BizPortal PROD? Tidak membuat jurnal, pembayaran, atau pelunasan kasbon."))return;
+    if(!window.confirm(
+      "Simpan konfigurasi gaji karyawan mulai "+effectiveFrom+"?\n"+
+      "Potongan kasbon manual yang akan dicatat: "+formatted(asMoney(kasbon??0n))+".\n"+
+      "Nilai ini adalah cicilan/potongan gaji, BUKAN total pinjaman. Tidak mengambil data Rekonsiliasi Bank, "+
+      "tidak melunasi saldo kasbon, dan belum memasukkan komponen ke Draft/Slip Payroll atau membuat pembayaran."
+    ))return;
     const scope=validCompany, employeeId=Number(selected);
     setBusy(true);setError("");setNotice("");setLastReadback(null);
     try{
@@ -119,14 +124,14 @@ export default function PayrollStandaloneComponents(){
       if(!verify.complete||verify.summary?.net!==saved.net||verify.summary?.deductions!==saved.deductions)
         throw Error("Simpan berhasil tetapi baca ulang belum cocok; periksa sebelum melanjutkan.");
       setLastReadback({gross:saved.gross,deductions:saved.deductions,net:saved.net});
-      setNotice("Tujuh komponen tersimpan dan diverifikasi melalui baca ulang. Tidak ada jurnal atau pembayaran.");
+      setNotice("Tujuh komponen tersimpan dan diverifikasi melalui baca ulang. Potongan kasbon bersifat manual, belum masuk Draft/Slip Payroll dan tidak mengubah saldo kasbon, jurnal, atau pembayaran.");
     }catch(e){setError(e instanceof Error?e.message:"Gagal menyimpan komponen Payroll.");}
     finally{setBusy(false);}
   }
   return <AppShell><div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div><h1 className="text-2xl font-semibold">Gaji, Tunjangan dan Potongan</h1>
-        <p className="text-sm text-muted-foreground">Hanya modul Payroll. Kasbon dicatat sebagai potongan manual; tidak melunasi saldo pada modul lain.</p></div>
+        <p className="text-sm text-muted-foreground">Hanya modul Payroll. Potongan kasbon diisi manual, tidak otomatis mengambil Rekonsiliasi Bank atau melunasi saldo kasbon.</p></div>
       <Link href="/hr/payroll" className="rounded-md border p-2 text-sm">Kembali ke Gaji Karyawan</Link>
     </div>
     <p className="rounded-md border p-3 text-sm">Perusahaan: {isLoading?"Memuat...":validCompany===null?"Pilih satu perusahaan":activeCompany?.companyName}
@@ -141,21 +146,27 @@ export default function PayrollStandaloneComponents(){
           {employees.map(e=><option key={e.id} value={e.id}>{e.firstName} {e.lastName} (#{e.id})</option>)}
         </select>
       </label>
-      <label className="block text-sm">Tanggal mulai berlaku
+      <label className="block text-sm">Tanggal mulai berlaku konfigurasi
         <input aria-label="Tanggal gaji berlaku" className="mt-1 w-full rounded border bg-background p-2" type="date"
           value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);setLastReadback(null)}}/>
+        <span className="mt-1 block text-xs text-muted-foreground">Tanggal ini menyimpan versi konfigurasi, bukan tanggal pencairan atau jadwal pelunasan kasbon.</span>
       </label>
       <div className="grid gap-3 sm:grid-cols-2">
         {fields.map(f=><label key={f.key} className="text-sm">{f.label} (Rp)
           <input aria-label={f.label} className="mt-1 w-full rounded border bg-background p-2" inputMode="decimal"
             placeholder="Kosong jika belum diverifikasi; ketik 0 jika nihil"
             value={values[f.key]} onChange={e=>{setValues(v=>({...v,[f.key]:e.target.value.trim()}));setLastReadback(null)}}/>
+          {f.key==="kasbonDeduction"&&<span className="mt-1 block text-xs text-muted-foreground">
+            Isi nominal potongan yang disetujui untuk gaji, <strong>bukan total kasbon yang diterima</strong>.
+            Contoh: kasbon Rp2.000.000, potongan gaji Rp500.000 → isi 500000.
+            Tidak otomatis dari Rekonsiliasi Bank dan tidak mengurangi saldo kasbon di modul lain.
+          </span>}
         </label>)}
       </div>
-      <label className="block text-sm">Catatan sumber (wajib jika kasbon lebih dari nol)
+      <label className="block text-sm">Catatan sumber persetujuan potongan kasbon (wajib jika lebih dari nol)
         <textarea aria-label="Sumber komponen gaji" className="mt-1 w-full rounded border bg-background p-2"
           maxLength={500} value={notes} onChange={e=>{setNotes(e.target.value);setLastReadback(null)}}
-          placeholder="Catatan HR mengenai tunjangan dan dasar potongan kasbon"/>
+          placeholder="Contoh: Persetujuan cicilan kasbon gaji Rp500.000 periode November, catatan HR #..."/>
       </label>
       <div className="grid gap-2 sm:grid-cols-3 text-sm">
         <div className="rounded border p-3">Gaji kotor <strong className="block">{calc?formatted(asMoney(calc.gross)):"Belum lengkap"}</strong></div>
