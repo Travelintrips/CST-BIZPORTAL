@@ -870,3 +870,33 @@ describe("Google Sheet bank mutation sync", () => {
     expect(rowTwoStatus).toBe(rowOneStatus);
   });
 });
+
+
+describe("SC test-only rows never enter BizPortal", () => {
+  it("excludes marked income and expense rows even with valid dates and amounts, but keeps real rows", async () => {
+    config.account_type = "cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal","Keterangan COA","Debit","Kredit","Saldo","PP","mutation_key","status_recon"],
+      ["10/11/2026","SC-TEST-IN: Dana masuk | SC-TEST-IN-00001","10000","","","Pemasukan","","SC_TEST_ONLY"],
+      ["10/11/2026","SC-TEST-OUT: Biaya operasional | SC-TEST-OUT-00001","","3000","","Pengeluaran","","SC_TEST_ONLY"],
+      ["10/11/2026","Dana masuk riil","50000","","","Pemasukan","",""],
+    ]);
+    const result = await syncOneBankSheetConfig(config.id);
+    expect(result).toMatchObject({imported:1,existing:0});
+    expect(storedMutations).toHaveLength(1);
+    expect(storedMutations[0]?.description).toBe("Dana masuk riil");
+    const writes = JSON.stringify(mocks.writeSpreadsheetValues.mock.calls);
+    expect(writes).not.toContain("SC-TEST-IN-00001");
+    expect(writes).not.toContain("SC-TEST-OUT-00001");
+  });
+  it("does not skip ordinary matching rows or rows without both test markers", async () => {
+    config.account_type = "cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal","Keterangan COA","Debit","Kredit","Saldo","PP","mutation_key","status_recon"],
+      ["10/11/2026","SC-TEST-IN: missing status","10000","","","Pemasukan","",""],
+      ["10/11/2026","Ordinary text","5000","","","Pemasukan","","SC_TEST_ONLY"],
+    ]);
+    const result = await syncOneBankSheetConfig(config.id);
+    expect(result.imported).toBe(2);
+  });
+});
