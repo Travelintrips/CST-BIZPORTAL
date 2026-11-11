@@ -70,9 +70,24 @@ export async function signHrdPhotoPreview(path: string) {
   if (!response.ok) throw Error("HRD_STORAGE_PREVIEW_FAILED");
   const body = await response.json() as {signedURL?:string;signedUrl?:string};
   const signed = body.signedURL ?? body.signedUrl;
-  if (!signed || !signed.startsWith("/storage/v1/object/sign/")) throw Error("HRD_STORAGE_PREVIEW_INVALID");
-  return {url:base+signed,expiresIn:60};
+  return {url:validateHrdPhotoSignedPreview(base,path,signed),expiresIn:60};
 }
 export function photoSha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Supabase may return a /object/sign/... URL. Never trust an unsigned,
+ * different-bucket, changed-object or different-origin preview response.
+ */
+export function validateHrdPhotoSignedPreview(base:string,path:string,signed:unknown):string {
+  if (!pathSafe(path) || typeof signed!=="string" || !signed) throw Error("HRD_STORAGE_PREVIEW_INVALID");
+  const origin=new URL(base).origin;
+  const relative=signed.startsWith("/object/sign/")?"/storage/v1"+signed:signed;
+  const parsed=new URL(relative,origin);
+  const expected="/storage/v1/object/sign/"+BUCKET+"/"+path;
+  if(parsed.origin!==origin||parsed.pathname!==expected||
+     !parsed.searchParams.get("token")||parsed.username||parsed.password)
+    throw Error("HRD_STORAGE_PREVIEW_INVALID");
+  return parsed.toString();
 }
