@@ -98,6 +98,49 @@ CREATE TABLE IF NOT EXISTS hrd_private.employee_document_audit (
 CREATE INDEX IF NOT EXISTS employee_document_audit_company_employee_idx
   ON hrd_private.employee_document_audit(company_id, employee_id, created_at DESC);
 
+-- An employee ID alone is not a tenant boundary. Enforce its company match
+-- in the database as well as in the API. Prevent audit records from pointing
+-- to a document belonging to another employee/company.
+CREATE OR REPLACE FUNCTION hrd_private.enforce_employee_document_scope()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, hrd_private
+AS $
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.employees e
+    WHERE e.id=NEW.employee_id AND e.company_id=NEW.company_id
+      AND e.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'HRD_EMPLOYEE_COMPANY_MISMATCH';
+  END IF;
+  IF TG_TABLE_NAME='employee_document_audit' AND NOT EXISTS (
+    SELECT 1 FROM hrd_private.employee_documents d
+    WHERE d.id=NEW.document_id
+      AND d.employee_id=NEW.employee_id
+      AND d.company_id=NEW.company_id
+  ) THEN
+    RAISE EXCEPTION 'HRD_AUDIT_DOCUMENT_COMPANY_MISMATCH';
+  END IF;
+  RETURN NEW;
+END
+$;
+REVOKE ALL ON FUNCTION hrd_private.enforce_employee_document_scope()
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION hrd_private.enforce_employee_document_scope()
+  TO bizportal_hrd_prod;
+DROP TRIGGER IF EXISTS hrd_profiles_employee_scope ON hrd_private.employee_profiles;
+CREATE TRIGGER hrd_profiles_employee_scope
+  BEFORE INSERT OR UPDATE ON hrd_private.employee_profiles
+  FOR EACH ROW EXECUTE FUNCTION hrd_private.enforce_employee_document_scope();
+DROP TRIGGER IF EXISTS hrd_docs_employee_scope ON hrd_private.employee_documents;
+CREATE TRIGGER hrd_docs_employee_scope
+  BEFORE INSERT OR UPDATE ON hrd_private.employee_documents
+  FOR EACH ROW EXECUTE FUNCTION hrd_private.enforce_employee_document_scope();
+DROP TRIGGER IF EXISTS hrd_audit_employee_scope ON hrd_private.employee_document_audit;
+CREATE TRIGGER hrd_audit_employee_scope
+  BEFORE INSERT OR UPDATE ON hrd_private.employee_document_audit
+  FOR EACH ROW EXECUTE FUNCTION hrd_private.enforce_employee_document_scope();
+
 ALTER TABLE hrd_private.employee_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hrd_private.employee_profiles FORCE ROW LEVEL SECURITY;
 ALTER TABLE hrd_private.employee_documents ENABLE ROW LEVEL SECURITY;
