@@ -22,4 +22,10 @@ describe("QRIS read-only MDR evidence", () => {
   it("never upgrades a read-only review snapshot to approval authority", () => {
     expect(source).toContain("current_evidence_valid: false");
   });
+  it("surfaces a dynamic policy preview without silently replacing recorded MDR", () => {
+    expect(source).toContain("calculateQrisCandidatePreview({ payments: previewPayments, candidatesComplete: false })");
+    expect(source).toContain("policy_mdr_preview_final: null");
+    expect(source).toContain("policy_mdr_source_difference:");
+    expect(source).toContain("mdr_amount: mdr,");
+  });
 });
