@@ -64,12 +64,11 @@ const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
 });
 
-if (!isDevelopmentEnvironment()) {
-  // Do not make process liveness depend on database/Secret Manager availability.
-  // Authentication routes and /api/health/ready still fail closed until this
-  // initialization succeeds, while static UI and /api/health/live remain up.
-  void initializeProductionSessionSigningInBackground();
-}
+// DEV also issues Supabase-verified signed sessions. Initialize signing in both
+// environments so a server restart does not leave authenticated API requests
+// without a verification key until the next login exchange.
+// Keep startup non-blocking and authentication fail-closed during recovery.
+void initializeProductionSessionSigningInBackground();
 
 const embeddedFleetReminderEnabled =
   String(process.env["FLEET_EMBEDDED_REMINDER_ENABLED"] ?? "").trim().toLowerCase() === "true";
