@@ -5,9 +5,11 @@ import { useCompany } from "@/contexts/CompanyContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Camera, FileText, Image as ImageIcon, LockKeyhole, ArrowLeft, RefreshCw } from "lucide-react";
+import { HrdDocumentManager } from "./hrd-document-manager";
 
 type Document = {
-  id: string; doc_type: string; status: string; created_at: string;
+  id: string; doc_type: string; status: string; mime_type?: string;
+  extracted_data?: Record<string, string | null>; created_at: string;
   verified_at: string | null; verified_data: Record<string, string | null> | null;
 };
 type Detail = {
@@ -17,6 +19,7 @@ type Detail = {
   verifiedProfile: Record<string, string | null>;
   documents: Document[];
   photoUploadEnabled: boolean;
+  ocrEnabled: boolean;
   audit: Array<{ action: string; created_at: string; actor: string }>;
 };
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -236,6 +239,8 @@ export default function HrdEmployeeDetailPage() {
           </CardContent>
         </Card>
       </div>}
+      {detail && companyId !== null && <HrdDocumentManager key={`${companyId}:${employeeId}`} companyId={companyId} employeeId={employeeId}
+        enabled={detail.ocrEnabled === true} documents={detail.documents} refresh={refresh} />}
     </div>
   </AppShell>;
 }
