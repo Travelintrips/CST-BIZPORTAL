@@ -46,4 +46,19 @@ describe("Gmail invoice source company isolation", () => {
     expect(source).toContain("actor.companyId !== parsedState.companyId");
     expect(source).toContain('reason: "company_scope_mismatch"');
   });
+  it("accepts a verified BizPortal session in DEV when email/OTP or password login issued it", () => {
+    const actorStart = source.indexOf("async function getActor(");
+    const actorEnd = source.indexOf("async function requireFinanceAdmin(", actorStart);
+    const actorSource = source.slice(actorStart, actorEnd);
+
+    expect(actorStart).toBeGreaterThanOrEqual(0);
+    expect(actorSource).toContain("const devActor = getDevSession(request);");
+    expect(actorSource).toContain("if (devActor) return devActor;");
+    expect(actorSource).toContain("const session = getProductionSession(request);");
+    expect(actorSource).toContain("return getProductionUser(session);");
+    expect(actorSource.indexOf("getDevSession(request)"))
+      .toBeLessThan(actorSource.indexOf("getProductionSession(request)"));
+    expect(actorSource).not.toContain("return getDevSession(request);");
+  });
+
 });
