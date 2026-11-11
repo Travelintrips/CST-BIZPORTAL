@@ -29,10 +29,8 @@ export default function HrHubPage() {
           </div>
         </div>
 
-        <Link href="/hr/employees">
-          <a className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90">
-            <Users className="h-4 w-4" /> Buka Data Karyawan HRD
-          </a>
+        <Link href="/hr/employees" className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90">
+          <Users className="h-4 w-4" /> Buka Data Karyawan HRD
         </Link>
 
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950">
