@@ -194,7 +194,12 @@ export default function HrdEmployeeDetailPage() {
             {detail.documents.map((doc) => <div key={doc.id} className="rounded-lg border p-3">
               <p className="font-medium">{DOCUMENT_NAMES[doc.doc_type] || doc.doc_type}</p>
               <p className="text-xs text-muted-foreground">Status: {doc.status} · {new Date(doc.created_at).toLocaleDateString("id-ID")}</p>
-              {doc.doc_type === "foto" && detail.photoUploadEnabled && (doc.status === "pending_review" || doc.status === "verified") && <div className="mt-2 flex flex-wrap gap-2">\n                <Button size="sm" variant="outline" disabled={photoBusy} onClick={() => void showPrivatePhoto(doc.id)}>Lihat Pas Foto</Button>\n                {doc.status === "pending_review" && <Button size="sm" disabled={photoBusy} onClick={() => void approvePhoto(doc.id)}>Setujui Pas Foto</Button>}\n              </div>}\n              {doc.doc_type !== "foto" && <p className="text-xs text-muted-foreground">Preview dokumen belum tersedia sampai layanan OCR diaktifkan.</p>}\n              {privatePreview?.id === doc.id && <img src={privatePreview.url} alt="Pratinjau privat Pas Foto" className="mt-3 max-h-72 rounded-lg border object-contain" />}
+              {doc.doc_type === "foto" && detail.photoUploadEnabled && (doc.status === "pending_review" || doc.status === "verified") && <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" disabled={photoBusy} onClick={() => void showPrivatePhoto(doc.id)}>Lihat Pas Foto</Button>
+                {doc.status === "pending_review" && <Button size="sm" disabled={photoBusy} onClick={() => void approvePhoto(doc.id)}>Setujui Pas Foto</Button>}
+              </div>}
+              {doc.doc_type !== "foto" && <p className="text-xs text-muted-foreground">Preview dokumen belum tersedia sampai layanan OCR diaktifkan.</p>}
+              {privatePreview?.id === doc.id && <img src={privatePreview.url} alt="Pratinjau privat Pas Foto" className="mt-3 max-h-72 rounded-lg border object-contain" />}
             </div>)}
             <div className="rounded-lg border border-dashed p-3 text-muted-foreground">
               <LockKeyhole className="mb-2 h-5 w-5" />
@@ -216,7 +221,10 @@ export default function HrdEmployeeDetailPage() {
                 setPhoto(null); if (fileInput.current) fileInput.current.value = "";
               }}>Hapus pratinjau</Button>
             </div>}
-            {photoNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{photoNotice}</p>}\n            <Button className="w-full" disabled={!detail.photoUploadEnabled || !photo || photoBusy} onClick={() => void savePhoto()}>\n              {photoBusy ? "Memproses Pas Foto..." : detail.photoUploadEnabled ? "Unggah Pas Foto Privat" : "Simpan Pas Foto (belum diaktifkan)"}\n            </Button>
+            {photoNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{photoNotice}</p>}
+            <Button className="w-full" disabled={!detail.photoUploadEnabled || !photo || photoBusy} onClick={() => void savePhoto()}>
+              {photoBusy ? "Memproses Pas Foto..." : detail.photoUploadEnabled ? "Unggah Pas Foto Privat" : "Simpan Pas Foto (belum diaktifkan)"}
+            </Button>
           </CardContent>
         </Card>
         <Card><CardHeader><CardTitle>Riwayat Verifikasi</CardTitle></CardHeader>
