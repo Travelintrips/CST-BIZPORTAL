@@ -81,11 +81,11 @@ export default function HrdEmployeeDetail(){
  const load=async()=>{
   const seq=++requestSeq.current;
   setError("");
-  if(companyId!==1||!Number.isSafeInteger(id)||id<1){
+  if(companyId===null||!Number.isSafeInteger(companyId)||companyId<1||!Number.isSafeInteger(id)||id<1){
    setData(null);setError("Pilih perusahaan CST untuk mengelola dokumen HRD.");return;
   }
   try{
-   const result=await api<HrdView>(`/api/payroll/hrd/employees/${id}?companyId=1`);
+   const result=await api<HrdView>(`/api/payroll/hrd/employees/${id}?companyId=${companyId}`);
    if(seq!==requestSeq.current)return;
    if(result.companyId!==1||result.employeeId!==id)throw Error("Perusahaan/ID tidak cocok.");
    setData(result);
@@ -116,7 +116,7 @@ export default function HrdEmployeeDetail(){
    const prepared=await api<{
     documentId:string;path:string;token:string;
     storageUrl:string;bucket:string;maxBytes:number
-   }>(`/api/payroll/hrd/employees/${currentId}/documents/prepare?companyId=1`,
+   }>(`/api/payroll/hrd/employees/${currentId}/documents/prepare?companyId=${companyId}`,
     "POST",{docType:type,mimeType:file.type,processingAuthorizationConfirmed:true});
    if(currentId!==id)return;
    // Scoped one-time signed upload. No service key or public Storage policy in the browser.
@@ -129,7 +129,7 @@ export default function HrdEmployeeDetail(){
    const result=await api<{
     documentId:string;status:string;extracted:Record<string,string|null>;
     confidence:number;warnings:string[];requiresVerification:boolean;engine?:string;
-   }>(`/api/payroll/hrd/employees/${currentId}/documents/${prepared.documentId}/scan?companyId=1`,"POST",{processingAuthorizationConfirmed:true});
+   }>(`/api/payroll/hrd/employees/${currentId}/documents/${prepared.documentId}/scan?companyId=${companyId}`,"POST",{processingAuthorizationConfirmed:true});
    if(result.status!=="pending_review"||!result.requiresVerification)
     throw Error("Dokumen belum siap diperiksa.");
    await load();
@@ -153,7 +153,7 @@ export default function HrdEmployeeDetail(){
    const result=await api<{
     documentId:string;status:string;extracted:Record<string,string|null>;
     confidence:number;warnings:string[];requiresVerification:boolean;engine?:string;
-   }>(`/api/payroll/hrd/employees/${id}/documents/${doc.id}/scan?companyId=1`,"POST",{processingAuthorizationConfirmed:true});
+   }>(`/api/payroll/hrd/employees/${id}/documents/${doc.id}/scan?companyId=${companyId}`,"POST",{processingAuthorizationConfirmed:true});
    if(result.status!=="pending_review"||!result.requiresVerification)
     throw Error("Dokumen belum siap diperiksa.");
    await load();
@@ -170,7 +170,7 @@ export default function HrdEmployeeDetail(){
   setBusy(true);setError("");setNotice("");
   try{
    const saved=await api<{status:string;profileUpdated:boolean}>(
-    `/api/payroll/hrd/employees/${id}/documents/${selectedDoc.id}/verify?companyId=1`,
+    `/api/payroll/hrd/employees/${id}/documents/${selectedDoc.id}/verify?companyId=${companyId}`,
     "POST",{confirm:true,fields:review});
    if(saved.status!=="verified")throw Error("Verifikasi gagal.");
    setNotice(saved.profileUpdated?
@@ -183,7 +183,7 @@ export default function HrdEmployeeDetail(){
  const preview=async(doc:Doc)=>{
   try{
    const signed=await api<{url:string;expiresIn:number}>(
-    `/api/payroll/hrd/employees/${id}/documents/${doc.id}/preview?companyId=1`,"POST",{});
+    `/api/payroll/hrd/employees/${id}/documents/${doc.id}/preview?companyId=${companyId}`,"POST",{});
    window.open(signed.url,"_blank","noopener,noreferrer");
   }catch(e){setError(e instanceof Error?e.message:"Pratinjau gagal.");}
  };
