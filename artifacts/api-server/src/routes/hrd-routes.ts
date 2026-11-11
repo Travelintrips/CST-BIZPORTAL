@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from "express";
 import { getProductionSession, getProductionUser } from "./dev-auth";
 import { authorizeHrdCompany } from "./hrd-access";
 import { withHrdCompanyScope } from "./hrd-db";
+import { registerHrdPhotoRoutes } from "./hrd-photo-routes";
+import { hrdPrivateStorageReady } from "./hrd-photo-storage";
 
 type HrdRequest = Request & {
   hrdActor?: { id: string; email: string; role: string; companyId: number | null };
@@ -33,6 +35,7 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
   }
 }
 router.use(authorize);
+registerHrdPhotoRoutes(router);
 
 router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {
   const companyId = req.hrdCompanyId!;
@@ -100,7 +103,7 @@ router.get("/hrd/employees/:id", async (req: HrdRequest, res: Response) => {
     });
     if (!data) { res.status(404).json({ message: "Karyawan tidak ditemukan di perusahaan aktif." }); return; }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ companyId, employeeId, ...data, canPay: false });
+    res.json({ companyId, employeeId, ...data, canPay: false, photoUploadEnabled: hrdPrivateStorageReady() });
   } catch (error) {
     req.log.error({ error, companyId, employeeId }, "HRD employee detail read failed");
     res.status(503).json({ message: "Rincian HRD belum tersedia." });
