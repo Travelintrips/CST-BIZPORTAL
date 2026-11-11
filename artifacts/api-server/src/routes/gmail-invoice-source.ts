@@ -149,8 +149,14 @@ function getRedirectUri(request: Request): string {
 async function getActor(
   request: Request,
 ): Promise<DevAuthUser | null> {
+  // DEV can authenticate through the verified email/OTP or password login
+  // path too. Those routes issue the signed BizPortal session cookie rather
+  // than the legacy DEV identity cookie, so prefer a valid DEV identity but
+  // fall back to the same signed-session + database-user verification used
+  // in production. Neither path grants anonymous access.
   if (isDevelopmentEnvironment()) {
-    return getDevSession(request);
+    const devActor = getDevSession(request);
+    if (devActor) return devActor;
   }
 
   const session = getProductionSession(request);
