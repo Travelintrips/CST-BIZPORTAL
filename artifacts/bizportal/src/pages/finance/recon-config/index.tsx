@@ -1108,7 +1108,20 @@ function AiRulesTab() {
   const startCreateChildCoa = () => {
     const selected = coaAccounts.find((account) => account.code === form.action_coa_code);
     if (!selected) {
-      alert("Pilih COA parent terlebih dahulu.");
+      alert("Pilih COA terlebih dahulu.");
+      return;
+    }
+
+    // Never offer a postable detail account as the parent of a new child.
+    // Use its actual group/header parent when a detail account is selected.
+    const parent = selected.isHeader === true || selected.isPostable === false
+      ? selected
+      : coaAccounts.find((account) =>
+          account.id === selected.parentId
+          && (account.isHeader === true || account.isPostable === false),
+        );
+    if (!parent || parent.isActive === false) {
+      alert("Akun ini bukan grup dan tidak memiliki parent grup yang valid. Pilih akun [Grup] terlebih dahulu.");
       return;
     }
 
@@ -1116,10 +1129,10 @@ function AiRulesTab() {
     setQuickCreateChild(true);
     setNewCoaRole("child");
     setNewCoaForm({
-      code: nextSequentialChildCode(selected, coaAccounts),
+      code: nextSequentialChildCode(parent, coaAccounts),
       name: "",
-      type: selected.type || "expense",
-      parentId: selected.id,
+      type: parent.type || "expense",
+      parentId: parent.id,
     });
     void loadParentAccounts();
   };
