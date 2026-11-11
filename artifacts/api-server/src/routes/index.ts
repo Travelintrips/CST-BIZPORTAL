@@ -43,6 +43,9 @@ router.use(createDevAuthRouter());
 // remaining API-owned routes.
 router.use(localProductionAuthRouter);
 
+// Match isolated Marketplace DEV read routes before broad legacy auth middleware.
+router.use(devMarketplaceReadParityRouter);
+
 router.post("/auth/email-login", (_request, response) => {
   response.status(404).json({ error: "Not found" });
 });
@@ -54,7 +57,6 @@ router.use(reconClassificationRouter);
 router.use(gmailInvoiceSourceRouter);
 router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
-router.use(devMarketplaceReadParityRouter);
 router.use(businessDashboardRouter);
 router.use(salesCoreRouter);
 router.use(adminRealtimeRouter);
