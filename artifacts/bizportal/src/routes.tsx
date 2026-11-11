@@ -965,6 +965,8 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/ai-center" component={PR(AiCenterHubPage)} />
       <Route path="/hr/payroll-components" component={PR(PayrollComponentsPage)} />
       <Route path="/hr/payroll" component={PR(PayrollWorkspacePage)} />
+      <Route path="/hr/employees" component={PR(HrdEmployeeDirectoryPage)} />
+      <Route path="/hr/employees/:id" component={PR(HrdEmployeeDetailPage)} />
       <Route path="/hr" component={PR(HrHubPage)} />
 
       {/* ── Legacy redirects ───────────────────────────────────────────── */}
