@@ -7,11 +7,6 @@ function hrdEnv(){return process.env.APP_ENV==="development"||process.env.APP_EN
 function hrdStorageSettings(){const env=hrdEnv();if(env==="development")return {url:process.env.HRD_DEV_SUPABASE_URL?.trim()??"",key:process.env.HRD_DEV_STORAGE_SERVICE_KEY?.trim()??"",ref:"xssrfshdrtdfupgqwfdw"};if(env==="production")return {url:process.env.HRD_PROD_SUPABASE_URL?.trim()??"",key:process.env.HRD_PROD_STORAGE_SERVICE_KEY?.trim()??"",ref:"nzdweipzckfszczzqtuw"};return {url:"",key:"",ref:""};}
 function hrdOpenAiKey(){return (hrdEnv()==="production"?process.env.HRD_PROD_OPENAI_API_KEY:process.env.HRD_DEV_OPENAI_API_KEY)?.trim()??"";}
 function hrdModel(){return (hrdEnv()==="production"?process.env.HRD_PROD_OCR_MODEL:process.env.HRD_DEV_OCR_MODEL)?.trim()||"gpt-4.1-mini";}
-export function hrdBucketName(){return process.env.APP_ENV==="production"?"bizportal-hrd-documents-prod":HRD_BUCKET;}
-function hrdEnv(){return process.env.APP_ENV==="development"||process.env.APP_ENV==="production"?process.env.APP_ENV:null;}
-function hrdStorageSettings(){const env=hrdEnv();if(env==="development")return {url:process.env.HRD_DEV_SUPABASE_URL?.trim()??"",key:process.env.HRD_DEV_STORAGE_SERVICE_KEY?.trim()??"",ref:"xssrfshdrtdfupgqwfdw"};if(env==="production")return {url:process.env.HRD_PROD_SUPABASE_URL?.trim()??"",key:process.env.HRD_PROD_STORAGE_SERVICE_KEY?.trim()??"",ref:"nzdweipzckfszczzqtuw"};return {url:"",key:"",ref:""};}
-function hrdOpenAiKey(){return (hrdEnv()==="production"?process.env.HRD_PROD_OPENAI_API_KEY:process.env.HRD_DEV_OPENAI_API_KEY)?.trim()??"";}
-function hrdModel(){return (hrdEnv()==="production"?process.env.HRD_PROD_OCR_MODEL:process.env.HRD_DEV_OCR_MODEL)?.trim()||"gpt-4.1-mini";}
 export const HRD_DOC_TYPES=["ktp","kk","foto","sim","npwp","ijazah","skck","kontrak"] as const;
 export type HrdDocumentType=typeof HRD_DOC_TYPES[number];
 export const MAX_DOCUMENT_BYTES=5*1024*1024;
@@ -114,7 +109,7 @@ export async function createPrivateUpload(path:string){
  if(!resp.ok)throw Error("PRIVATE_UPLOAD_SIGNING_FAILED");
  const body=await resp.json() as {token?:string};
  if(!body.token)throw Error("PRIVATE_UPLOAD_TOKEN_MISSING");
- return {token:body.token,storageUrl:base,bucket:HRD_BUCKET};
+ return {token:body.token,storageUrl:base,bucket:hrdBucketName()};
 }
 export async function readPrivateObject(path:string){
  const {base,key}=storageConfig();
