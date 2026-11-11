@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hrdPrivateStorageReady, validPhotoMime, validPhotoBytes,
-  createHrdPhotoSignedUpload, photoSha256,
+  createHrdPhotoSignedUpload, photoSha256, validateHrdPhotoSignedPreview,
 } from "./hrd-photo-storage";
 
 const saved = {
@@ -41,6 +41,19 @@ describe("HRD private PROD photo storage", () => {
     expect(validPhotoBytes(Buffer.from([137,80,78,71,13,10,26,10,1]),"image/png")).toBe(true);
     expect(validPhotoBytes(Buffer.alloc(0),"image/png")).toBe(false);
     expect(photoSha256(Buffer.from("fixture"))).toHaveLength(64);
+  });
+  it("scopes Supabase signed photo previews to the exact tenant object", () => {
+    const base="https://nzdweipzckfszczzqtuw.supabase.co";
+    const path="1/12/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jpg";
+    const signed="/object/sign/bizportal-hrd-documents-prod/"+path+"?token=synthetic-preview";
+    expect(validateHrdPhotoSignedPreview(base,path,signed))
+      .toBe(base+"/storage/v1"+signed);
+    expect(()=>validateHrdPhotoSignedPreview(base,path,"https://evil.example/storage/v1/object/sign/bizportal-hrd-documents-prod/"+path+"?token=synthetic"))
+      .toThrow("HRD_STORAGE_PREVIEW_INVALID");
+    expect(()=>validateHrdPhotoSignedPreview(base,path,"/object/sign/bizportal-hrd-documents-prod/3/12/other.jpg?token=synthetic"))
+      .toThrow("HRD_STORAGE_PREVIEW_INVALID");
+    expect(()=>validateHrdPhotoSignedPreview(base,path,signed.replace("token=","ignored=")))
+      .toThrow("HRD_STORAGE_PREVIEW_INVALID");
   });
   it("refuses signing under disabled settings before any network request", async () => {
     delete process.env.HRD_PROD_DOCUMENTS_ENABLED;
