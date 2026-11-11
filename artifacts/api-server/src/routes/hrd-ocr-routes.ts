@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IRouter, Request, Response } from "express";
+import type { PoolClient } from "pg";
 import { withHrdCompanyScope } from "./hrd-db";
 import {
   createPrivateUpload, readPrivateObject, signedPrivatePreview,
@@ -24,7 +25,7 @@ const fail=(req:ScopedRequest,res:Response,error:unknown,operation:string)=>{
   req.log?.error?.({error,operation,companyId:req.hrdCompanyId},"HRD private OCR request failed");
   res.status(503).json({message:"Operasi OCR HRD tidak tersedia. Identitas karyawan tidak berubah."});
 };
-async function employeeExists(client:Awaited<ReturnType<typeof import("@workspace/db").pool.connect>>,companyId:number,employeeId:number){
+async function employeeExists(client:PoolClient,companyId:number,employeeId:number){
   const result=await client.query(
     "SELECT id FROM public.employees WHERE company_id=$1 AND id=$2 AND deleted_at IS NULL LIMIT 1",
     [companyId,employeeId],
