@@ -31,6 +31,7 @@ const JournalEntryDetailPage = React.lazy(() => import("@/pages/finance/journal-
 const AiCenterHubPage = React.lazy(() => import("@/pages/ai-center/index"));
 const HrHubPage = React.lazy(() => import("@/pages/hr/index"));
 const HrdEmployeeDirectoryPage = React.lazy(() => import("@/pages/hr/employee-directory"));
+const HrdEmployeeDetailPage = React.lazy(() => import("@/pages/hr/employee-detail"));
 const PayrollWorkspacePage = React.lazy(() => import("@/pages/hr/payroll"));
 const PayrollComponentsPage = React.lazy(() => import("@/pages/hr/payroll-components"));
 const EcommercePage = React.lazy(() => import("@/pages/ecommerce"));
@@ -964,6 +965,7 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/finance/workspace" component={PR(FinanceModuleWorkspacePage)} />
       <Route path="/logistics/workspace" component={PR(LogisticsWorkspacePage)} />
       <Route path="/ai-center" component={PR(AiCenterHubPage)} />
+      <Route path="/hr/employees/:id" component={PR(HrdEmployeeDetailPage)} />
       <Route path="/hr/employees" component={PR(HrdEmployeeDirectoryPage)} />
       <Route path="/hr/payroll-components" component={PR(PayrollComponentsPage)} />
       <Route path="/hr/payroll" component={PR(PayrollWorkspacePage)} />
