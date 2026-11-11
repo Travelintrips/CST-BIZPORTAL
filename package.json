@@ -20,7 +20,9 @@
   "dependencies": {
     "@google-cloud/secret-manager": "^7.1.0",
     "@replit/connectors-sdk": "^0.4.3",
-    "pg": "^8.23.0"
+    "pdf-parse": "1.1.1",
+    "pg": "^8.23.0",
+    "tesseract.js": "6.0.1"
   },
   "devDependencies": {
     "prettier": "^3.9.6",
