@@ -6,11 +6,15 @@ import type { AddressInfo } from "node:net";
 const mocked = vi.hoisted(() => ({
   query: vi.fn(),
   session: vi.fn(),
+  verifiedSession: vi.fn(),
+  verifiedUser: vi.fn(),
   isDev: vi.fn(),
 }));
 vi.mock("@workspace/db", () => ({ pool: { query: mocked.query } }));
 vi.mock("./dev-auth", () => ({
   getDevSession: mocked.session,
+  getProductionSession: mocked.verifiedSession,
+  getProductionUser: mocked.verifiedUser,
   isDevelopmentEnvironment: mocked.isDev,
 }));
 
@@ -31,9 +35,13 @@ afterAll(async () => {
 beforeEach(() => {
   mocked.query.mockReset();
   mocked.session.mockReset();
+  mocked.verifiedSession.mockReset();
+  mocked.verifiedUser.mockReset();
   mocked.isDev.mockReset();
   mocked.isDev.mockReturnValue(true);
   mocked.session.mockReturnValue({email:"admin@dev.test",role:"admin"});
+  mocked.verifiedSession.mockReturnValue(null);
+  mocked.verifiedUser.mockResolvedValue(null);
   mocked.query.mockResolvedValue({rows:[]});
 });
 describe("DEV-only Marketplace read parity security", () => {
@@ -60,6 +68,47 @@ describe("DEV-only Marketplace read parity security", () => {
     const res=await fetch(base+"/api/mkt/admin/rfqs?limit=5");
     expect(res.status).toBe(200);
     expect(mocked.query).toHaveBeenCalledWith(expect.stringContaining("from public.mkt_rfqs"),[5]);
+  });
+
+  it.each(["/api/mkt/admin/rfqs", "/api/mkt/admin/purchase-orders"])("accepts only verified BizPortal OTP admin session: %s", async path => {
+    mocked.session.mockReturnValue(null);
+    mocked.verifiedSession.mockReturnValue({email:"admin@dev.test",id:"valid-supabase-user"});
+    mocked.verifiedUser.mockResolvedValue({email:"admin@dev.test",role:"admin"});
+    const res=await fetch(base+path);
+    expect(res.status).toBe(200);
+    expect(mocked.verifiedUser).toHaveBeenCalledOnce();
+    expect(mocked.query).toHaveBeenCalledOnce();
+  });
+  it("rejects signed OTP session without an active BizPortal account", async () => {
+    mocked.session.mockReturnValue(null);
+    mocked.verifiedSession.mockReturnValue({email:"unknown@dev.test",id:"unknown"});
+    mocked.verifiedUser.mockResolvedValue(null);
+    const res=await fetch(base+"/api/mkt/admin/rfqs");
+    expect(res.status).toBe(403);
+    expect(mocked.query).not.toHaveBeenCalled();
+  });
+  it("rejects customer role resolved from database even with signed OTP session", async () => {
+    mocked.session.mockReturnValue(null);
+    mocked.verifiedSession.mockReturnValue({email:"customer@dev.test",id:"customer"});
+    mocked.verifiedUser.mockResolvedValue({email:"customer@dev.test",role:"customer"});
+    const res=await fetch(base+"/api/mkt/admin/purchase-orders");
+    expect(res.status).toBe(403);
+    expect(mocked.query).not.toHaveBeenCalled();
+  });
+  it("returns 503 rather than bypassing authorization if the admin lookup fails", async () => {
+    mocked.session.mockReturnValue(null);
+    mocked.verifiedSession.mockReturnValue({email:"admin@dev.test",id:"admin"});
+    mocked.verifiedUser.mockRejectedValue(new Error("dev database offline"));
+    const res=await fetch(base+"/api/mkt/admin/rfqs");
+    expect(res.status).toBe(503);
+    expect(mocked.query).not.toHaveBeenCalled();
+  });
+  it("rejects an unverified cookie or role header without any signed session", async () => {
+    mocked.session.mockReturnValue(null);
+    mocked.verifiedSession.mockReturnValue(null);
+    const res=await fetch(base+"/api/mkt/admin/rfqs",{headers:{role:"admin",cookie:"portal_session=forged"}});
+    expect(res.status).toBe(401);
+    expect(mocked.query).not.toHaveBeenCalled();
   });
   it("uses bounded parameterized read for PO, returns UI contract", async () => {
     mocked.query.mockResolvedValue({rows:[{id:42,poNumber:"DEV-PO-42",rfqId:21}]});
