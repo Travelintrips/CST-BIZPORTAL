@@ -16,6 +16,7 @@ type Detail = {
     position: string | null; status: string | null; email: string | null };
   verifiedProfile: Record<string, string | null>;
   documents: Document[];
+  photoUploadEnabled: boolean;
   audit: Array<{ action: string; created_at: string; actor: string }>;
 };
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -36,6 +37,9 @@ export default function HrdEmployeeDetailPage() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState("");
   const [photoError, setPhotoError] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoNotice, setPhotoNotice] = useState("");
+  const [privatePreview, setPrivatePreview] = useState<{id:string;url:string}|null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sequence = useRef(0);
   const refresh = async () => {
@@ -75,7 +79,7 @@ export default function HrdEmployeeDetailPage() {
     return () => URL.revokeObjectURL(url);
   }, [photo]);
   useEffect(() => {
-    setPhoto(null); setPhotoUrl(""); setPhotoError("");
+    setPhoto(null); setPhotoUrl(""); setPhotoError(""); setPhotoNotice(""); setPrivatePreview(null);
     if (fileInput.current) fileInput.current.value = "";
   }, [companyId, employeeId]);
   const choosePhoto = (file: File | undefined) => {
@@ -89,6 +93,69 @@ export default function HrdEmployeeDetailPage() {
       setPhoto(null); return;
     }
     setPhotoError(""); setPhoto(file);
+  };
+  const postPhoto = async <T,>(suffix: string, body: unknown): Promise<T> => {
+    if (!companyId || !Number.isSafeInteger(employeeId) || employeeId <= 0) throw Error("Scope karyawan tidak valid.");
+    const resp = await fetch(`/api/hrd/employees/${employeeId}/photo/${suffix}?companyId=${companyId}`, {
+      method: "POST", credentials: "include", cache: "no-store",
+      headers: {"content-type":"application/json"}, body:JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw Error(data.message || `HTTP ${resp.status}`);
+    return data as T;
+  };
+  const savePhoto = async () => {
+    if (!photo || !detail?.photoUploadEnabled || !companyId || photoBusy) return;
+    setPhotoBusy(true); setPhotoError(""); setPhotoNotice("");
+    try {
+      const prepared = await postPhoto<{
+        companyId:number; employeeId:number; documentId:string;
+        storageUrl:string; bucket:string; path:string; token:string;
+      }>("prepare", {mimeType:photo.type,processingAuthorizationConfirmed:true});
+      if (prepared.companyId !== companyId || prepared.employeeId !== employeeId ||
+          prepared.bucket !== "bizportal-hrd-documents-prod" ||
+          prepared.storageUrl !== "https://nzdweipzckfszczzqtuw.supabase.co") {
+        throw Error("Tujuan upload privat tidak sesuai perusahaan atau environment.");
+      }
+      const target = `${prepared.storageUrl}/storage/v1/object/upload/sign/${prepared.bucket}/${prepared.path}?token=${encodeURIComponent(prepared.token)}`;
+      const form = new FormData();
+      form.append("cacheControl","3600");
+      form.append("",photo);
+      const upload = await fetch(target,{method:"PUT",body:form,headers:{"x-upsert":"false"}});
+      if (!upload.ok) throw Error("Upload Pas Foto privat gagal.");
+      const done = await postPhoto<{status:string}>(`${prepared.documentId}/complete`,{});
+      if (done.status !== "pending_review") throw Error("Status upload belum dapat diverifikasi.");
+      setPhotoNotice("Pas Foto tersimpan secara privat dan menunggu verifikasi HRD.");
+      setPhoto(null); if (fileInput.current) fileInput.current.value = "";
+      await refresh();
+    } catch (cause) {
+      setPhotoError(cause instanceof Error ? cause.message : "Upload Pas Foto gagal.");
+    } finally { setPhotoBusy(false); }
+  };
+  const approvePhoto = async (documentId: string) => {
+    if (!detail?.photoUploadEnabled || photoBusy || !window.confirm("Setujui Pas Foto karyawan ini?")) return;
+    setPhotoBusy(true); setPhotoError("");
+    try {
+      const done = await postPhoto<{status:string}>(`${documentId}/verify`,{confirm:true});
+      if (done.status !== "verified") throw Error("Verifikasi belum berhasil.");
+      setPhotoNotice("Pas Foto berhasil diverifikasi HRD.");
+      await refresh();
+    } catch (cause) {
+      setPhotoError(cause instanceof Error ? cause.message : "Verifikasi Pas Foto gagal.");
+    } finally { setPhotoBusy(false); }
+  };
+  const showPrivatePhoto = async (documentId: string) => {
+    if (!detail?.photoUploadEnabled || photoBusy) return;
+    setPhotoBusy(true); setPhotoError("");
+    try {
+      const result = await postPhoto<{url:string;expiresIn:number}>(`${documentId}/preview`,{});
+      if (!result.url.startsWith("https://nzdweipzckfszczzqtuw.supabase.co/storage/v1/object/sign/")) {
+        throw Error("Alamat pratinjau privat tidak valid.");
+      }
+      setPrivatePreview({id:documentId,url:result.url});
+    } catch (cause) {
+      setPhotoError(cause instanceof Error ? cause.message : "Pratinjau Pas Foto gagal.");
+    } finally { setPhotoBusy(false); }
   };
   return <AppShell>
     <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
@@ -127,11 +194,11 @@ export default function HrdEmployeeDetailPage() {
             {detail.documents.map((doc) => <div key={doc.id} className="rounded-lg border p-3">
               <p className="font-medium">{DOCUMENT_NAMES[doc.doc_type] || doc.doc_type}</p>
               <p className="text-xs text-muted-foreground">Status: {doc.status} · {new Date(doc.created_at).toLocaleDateString("id-ID")}</p>
-              <p className="text-xs text-muted-foreground">Preview privat belum tersedia sampai layanan dokumen diaktifkan.</p>
+              {doc.doc_type === "foto" && detail.photoUploadEnabled && (doc.status === "pending_review" || doc.status === "verified") && <div className="mt-2 flex flex-wrap gap-2">\n                <Button size="sm" variant="outline" disabled={photoBusy} onClick={() => void showPrivatePhoto(doc.id)}>Lihat Pas Foto</Button>\n                {doc.status === "pending_review" && <Button size="sm" disabled={photoBusy} onClick={() => void approvePhoto(doc.id)}>Setujui Pas Foto</Button>}\n              </div>}\n              {doc.doc_type !== "foto" && <p className="text-xs text-muted-foreground">Preview dokumen belum tersedia sampai layanan OCR diaktifkan.</p>}\n              {privatePreview?.id === doc.id && <img src={privatePreview.url} alt="Pratinjau privat Pas Foto" className="mt-3 max-h-72 rounded-lg border object-contain" />}
             </div>)}
             <div className="rounded-lg border border-dashed p-3 text-muted-foreground">
               <LockKeyhole className="mb-2 h-5 w-5" />
-              Unggah, scan OCR, persetujuan, dan pratinjau dokumen disimpan dalam keadaan nonaktif sampai storage privat dan uji akses selesai.
+              {detail.photoUploadEnabled ? "Upload Pas Foto privat aktif sesuai konfigurasi server. OCR dokumen lain belum diaktifkan." : "Upload, scan OCR, persetujuan, dan pratinjau dokumen nonaktif sampai storage privat dan uji akses selesai."}
             </div>
           </CardContent>
         </Card>
@@ -149,7 +216,7 @@ export default function HrdEmployeeDetailPage() {
                 setPhoto(null); if (fileInput.current) fileInput.current.value = "";
               }}>Hapus pratinjau</Button>
             </div>}
-            <Button disabled className="w-full">Simpan Pas Foto (belum diaktifkan)</Button>
+            {photoNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{photoNotice}</p>}\n            <Button className="w-full" disabled={!detail.photoUploadEnabled || !photo || photoBusy} onClick={() => void savePhoto()}>\n              {photoBusy ? "Memproses Pas Foto..." : detail.photoUploadEnabled ? "Unggah Pas Foto Privat" : "Simpan Pas Foto (belum diaktifkan)"}\n            </Button>
           </CardContent>
         </Card>
         <Card><CardHeader><CardTitle>Riwayat Verifikasi</CardTitle></CardHeader>
