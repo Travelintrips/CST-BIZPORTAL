@@ -56,6 +56,7 @@ function serializeRun(row: Record<string, unknown>) {
 }
 
 router.use("/payroll", authorize);
+registerHrdDocumentRoutes(router);
 // Independent compensation configuration; never imports cash-advance/journal routes.
 registerStandalonePayrollComponents(router);
 
