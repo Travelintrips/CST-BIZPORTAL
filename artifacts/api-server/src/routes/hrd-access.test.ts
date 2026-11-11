@@ -10,6 +10,7 @@ describe("HRD private document company boundary", () => {
   it("rejects unauthorized and unscoped actors", () => {
     expect(authorizeHrdCompany(null, "1")).toBeNull();
     expect(authorizeHrdCompany({ role: "viewer", companyId: 1 }, "1")).toBeNull();
+    expect(authorizeHrdCompany({ role: "admin", companyId: 1 }, "1")).toBeNull();
     expect(authorizeHrdCompany({ role: "owner", companyId: null }, "1")).toBeNull();
     expect(authorizeHrdCompany({ role: "admin", companyId: null }, "3")).toBeNull();
   });
