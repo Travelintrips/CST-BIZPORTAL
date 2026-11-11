@@ -30,6 +30,9 @@ async function buildAll() {
     external: [
       "*.node",
       "sharp",
+      "tesseract.js",
+      "tesseract.js-core",
+      "pdf-parse",
       "better-sqlite3",
       "sqlite3",
       "canvas",
