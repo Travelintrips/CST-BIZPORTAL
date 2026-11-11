@@ -18,7 +18,7 @@ router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
   // Published only alongside the import exclusion in bank-sheet-sync.ts.
   // The default public healthz endpoint is already externally reachable.
-  res.json({ ...data, scTestGuard: "sc-test-only-v1" });
+  res.json({ ...data, scTestGuard: "sc-test-only-v2" });
 });
 
 // Public, read-only proof that the SC_TEST_ONLY import exclusion is deployed.

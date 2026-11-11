@@ -889,6 +889,19 @@ describe("SC test-only rows never enter BizPortal", () => {
     expect(writes).not.toContain("SC-TEST-IN-00001");
     expect(writes).not.toContain("SC-TEST-OUT-00001");
   });
+  it("protects historical-style SC-IN rows with TEST guard in H, without hiding real income",async()=>{
+    config.account_type="cash";
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal","Keterangan COA","Debit","Kredit","Saldo","PP","mutation_key","status_recon"],
+      ["11/11/2026","Dana Masuk dari FELICIA JUSTIANI | BCA - blu by BCA Digital | SC-IN-000011","10000","","","Pemasukan","","SC_TEST_ONLY"],
+      ["11/11/2026","Dana Masuk dari FELICIA JUSTIANI | BCA - kas kecil","1000000","","","Pemasukan","",""],
+      ["11/11/2026","Dana Masuk dari FELICIA JUSTIANI | BCA - kas besar | SC-IN-000099","10000","","","Pemasukan","",""],
+    ]);
+    const result=await syncOneBankSheetConfig(config.id);
+    expect(result.imported).toBe(2);
+    expect(storedMutations).toHaveLength(2);
+    expect(storedMutations.map(x=>x.description).join(" ")).not.toContain("SC-IN-000011");
+  });
   it("does not skip ordinary matching rows or rows without both test markers", async () => {
     config.account_type = "cash";
     mocks.readSpreadsheetValues.mockResolvedValue([
