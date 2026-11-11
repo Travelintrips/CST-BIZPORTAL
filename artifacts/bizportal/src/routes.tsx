@@ -32,6 +32,8 @@ const AiCenterHubPage = React.lazy(() => import("@/pages/ai-center/index"));
 const HrHubPage = React.lazy(() => import("@/pages/hr/index"));
 const PayrollWorkspacePage = React.lazy(() => import("@/pages/hr/payroll"));
 const PayrollComponentsPage = React.lazy(() => import("@/pages/hr/payroll-components"));
+const HrdEmployeeDirectoryPage = React.lazy(() => import("@/pages/hr/employees"));
+const HrdEmployeeDetailPage = React.lazy(() => import("@/pages/hr/employee-detail"));
 const EcommercePage = React.lazy(() => import("@/pages/ecommerce"));
 const TradingPage = React.lazy(() => import("@/pages/trading"));
 const WelcomePage = React.lazy(() => import("@/pages/welcome"));
