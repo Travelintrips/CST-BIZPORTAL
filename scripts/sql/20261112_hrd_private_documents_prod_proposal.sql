@@ -17,6 +17,20 @@ $$;
 -- the backend to SET LOCAL ROLE inside a transaction; never expose this role
 -- to anon/authenticated or browser clients.
 GRANT bizportal_hrd_prod TO bizportal_prod;
+DO $
+DECLARE r RECORD;
+BEGIN
+  SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+    INTO r FROM pg_roles WHERE rolname = 'bizportal_hrd_prod';
+  IF NOT FOUND OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole
+     OR r.rolreplication OR r.rolbypassrls THEN
+    RAISE EXCEPTION 'HRD_PROD_ROLE_SECURITY_DRIFT';
+  END IF;
+  IF NOT pg_has_role('bizportal_prod','bizportal_hrd_prod','MEMBER') THEN
+    RAISE EXCEPTION 'HRD_PROD_ROLE_MEMBERSHIP_MISSING';
+  END IF;
+END
+$;
 
 -- The HRD role reads only the employee directory columns needed by the HRD
 -- screen. This is a separate RLS policy; the existing anon/authenticated
