@@ -17,7 +17,7 @@ $$;
 -- non-inheriting: backend must SET LOCAL ROLE inside each HRD transaction.
 -- Never expose the role to anon/authenticated or browser clients.
 GRANT bizportal_hrd_prod TO bizportal_prod WITH INHERIT FALSE, SET TRUE;
-DO $
+DO $$
 DECLARE r RECORD;
 BEGIN
   SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
@@ -30,7 +30,7 @@ BEGIN
     RAISE EXCEPTION 'HRD_PROD_ROLE_MEMBERSHIP_MISSING';
   END IF;
 END
-$;
+$$;
 
 -- The HRD role reads only the employee directory columns needed by the HRD
 -- screen. This is a separate RLS policy; the existing anon/authenticated
@@ -104,7 +104,7 @@ CREATE INDEX IF NOT EXISTS employee_document_audit_company_employee_idx
 CREATE OR REPLACE FUNCTION hrd_private.enforce_employee_document_scope()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public, hrd_private
-AS $
+AS $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM public.employees e
@@ -123,7 +123,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END
-$;
+$$;
 REVOKE ALL ON FUNCTION hrd_private.enforce_employee_document_scope()
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION hrd_private.enforce_employee_document_scope()
