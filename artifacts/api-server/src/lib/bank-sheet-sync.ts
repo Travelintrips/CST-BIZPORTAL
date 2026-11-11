@@ -410,7 +410,13 @@ function parseRows(rows: string[][], accountType: string | null = null): {
     const desc = String(row[descriptionColumn] ?? "").trim();
     const reconStatus = statusColumn >= 0 ? String(row[statusColumn] ?? "").trim().toUpperCase() : "";
     const key = keyColumn >= 0 ? String(row[keyColumn] ?? "").trim() : "";
-    if (/^SC-TEST-(?:IN|OUT):[ ]/.test(desc) && reconStatus === "SC_TEST_ONLY" && !key) continue;
+    // Compatibility: newer SC cash-income descriptions follow the historical
+    // "Dana Masuk dari ... | BANK - tujuan | SC-IN-000011" format.
+    // Keep requiring BOTH the explicit H-column test status and empty mutation_key;
+    // matching the description alone must never suppress ordinary bank mutations.
+    const legacyScTest = /^SC-TEST-(?:IN|OUT):[ ]/.test(desc);
+    const formattedScTestIncome = /^Dana Masuk dari .+ \| .+ \| SC-IN-\d{6}$/.test(desc);
+    if ((legacyScTest || formattedScTestIncome) && reconStatus === "SC_TEST_ONLY" && !key) continue;
     const date = parseDate(String(row[dateColumn] ?? ""), slashDateOrder);
     const debit = parseAmount(String(row[debitColumn] ?? ""));
     const credit = parseAmount(String(row[creditColumn] ?? ""));
