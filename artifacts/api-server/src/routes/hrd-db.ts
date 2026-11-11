@@ -1,4 +1,5 @@
 import { pool } from "@workspace/db";
+import type { PoolClient } from "pg";
 
 /**
  * Executes one HRD unit of work under a non-login, NO-BYPASSRLS database role.
@@ -8,7 +9,7 @@ import { pool } from "@workspace/db";
  */
 export async function withHrdCompanyScope<T>(
   verifiedCompanyId: number,
-  work: (client: Awaited<ReturnType<typeof pool.connect>>) => Promise<T>,
+  work: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   if (!Number.isSafeInteger(verifiedCompanyId) || verifiedCompanyId <= 0) {
     throw new Error("HRD_COMPANY_SCOPE_INVALID");
