@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Users, Clock, DollarSign, FileText, CalendarDays, BarChart2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,6 +28,12 @@ export default function HrHubPage() {
             </p>
           </div>
         </div>
+
+        <Link href="/hr/employees">
+          <a className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90">
+            <Users className="h-4 w-4" /> Buka Data Karyawan HRD
+          </a>
+        </Link>
 
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-950">
           <div className="flex items-center gap-2 mb-1">
