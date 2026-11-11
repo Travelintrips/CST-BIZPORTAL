@@ -1,0 +1,72 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import { createServer } from "node:http";
+import { once } from "node:events";
+
+const state = vi.hoisted(() => ({
+  session: null as null | { id: string; email: string; issuedAt: number; expiresAt: number },
+  actor: null as null | { id: string; email: string; role: string; companyId: number | null; firstName: string | null; lastName: string | null },
+  queries: [] as Array<{ sql: string; values?: unknown[] }>,
+  role: [] as string[],
+}));
+vi.mock("./dev-auth", () => ({
+  getProductionSession: () => state.session,
+  getProductionUser: async () => state.actor,
+}));
+vi.mock("@workspace/db", () => ({
+  pool: { connect: async () => ({
+    query: async (sql: string, values?: unknown[]) => {
+      state.queries.push({ sql, values });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.startsWith("SET LOCAL ROLE")) state.role.push(sql);
+      if (sql.includes("FROM public.employees")) {
+        const companyId = Number(values?.[values.length - 1]);
+        if (companyId !== 1) return { rows: [], rowCount: 0 };
+        return { rows: [{ id: 10, company_id: 1, first_name: "Synthetic", last_name: "Employee" }], rowCount: 1 };
+      }
+      if (sql.includes("hrd_private.employee_profiles")) return { rows: [], rowCount: 0 };
+      if (sql.includes("hrd_private.employee_documents")) return { rows: [], rowCount: 0 };
+      if (sql.includes("hrd_private.employee_document_audit")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    },
+    release: () => undefined,
+  }) },
+}));
+import hrdRouter from "./hrd-routes";
+
+describe("HRD production API company isolation", () => {
+  let server: ReturnType<typeof createServer>;
+  let root: string;
+  afterEach(async () => {
+    state.session = null; state.actor = null; state.queries.length = 0; state.role.length = 0;
+    if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  async function start() {
+    const app = express(); app.use("/api", hrdRouter);
+    server = createServer(app); server.listen(0, "127.0.0.1"); await once(server, "listening");
+    const address = server.address(); if (!address || typeof address === "string") throw Error("no address");
+    root = "http://127.0.0.1:" + address.port;
+  }
+  it("rejects anonymous calls before touching DB", async () => {
+    await start();
+    const response = await fetch(root + "/api/hrd/employees?companyId=1");
+    expect(response.status).toBe(401); expect(state.queries).toHaveLength(0);
+  });
+  it("rejects cross-company selection for a company-scoped HR actor", async () => {
+    state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
+    state.actor = { id: "u1", email: "hr@example.test", role: "hrd", companyId: 1, firstName: null, lastName: null };
+    await start();
+    const response = await fetch(root + "/api/hrd/employees?companyId=3");
+    expect(response.status).toBe(403); expect(state.queries).toHaveLength(0);
+  });
+  it("reads only the selected company in a transaction-local HRD role", async () => {
+    state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
+    state.actor = { id: "u1", email: "hr@example.test", role: "hrd", companyId: 1, firstName: null, lastName: null };
+    await start();
+    const response = await fetch(root + "/api/hrd/employees?companyId=1");
+    expect(response.status).toBe(200);
+    const body = await response.json() as { companyId: number; employees: Array<{company_id:number}> };
+    expect(body.companyId).toBe(1); expect(body.employees.every((x) => x.company_id === 1)).toBe(true);
+    expect(state.role).toEqual(["BEGIN","SET LOCAL ROLE bizportal_hrd_prod","COMMIT"]);
+    expect(state.queries[2].values).toEqual(["1"]);
+  });
+});
