@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import type { Server } from "node:http";
@@ -44,6 +45,20 @@ beforeEach(() => {
   mocked.verifiedUser.mockResolvedValue(null);
   mocked.query.mockResolvedValue({rows:[]});
 });
+describe("Separated BizPortal route mounting contract", () => {
+  it("mounts Marketplace DEV route before global accounting and legacy auth middlewares", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const devRoute = source.indexOf("router.use(devMarketplaceReadParityRouter);");
+    const accounting = source.indexOf("router.use(accountingRouter);");
+    const legacy = source.indexOf("router.use(legacyReadParityRouter);");
+    const auth = source.indexOf("router.use(localProductionAuthRouter);");
+    expect(auth).toBeGreaterThanOrEqual(0);
+    expect(devRoute).toBeGreaterThan(auth);
+    expect(devRoute).toBeLessThan(accounting);
+    expect(devRoute).toBeLessThan(legacy);
+  });
+});
+
 describe("DEV-only Marketplace read parity security", () => {
   it.each(["/api/mkt/admin/rfqs", "/api/mkt/admin/purchase-orders"])("returns 404 outside DEV: %s", async path => {
     mocked.isDev.mockReturnValue(false);
