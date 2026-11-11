@@ -1,0 +1,3 @@
+SELECT n.nspname,c.relname,c.relrowsecurity,c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='hrd_private' AND c.relkind='r' ORDER BY c.relname;
+SELECT id,name,public,file_size_limit,allowed_mime_types FROM storage.buckets WHERE id='bizportal-hrd-documents-prod';
+SELECT rolname,rolcanlogin,rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname='bizportal_payroll_prod';
