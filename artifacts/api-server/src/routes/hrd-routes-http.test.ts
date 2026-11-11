@@ -8,16 +8,25 @@ const state = vi.hoisted(() => ({
   actor: null as null | { id: string; email: string; role: string; companyId: number | null; firstName: string | null; lastName: string | null },
   queries: [] as Array<{ sql: string; values?: unknown[] }>,
   role: [] as string[],
+  activeUser: true,
 }));
 vi.mock("./dev-auth", () => ({
   getProductionSession: () => state.session,
   getProductionUser: async () => state.actor,
 }));
 vi.mock("@workspace/db", () => ({
-  pool: { connect: async () => ({
+  pool: {
+    query: async (sql: string) => {
+      if (sql.includes("FROM public.users")) return {rows:state.activeUser?[{ok:1}]:[],rowCount:state.activeUser?1:0};
+      throw Error("Unexpected unscoped HRD query");
+    },
+    connect: async () => ({
     query: async (sql: string, values?: unknown[]) => {
       state.queries.push({ sql, values });
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.startsWith("SET LOCAL ROLE")) state.role.push(sql);
+      if (sql.includes("current_user AS current_role")) {
+        return { rows:[{current_role:"bizportal_hrd_prod",tenant_scope:String(state.actor?.companyId??"")}],rowCount:1 };
+      }
       if (sql.includes("FROM public.employees")) {
         const companyId = Number(values?.[values.length - 1]);
         if (companyId !== 1) return { rows: [], rowCount: 0 };
@@ -37,7 +46,7 @@ describe("HRD production API company isolation", () => {
   let server: ReturnType<typeof createServer>;
   let root: string;
   afterEach(async () => {
-    state.session = null; state.actor = null; state.queries.length = 0; state.role.length = 0;
+    state.session = null; state.actor = null; state.activeUser=true; state.queries.length = 0; state.role.length = 0;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   async function start() {
@@ -88,6 +97,24 @@ describe("HRD production API company isolation", () => {
     });
     expect(response.status).toBe(503);
     expect(state.queries).toHaveLength(0);
+  });
+  it("refuses a disabled HRD account even with a signed session", async () => {
+    state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    state.activeUser=false;
+    await start();
+    const response=await fetch(root+"/api/hrd/employees?companyId=1");
+    expect(response.status).toBe(403);
+    expect(state.queries).toHaveLength(0);
+  });
+  it("validates production role and transaction-local scope without returning employee data", async () => {
+    state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    await start();
+    const response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ready:true,companyId:1,roleIsolated:true});
+    expect(state.role).toEqual(["BEGIN","SET LOCAL ROLE bizportal_hrd_prod","COMMIT"]);
   });
   it("reads only the selected company in a transaction-local HRD role", async () => {
     state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
