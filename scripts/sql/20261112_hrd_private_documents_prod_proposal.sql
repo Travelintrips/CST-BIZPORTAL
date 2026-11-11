@@ -18,6 +18,16 @@ $$;
 -- to anon/authenticated or browser clients.
 GRANT bizportal_hrd_prod TO bizportal_prod;
 
+-- The HRD role reads only the employee directory columns needed by the HRD
+-- screen. This is a separate RLS policy; the existing anon/authenticated
+-- deny-all and Payroll policy remain untouched.
+GRANT SELECT (id, company_id, first_name, last_name, status, email, phone, position, hire_date, deleted_at)
+  ON public.employees TO bizportal_hrd_prod;
+DROP POLICY IF EXISTS hrd_prod_employee_directory_read ON public.employees;
+CREATE POLICY hrd_prod_employee_directory_read ON public.employees
+  FOR SELECT TO bizportal_hrd_prod
+  USING (company_id = NULLIF(current_setting('app.hrd_company_id', true),'')::INTEGER);
+
 CREATE SCHEMA IF NOT EXISTS hrd_private;
 REVOKE ALL ON SCHEMA hrd_private FROM PUBLIC, anon, authenticated, service_role;
 GRANT USAGE ON SCHEMA hrd_private TO bizportal_hrd_prod;
@@ -114,6 +124,6 @@ ON CONFLICT (id) DO NOTHING;
 -- 1) SET LOCAL ROLE bizportal_hrd_prod + company_id=1 can access only company 1.
 -- 2) company_id=3 can access only company 3, not company 1.
 -- 3) missing/invalid company scope returns zero rows and rejects writes.
--- 4) anon/authenticated/service_role have no schema/table privileges or storage policies.
+-- 4) anon/authenticated/service_role have no schema/table privileges or storage policies; existing employee deny-all policies remain intact.
 -- 5) verify bucket remains private and signed URLs expire.
 -- This proposal has not been applied to PROD.
