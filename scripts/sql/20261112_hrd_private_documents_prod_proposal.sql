@@ -13,10 +13,10 @@ BEGIN
 END
 $$;
 
--- The existing application login has no BYPASSRLS. Membership only allows
--- the backend to SET LOCAL ROLE inside a transaction; never expose this role
--- to anon/authenticated or browser clients.
-GRANT bizportal_hrd_prod TO bizportal_prod;
+-- The existing application login has no BYPASSRLS. Membership is explicitly
+-- non-inheriting: backend must SET LOCAL ROLE inside each HRD transaction.
+-- Never expose the role to anon/authenticated or browser clients.
+GRANT bizportal_hrd_prod TO bizportal_prod WITH INHERIT FALSE, SET TRUE;
 DO $
 DECLARE r RECORD;
 BEGIN
