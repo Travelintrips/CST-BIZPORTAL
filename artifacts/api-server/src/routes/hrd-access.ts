@@ -17,9 +17,10 @@ export function authorizeHrdCompany(
 
   const companyId = Number(requestedCompanyId);
   if (!Number.isSafeInteger(companyId)) return null;
-  if (!["super_admin", "owner", "admin", "hrd"].includes(actor.role.toLowerCase())) return null;
+  if (!["super_admin", "owner", "hrd"].includes(actor.role.toLowerCase())) return null;
 
-  // An unscoped owner/admin may not implicitly assume access to all tenants.
+  // General admins are not automatically permitted to read sensitive HRD documents.
+  // An unscoped owner/HRD actor cannot assume access to every tenant.
   if (actor.role.toLowerCase() === "super_admin") return companyId;
   return actor.companyId === companyId ? companyId : null;
 }
