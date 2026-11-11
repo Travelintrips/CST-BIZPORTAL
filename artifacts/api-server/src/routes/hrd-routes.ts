@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { pool } from "@workspace/db";
 import { getProductionSession, getProductionUser } from "./dev-auth";
 import { authorizeHrdCompany } from "./hrd-access";
 import { withHrdCompanyScope } from "./hrd-db";
@@ -26,6 +27,20 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
     if (!session) { res.status(401).json({ message: "Sesi BizPortal tidak tersedia." }); return; }
     const actor = await getProductionUser(session);
     if (!actor) { res.status(403).json({ message: "Akun tidak aktif atau tidak terdaftar." }); return; }
+    // The shared production session lookup establishes identity but does not
+    // enforce status/is_active. HRD handles sensitive personal documents and
+    // must independently reject disabled/revoked accounts.
+    const active = await pool.query(
+      `SELECT 1 FROM public.users u
+        WHERE lower(coalesce(to_jsonb(u)->>'email','')) = $1
+          AND coalesce((to_jsonb(u)->>'is_active')::boolean,false) IS TRUE
+          AND lower(coalesce(to_jsonb(u)->>'status','active')) = 'active'
+        LIMIT 1`,
+      [actor.email.trim().toLowerCase()],
+    );
+    if (active.rowCount !== 1) {
+      res.status(403).json({ message: "Akses HRD akun nonaktif ditolak." }); return;
+    }
     const companyId = authorizeHrdCompany(actor, req.query.companyId);
     if (companyId === null) { res.status(403).json({ message: "Akses HRD untuk perusahaan ini ditolak." }); return; }
     req.hrdActor = actor;
@@ -39,6 +54,35 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
 router.use(authorize);
 registerHrdPhotoRoutes(router);
 registerHrdOcrRoutes(router);
+
+// Safe authenticated readiness probe: prove the actual API database connection
+// can SET LOCAL ROLE and access ONLY the selected tenant's employee directory.
+// Does not reveal the runtime DB username, employee data, or secret settings.
+router.get("/hrd/readiness", async (req: HrdRequest, res: Response) => {
+  const companyId = req.hrdCompanyId!;
+  try {
+    const checked = await withHrdCompanyScope(companyId, async (client) => {
+      const role = await client.query(
+        "SELECT current_user AS current_role, current_setting('app.hrd_company_id',true) AS tenant_scope",
+      );
+      if (role.rows[0]?.current_role !== "bizportal_hrd_prod" ||
+          role.rows[0]?.tenant_scope !== String(companyId)) {
+        throw Error("HRD_DATABASE_ROLE_SCOPE_MISMATCH");
+      }
+      // The identity column is explicitly permitted and RLS filters this query.
+      await client.query(
+        "SELECT id FROM public.employees WHERE company_id=$1 AND deleted_at IS NULL LIMIT 1",
+        [companyId],
+      );
+      return true;
+    });
+    res.setHeader("Cache-Control","no-store");
+    res.json({ready:checked,companyId,roleIsolated:true});
+  } catch (error) {
+    req.log?.error?.({error,companyId},"HRD production role readiness failed");
+    res.status(503).json({ready:false,message:"Koneksi database HRD belum dapat diverifikasi."});
+  }
+});
 
 router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {
   const companyId = req.hrdCompanyId!;
