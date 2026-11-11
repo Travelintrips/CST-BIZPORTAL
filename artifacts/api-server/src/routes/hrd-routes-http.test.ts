@@ -58,6 +58,37 @@ describe("HRD production API company isolation", () => {
     const response = await fetch(root + "/api/hrd/employees?companyId=3");
     expect(response.status).toBe(403); expect(state.queries).toHaveLength(0);
   });
+  it("denies anonymous photo preparation before storage or database access", async () => {
+    await start();
+    const response=await fetch(root + "/api/hrd/employees/10/photo/prepare?companyId=1", {
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({mimeType:"image/jpeg",processingAuthorizationConfirmed:true}),
+    });
+    expect(response.status).toBe(401);
+    expect(state.queries).toHaveLength(0);
+  });
+  it("denies cross-company photo preparation before storage or database access", async () => {
+    state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    await start();
+    const response=await fetch(root + "/api/hrd/employees/10/photo/prepare?companyId=3", {
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({mimeType:"image/jpeg",processingAuthorizationConfirmed:true}),
+    });
+    expect(response.status).toBe(403);
+    expect(state.queries).toHaveLength(0);
+  });
+  it("keeps photo upload unavailable until private PROD storage is enabled", async () => {
+    state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    await start();
+    const response=await fetch(root + "/api/hrd/employees/10/photo/prepare?companyId=1", {
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({mimeType:"image/jpeg",processingAuthorizationConfirmed:true}),
+    });
+    expect(response.status).toBe(503);
+    expect(state.queries).toHaveLength(0);
+  });
   it("reads only the selected company in a transaction-local HRD role", async () => {
     state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
     state.actor = { id: "u1", email: "hr@example.test", role: "hrd", companyId: 1, firstName: null, lastName: null };
