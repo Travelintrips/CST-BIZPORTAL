@@ -87,7 +87,7 @@ export default function HrdEmployeeDetail(){
   try{
    const result=await api<HrdView>(`/api/payroll/hrd/employees/${id}?companyId=${companyId}`);
    if(seq!==requestSeq.current)return;
-   if(result.companyId!==1||result.employeeId!==id)throw Error("Perusahaan/ID tidak cocok.");
+   if(result.companyId!==companyId||result.employeeId!==id)throw Error("Perusahaan/ID tidak cocok.");
    setData(result);
   }catch(e){
    if(seq===requestSeq.current){setError(e instanceof Error?e.message:"Data tidak dapat dibaca.");setData(null);}
