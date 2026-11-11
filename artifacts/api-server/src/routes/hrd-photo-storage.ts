@@ -42,9 +42,10 @@ export async function createHrdPhotoSignedUpload(path: string) {
     body: JSON.stringify({upsert:false}), signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) throw Error("HRD_STORAGE_SIGN_UPLOAD_FAILED");
-  const body = await response.json() as {token?:string};
-  if (!body.token) throw Error("HRD_STORAGE_SIGN_UPLOAD_EMPTY");
-  return {storageUrl:base, bucket:BUCKET, path, token:body.token};
+  const body = await response.json() as {token?:string;url?:string};
+  const token = body.token ?? (body.url ? new URL(body.url,base).searchParams.get("token") : null);
+  if (!token) throw Error("HRD_STORAGE_SIGN_UPLOAD_EMPTY");
+  return {storageUrl:base, bucket:BUCKET, path, token};
 }
 export async function readHrdPhoto(path: string): Promise<Buffer> {
   if (!pathSafe(path)) throw Error("HRD_STORAGE_INVALID_PATH");
