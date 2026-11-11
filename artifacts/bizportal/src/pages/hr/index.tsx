@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/layout/AppShell";
+import { Link } from "wouter";
 import { Users, Clock, DollarSign, FileText, CalendarDays, BarChart2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ export default function HrHubPage() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Link href="/hr/employees" className="rounded-lg border p-4 hover:bg-muted"><h2 className="font-semibold">Master Karyawan</h2><p className="text-xs text-muted-foreground">Profil dan dokumen karyawan, termasuk OCR</p></Link>
           {COMING_SOON.map((item) => {
             const Icon = item.icon;
             return (
