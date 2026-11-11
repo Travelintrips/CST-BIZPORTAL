@@ -65,6 +65,21 @@ function failed(res:Response,error:unknown,message:string){
 // HRD uses the existing least-privilege Payroll PROD capability role inside
 // each transaction, with the authenticated company scope set locally.
 export function registerHrdDocumentRoutes(router:IRouter):void{
+ router.get("/payroll/hrd/employees",async(req:HrdReq,res:Response)=>{
+  if(!gate(req,res))return;
+  const companyId=req.payrollCompanyId!;
+  if(!databaseReady()){res.status(503).json({message:"Koneksi HRD PROD terisolasi belum tersedia."});return;}
+  try{
+   const result=await scoped(companyId,client=>client.query(
+    `SELECT id,first_name,last_name,status,email,phone,position,hire_date
+       FROM public.employees
+      WHERE company_id=$1 AND deleted_at IS NULL
+      ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END,first_name,last_name,id
+      LIMIT 500`,[companyId]),true);
+   res.setHeader("Cache-Control","no-store");
+   res.json({companyId,employees:result.rows.map(row=>({...row,id:Number(row.id)})),readOnly:!ocrReady()});
+  }catch(err){failed(res,err,"Daftar karyawan HRD belum tersedia.");}
+ });
  router.get("/payroll/hrd/employees/:id",async(req:HrdReq,res:Response)=>{
   if(!gate(req,res))return;
   const id=integerId(req.params.id),companyId=req.payrollCompanyId!;
