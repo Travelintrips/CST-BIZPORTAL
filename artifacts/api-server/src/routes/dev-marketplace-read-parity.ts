@@ -1,16 +1,37 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
-import { getDevSession, isDevelopmentEnvironment } from "./dev-auth";
+import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment } from "./dev-auth";
 
 // DEV-only, read-only BizPortal Marketplace parity with Customer Portal.
 // No proxy, no credential forwarding, and no production fallback.
 const router: IRouter = Router();
-function authorize(req: Request, res: Response): boolean {
+async function authorize(req: Request, res: Response): Promise<boolean> {
+  // This DEV-only endpoint must never become available on the PROD runtime.
   if (!isDevelopmentEnvironment()) {
     res.status(404).json({ code: "BIZPORTAL_LOCAL_ENDPOINT_NOT_FOUND", error: "Not found" });
     return false;
   }
-  const user = getDevSession(req);
+
+  // The separated BizPortal uses Supabase OTP -> its own signed session cookie.
+  // Never trust a role supplied by Customer Portal, a header, or a JWT user_metadata field.
+  let user = getDevSession(req);
+  if (!user) {
+    const verifiedSession = getProductionSession(req);
+    if (verifiedSession) {
+      try {
+        user = await getProductionUser(verifiedSession);
+      } catch (error) {
+        req.log?.error({ error }, "Marketplace DEV admin session lookup failed");
+        res.status(503).json({ error: "Authorization service unavailable" });
+        return false;
+      }
+      if (!user) {
+        res.status(403).json({ error: "Forbidden" });
+        return false;
+      }
+    }
+  }
+
   if (!user) {
     res.status(401).json({ error: "Unauthorized" });
     return false;
@@ -27,7 +48,7 @@ function limit(req: Request): number {
 }
 
 router.get("/mkt/admin/rfqs", async (req, res): Promise<void> => {
-  if (!authorize(req,res)) return;
+  if (!(await authorize(req,res))) return;
   try {
     const result = await pool.query(
       `select id as "rfqId", rfq_number as "rfqNumber",
@@ -49,7 +70,7 @@ router.get("/mkt/admin/rfqs", async (req, res): Promise<void> => {
 });
 
 router.get("/mkt/admin/purchase-orders", async (req, res): Promise<void> => {
-  if (!authorize(req,res)) return;
+  if (!(await authorize(req,res))) return;
   try {
     const result = await pool.query(
       `select p.id, p.po_number as "poNumber", p.rfq_id as "rfqId",
