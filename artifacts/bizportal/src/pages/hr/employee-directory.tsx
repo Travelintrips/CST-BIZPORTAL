@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { useCompany } from "@/contexts/CompanyContext";
@@ -20,7 +20,9 @@ export default function HrdEmployeeDirectory() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestSeq = useRef(0);
   const load = async () => {
+    const seq = ++requestSeq.current;
     if (companyId === null) { setEmployees([]); setError("Pilih satu perusahaan untuk membuka data HRD."); return; }
     setLoading(true); setError("");
     try {
@@ -30,12 +32,18 @@ export default function HrdEmployeeDirectory() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message || `HTTP ${response.status}`);
       if (body.companyId !== companyId || !Array.isArray(body.employees)) throw new Error("Scope perusahaan tidak cocok.");
-      setEmployees(body.employees.filter((employee: Employee) => employee.company_id === companyId));
+      if (requestSeq.current === seq) setEmployees(body.employees.filter((employee: Employee) => employee.company_id === companyId));
     } catch (cause) {
-      setEmployees([]); setError(cause instanceof Error ? cause.message : "Data karyawan tidak dapat dimuat.");
-    } finally { setLoading(false); }
+      if (requestSeq.current === seq) {
+        setEmployees([]); setError(cause instanceof Error ? cause.message : "Data karyawan tidak dapat dimuat.");
+      }
+    } finally { if (requestSeq.current === seq) setLoading(false); }
   };
-  useEffect(() => { void load(); }, [companyId]);
+  useEffect(() => {
+    setEmployees([]); setError("");
+    void load();
+    return () => { requestSeq.current++; };
+  }, [companyId]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? employees.filter((e) => [e.first_name,e.last_name,e.email,e.phone,e.position,String(e.id)]
