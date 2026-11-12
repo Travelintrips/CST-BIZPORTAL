@@ -20,6 +20,31 @@ export function hrdPrivateStorageReady(): boolean {
     process.env.HRD_PROD_SUPABASE_URL?.replace(/\/$/, "") === `https://${PROD_REF}.supabase.co` &&
     Boolean(process.env.HRD_PROD_STORAGE_SERVICE_KEY?.trim());
 }
+/**
+ * Read-only credential/bucket preflight independent of feature activation.
+ * Never returns the key, upstream response body, raw URL or backend internals.
+ */
+export async function probeHrdPrivateStorage(): Promise<boolean> {
+  const base=process.env.HRD_PROD_SUPABASE_URL?.trim().replace(/\/$/,"");
+  const key=process.env.HRD_PROD_STORAGE_SERVICE_KEY?.trim();
+  if(process.env.APP_ENV!=="production" ||
+     base!==`https://${PROD_REF}.supabase.co` || !key) return false;
+  try {
+    const response=await fetch(`${base}/storage/v1/bucket/${BUCKET}`,{
+      method:"GET",
+      headers:{apikey:key,Authorization:`Bearer ${key}`},
+      signal:AbortSignal.timeout(10000),
+    });
+    if(!response.ok)return false;
+    const metadata=await response.json() as {
+      id?:unknown;public?:unknown;file_size_limit?:unknown;
+    };
+    return metadata.id===BUCKET && metadata.public===false &&
+      typeof metadata.file_size_limit==="number" &&
+      metadata.file_size_limit<=MAX_BYTES;
+  }catch{return false;}
+}
+
 function storageConfig() {
   if (!hrdPrivateStorageReady()) throw Error("HRD_PRIVATE_STORAGE_DISABLED");
   return {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hrdPrivateStorageReady, validPhotoMime, validPhotoBytes,
-  createHrdPhotoSignedUpload, photoSha256, validateHrdPhotoSignedPreview,
+  createHrdPhotoSignedUpload, photoSha256, validateHrdPhotoSignedPreview, probeHrdPrivateStorage,
 } from "./hrd-photo-storage";
 
 const saved = {
@@ -21,6 +21,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("HRD private PROD photo storage", () => {
+  it("checks private PROD bucket read-only while upload flag remains OFF", async () => {
+    process.env.APP_ENV="production";
+    process.env.HRD_PROD_DOCUMENTS_ENABLED="false";
+    process.env.HRD_PROD_SUPABASE_URL="https://nzdweipzckfszczzqtuw.supabase.co";
+    process.env.HRD_PROD_STORAGE_SERVICE_KEY="synthetic-secret";
+    const fetcher=vi.fn(async (_url:string,opts:{method:string;headers:Record<string,string>}) => ({
+      ok:true,json:async()=>({id:"bizportal-hrd-documents-prod",public:false,file_size_limit:5242880}),
+    }));
+    vi.stubGlobal("fetch",fetcher);
+    expect(await probeHrdPrivateStorage()).toBe(true);
+    expect(hrdPrivateStorageReady()).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe("https://nzdweipzckfszczzqtuw.supabase.co/storage/v1/bucket/bizportal-hrd-documents-prod");
+    expect(fetcher.mock.calls[0][1].method).toBe("GET");
+  });
+  it("fails closed without secret, with incorrect bucket or failed credentials",async()=>{
+    process.env.APP_ENV="production";
+    process.env.HRD_PROD_SUPABASE_URL="https://nzdweipzckfszczzqtuw.supabase.co";
+    delete process.env.HRD_PROD_STORAGE_SERVICE_KEY;
+    const fetcher=vi.fn();
+    vi.stubGlobal("fetch",fetcher);
+    expect(await probeHrdPrivateStorage()).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+    process.env.HRD_PROD_STORAGE_SERVICE_KEY="synthetic-secret";
+    fetcher.mockImplementationOnce(async()=>({ok:false,status:401}));
+    expect(await probeHrdPrivateStorage()).toBe(false);
+    fetcher.mockImplementationOnce(async()=>({ok:true,json:async()=>({id:"other-bucket",public:false,file_size_limit:5242880})}));
+    expect(await probeHrdPrivateStorage()).toBe(false);
+    fetcher.mockImplementationOnce(async()=>({ok:true,json:async()=>({id:"bizportal-hrd-documents-prod",public:true,file_size_limit:5242880})}));
+    expect(await probeHrdPrivateStorage()).toBe(false);
+  });
   it("denies DEV and wrong project, even with a credential", () => {
     process.env.APP_ENV = "development";
     process.env.HRD_PROD_DOCUMENTS_ENABLED = "true";

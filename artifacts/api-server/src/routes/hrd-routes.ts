@@ -6,7 +6,7 @@ import { withHrdCompanyScope } from "./hrd-db";
 import { registerHrdPhotoRoutes } from "./hrd-photo-routes";
 import { registerHrdOcrRoutes } from "./hrd-ocr-routes";
 import { hrdOcrReady } from "./hrd-document-ocr";
-import { hrdPrivateStorageReady } from "./hrd-photo-storage";
+import { hrdPrivateStorageReady, probeHrdPrivateStorage } from "./hrd-photo-storage";
 
 type HrdRequest = Request & {
   hrdActor?: { id: string; email: string; role: string; companyId: number | null };
@@ -71,7 +71,7 @@ router.use("/hrd", (req: HrdRequest, res: Response, next) => {
   // apply below, and it never returns employee records or secrets.
   // All other HRD paths stay dormant until the explicit rollout flag is ON.
   if (process.env.HRD_PROD_ENABLED !== "true" &&
-      !(req.method === "GET" && req.path === "/readiness")) {
+      !(req.method === "GET" && (req.path === "/readiness" || req.path === "/storage-readiness"))) {
     res.status(404).json({ message: "HRD belum diaktifkan." });
     return;
   }
@@ -108,6 +108,14 @@ router.get("/hrd/readiness", async (req: HrdRequest, res: Response) => {
     req.log?.error?.({error,companyId},"HRD production role readiness failed");
     res.status(503).json({ready:false,message:"Koneksi database HRD belum dapat diverifikasi."});
   }
+});
+
+// Credential and bucket preflight. Safe when upload, OCR, and photos are OFF.
+// Authenticated against the same company/role gate as employee reads.
+router.get("/hrd/storage-readiness", async (req: HrdRequest, res: Response) => {
+  res.setHeader("Cache-Control","no-store");
+  const ready=await probeHrdPrivateStorage();
+  res.status(ready?200:503).json({ready,companyId:req.hrdCompanyId,storagePrivate:ready});
 });
 
 router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {
