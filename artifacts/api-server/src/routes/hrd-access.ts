@@ -17,12 +17,10 @@ export function authorizeHrdCompany(
 
   const companyId = Number(requestedCompanyId);
   if (!Number.isSafeInteger(companyId)) return null;
-  if (!["super_admin", "owner", "hrd"].includes(actor.role.toLowerCase())) return null;
-
-  // General admins are not automatically permitted to read sensitive HRD documents.
-  // An unscoped owner/HRD actor cannot assume access to every tenant.
-  if (actor.role.toLowerCase() === "super_admin") return companyId;
-  return actor.companyId === companyId ? companyId : null;
+  // Temporary policy: only a verified Super Admin session can access HRD.
+  // The requested company remains explicit, and row-level isolation still applies.
+  if (actor.role.trim().toLowerCase() !== "super_admin") return null;
+  return companyId;
 }
 
 /** Every employee/doc query must use BOTH of these predicates. */
