@@ -7,6 +7,7 @@ import { registerHrdPhotoRoutes } from "./hrd-photo-routes";
 import { registerHrdOcrRoutes } from "./hrd-ocr-routes";
 import { hrdOcrReady } from "./hrd-document-ocr";
 import { hrdPrivateStorageReady, probeHrdPrivateStorage } from "./hrd-photo-storage";
+import { runHrdStorageCanary } from "./hrd-storage-canary";
 
 type HrdRequest = Request & {
   hrdActor?: { id: string; email: string; role: string; companyId: number | null };
@@ -116,6 +117,27 @@ router.get("/hrd/storage-readiness", async (req: HrdRequest, res: Response) => {
   res.setHeader("Cache-Control","no-store");
   const ready=await probeHrdPrivateStorage();
   res.status(ready?200:503).json({ready,companyId:req.hrdCompanyId,storagePrivate:ready});
+});
+
+// Disabled by default. One synthetic object, no employee/document DB writes.
+// Requires the explicitly authorized CST Owner, same-origin POST and a one-shot intent.
+let canaryConsumed=false;
+router.post("/hrd/storage-canary", async (req: HrdRequest, res: Response) => {
+  res.setHeader("Cache-Control","no-store");
+  if (process.env.HRD_PROD_STORAGE_CANARY_ENABLED !== "true") {
+    res.status(404).json({message:"Pemeriksaan sementara tidak aktif."}); return;
+  }
+  if (req.hrdCompanyId !== 1 || req.hrdActor?.role !== "owner" ||
+      req.get("origin") !== "https://bizportal.cstlogistic.co.id" ||
+      req.get("x-hrd-canary-intent") !== "synthetic-once") {
+    res.status(403).json({message:"Pemeriksaan tidak diizinkan."}); return;
+  }
+  if (canaryConsumed) {
+    res.status(409).json({message:"Pemeriksaan sudah dijalankan pada instance ini."}); return;
+  }
+  canaryConsumed=true;
+  const result=await runHrdStorageCanary();
+  res.status(result.ok?200:503).json({companyId:1,...result});
 });
 
 router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {

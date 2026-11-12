@@ -41,15 +41,23 @@ vi.mock("@workspace/db", () => ({
     release: () => undefined,
   }) },
 }));
+vi.mock("./hrd-storage-canary", () => ({
+  runHrdStorageCanary: async () => ({
+    ok:true,uploaded:true,readback:true,preview:true,cleaned:true,
+  }),
+}));
 import hrdRouter from "./hrd-routes";
 
 describe("HRD production API company isolation", () => {
   let server: ReturnType<typeof createServer>;
   let root: string;
   const originalHrdProdEnabled = process.env.HRD_PROD_ENABLED;
+  const originalCanaryEnabled=process.env.HRD_PROD_STORAGE_CANARY_ENABLED;
   afterEach(async () => {
     if (originalHrdProdEnabled === undefined) delete process.env.HRD_PROD_ENABLED;
     else process.env.HRD_PROD_ENABLED = originalHrdProdEnabled;
+    if (originalCanaryEnabled === undefined) delete process.env.HRD_PROD_STORAGE_CANARY_ENABLED;
+    else process.env.HRD_PROD_STORAGE_CANARY_ENABLED = originalCanaryEnabled;
     state.session = null; state.actor = null; state.activeUser=true; state.dbUserId="other_user"; state.queries.length = 0; state.role.length = 0;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -60,6 +68,32 @@ describe("HRD production API company isolation", () => {
     const address = server.address(); if (!address || typeof address === "string") throw Error("no address");
     root = "http://127.0.0.1:" + address.port;
   }
+  it("keeps synthetic canary disabled by default and denies wrong origin/intent", async () => {
+    await start();
+    state.session={id:"cst-owner",email:"cst@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"cst-owner",email:"cst@example.test",role:"owner",companyId:1,firstName:null,lastName:null};
+    state.dbUserId="google_103728868378401731050";
+    delete process.env.HRD_PROD_STORAGE_CANARY_ENABLED;
+    const url=root+"/api/hrd/storage-canary?companyId=1";
+    let response=await fetch(url,{method:"POST"});
+    expect(response.status).toBe(404);
+    process.env.HRD_PROD_STORAGE_CANARY_ENABLED="true";
+    response=await fetch(url,{method:"POST"});
+    expect(response.status).toBe(403);
+    response=await fetch(url,{method:"POST",headers:{
+      origin:"https://wrong.example","x-hrd-canary-intent":"synthetic-once",
+    }});
+    expect(response.status).toBe(403);
+    response=await fetch(url,{method:"POST",headers:{
+      origin:"https://bizportal.cstlogistic.co.id","x-hrd-canary-intent":"synthetic-once",
+    }});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({companyId:1,ok:true,cleaned:true});
+    response=await fetch(url,{method:"POST",headers:{
+      origin:"https://bizportal.cstlogistic.co.id","x-hrd-canary-intent":"synthetic-once",
+    }});
+    expect(response.status).toBe(409);
+  });
   it("does not intercept Payroll or bank reconciliation when HRD is disabled", async () => {
     await start();
     delete process.env.HRD_PROD_ENABLED;
