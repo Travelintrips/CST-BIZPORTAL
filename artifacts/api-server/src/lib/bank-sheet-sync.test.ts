@@ -13,6 +13,20 @@ describe("bank sheet amount parsing", () => {
     expect(parseAmount("1,234.56")).toBe(1234.56);
   });
 
+  it("parses six QRTRAVELI source credits with Indonesian thousands separators", () => {
+    const cases: Record<string, number> = {
+      "923.700": 923700,
+      "487.900": 487900,
+      "1.421.250": 1421250,
+      "1.053.700": 1053700,
+      "953.700": 953700,
+      "30.000": 30000,
+    };
+    for (const [raw, expected] of Object.entries(cases)) {
+      expect(parseAmount(raw)).toBe(expected);
+    }
+  });
+
   it("handles currency labels and blank values", () => {
     expect(parseAmount("Rp 1.234.567")).toBe(1234567);
     expect(parseAmount("")).toBe(0);
@@ -911,5 +925,30 @@ describe("SC test-only rows never enter BizPortal", () => {
     ]);
     const result = await syncOneBankSheetConfig(config.id);
     expect(result.imported).toBe(2);
+  });
+});
+
+// Regression: one booking may have multiple confirmed payments on different
+// bank transaction dates. Importing both bank statement rows is not a request
+// to create new Sport Center payment journals.
+describe("SC-1741 two-date bank statement regression", () => {
+  it("imports two Rp100.000 receipts separately and repeats sync without duplicates or journal writes", async () => {
+    mocks.readSpreadsheetValues.mockResolvedValue([
+      ["Tanggal", "Keterangan", "Debit", "Kredit", "mutation_key", "status_recon"],
+      ["2026-11-05", "QRIS penerimaan SC-1741 tanggal 05 Nov", "0", "100000", "BANK-20261105-SC1741", ""],
+      ["2026-11-09", "QRIS penerimaan SC-1741 tanggal 09 Nov", "0", "100000", "BANK-20261109-SC1741", ""],
+    ]);
+
+    const first = await syncOneBankSheetConfig(config.id);
+    const second = await syncOneBankSheetConfig(config.id);
+    expect(first).toMatchObject({ imported: 2, existing: 0, total: 2 });
+    expect(second).toMatchObject({ imported: 0, existing: 2, total: 2 });
+    expect(storedMutations).toHaveLength(2);
+    expect(storedMutations.map((m) => m.transaction_date).sort()).toEqual(["2026-11-05", "2026-11-09"]);
+    expect(new Set(storedMutations.map((m) => m.mutation_key)).size).toBe(2);
+    expect(storedMutations.every((m) => m.status === "unmatched")).toBe(true);
+    const writes = mocks.clientQuery.mock.calls.map(([sql]) => String(sql).toLowerCase());
+    expect(writes.filter((sql) => sql.includes("insert into public.bank_mutations"))).toHaveLength(2);
+    expect(writes.some((sql) => /insert into .*accounting_(journals|entries)|insert into .*accounting_journal_lines/.test(sql))).toBe(false);
   });
 });
