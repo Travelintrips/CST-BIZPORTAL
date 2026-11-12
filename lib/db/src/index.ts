@@ -73,6 +73,18 @@ const lazyPool = {
  * frontend can start even when readiness is degraded.
  */
 export const pool = lazyPool;
+// Dedicated, separately credentialed Payroll access. Not used by the legacy shared pool.
+export type PayrollDbClient = import("pg").PoolClient;
+export type PayrollDbQueryResult = import("pg").QueryResult;
+export function createDedicatedPayrollPool(connectionString: string): InstanceType<typeof Pool> {
+  return new Pool({
+    connectionString, application_name: "cst-payroll-prod-isolated",
+    max: 2, idleTimeoutMillis: 5_000, connectionTimeoutMillis: 8_000,
+    query_timeout: 15_000,
+  });
+}
+
+
 export const db = drizzle(pool, { schema });
 
 export async function getRuntimeDatabaseUrl(): Promise<string> {

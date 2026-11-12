@@ -1,0 +1,67 @@
+import {
+  createDedicatedPayrollPool,
+  type PayrollDbClient,
+  type PayrollDbQueryResult,
+} from "@workspace/db";
+
+// Strict opt-in and project pinning. Never fall back to the BizPortal shared pool.
+// Even an enabled Payroll feature flag is insufficient without this gated source.
+const PROD_REF = "nzdweipzckfszczzqtuw";
+const DEV_REF = "xssrfshdrtdfupgqwfdw";
+const PROD_LOGIN = "bizportal_payroll_prod_login";
+let dedicated: ReturnType<typeof createDedicatedPayrollPool> | null = null;
+let connectedUrl: string | null = null;
+function prodUrl(): string | null {
+  if (process.env.APP_ENV?.trim().toLowerCase() !== "production" ||
+      process.env.PAYROLL_PROD_REQUIRE_DEDICATED_DB !== "true") return null;
+  const raw=process.env.PAYROLL_DATABASE_URL_PROD?.trim();
+  if (!raw) return null;
+  const parsed=new URL(raw);
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol))
+    throw Error("PAYROLL_PROD_URL_SCHEME_INVALID");
+  const user=decodeURIComponent(parsed.username);
+  const host=parsed.hostname.toLowerCase();
+  const directHost=host==="db."+PROD_REF+".supabase.co";
+  const poolerHost=/^aws-[0-9]+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(host);
+  if (!([PROD_LOGIN,PROD_LOGIN+"."+PROD_REF].includes(user)) ||
+      !(directHost || (poolerHost && user===PROD_LOGIN+"."+PROD_REF)) ||
+      host.includes(DEV_REF) || user.includes(DEV_REF))
+    throw Error("PAYROLL_PROD_DATABASE_PROJECT_OR_ROLE_MISMATCH");
+  if (!parsed.pathname || parsed.pathname==="/")
+    throw Error("PAYROLL_PROD_DATABASE_NAME_MISSING");
+  return raw;
+}
+export function payrollProdDedicatedRequired(): boolean { return prodUrl()!==null; }
+export function payrollDedicatedEnabled(): boolean { return payrollProdDedicatedRequired(); }
+export function getPayrollPool() {
+  const url=prodUrl();
+  if (!url) throw Error("PAYROLL_PROD_DEDICATED_DATABASE_REQUIRED");
+  if (!dedicated) { dedicated=createDedicatedPayrollPool(url); connectedUrl=url; }
+  if (connectedUrl!==url) throw Error("PAYROLL_DATABASE_CHANGED_RESTART_REQUIRED");
+  return dedicated;
+}
+export async function setPayrollCompanyScope(client: PayrollDbClient, companyId:number):Promise<void> {
+  if (!Number.isSafeInteger(companyId)||companyId<=0) throw Error("PAYROLL_INVALID_COMPANY_SCOPE");
+  if (!payrollProdDedicatedRequired()) throw Error("PAYROLL_PROD_DEDICATED_DATABASE_REQUIRED");
+  // Prod login role has NOINHERIT and has no table write grants.
+  // Only this transaction is scoped into the least-privileged capability role.
+  await client.query("SET LOCAL ROLE bizportal_payroll_prod");
+  await client.query("SELECT set_config('app.payroll_company_id',$1,true)",[String(companyId)]);
+}
+export async function payrollScopedQuery(companyId:number,sql:string,values:unknown[]):Promise<PayrollDbQueryResult>{
+  const client=await getPayrollPool().connect();
+  try {
+    await client.query("BEGIN READ ONLY");
+    await setPayrollCompanyScope(client,companyId);
+    const result=await client.query(sql,values);
+    await client.query("COMMIT");
+    return result;
+  }catch(error) {
+    try{await client.query("ROLLBACK");}catch{}
+    throw error;
+  }finally {client.release();}
+}
+export async function closePayrollDedicatedPool():Promise<void>{
+  const p=dedicated; dedicated=null;connectedUrl=null;
+  if(p)await p.end();
+}

@@ -1210,7 +1210,7 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   sport_payment: "Sport",
   sport_group_payment: "Sport Group / DP",
   qris_settlement: "QRIS Settlement",
-  tenant_invoice: "Tenant Invoice",
+  tenant_invoice: "Pembayaran Tenant",
   vendor_payment: "Vendor Payment",
   kasbon: "Kasbon",
   talangan: "Dana Talangan",
@@ -6325,7 +6325,9 @@ function MutationCard({
                         <div className="min-w-0 flex-1">
                           <span className="flex items-center justify-between gap-2">
                             <span className="truncate text-xs font-medium text-foreground">
-                              {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
+                              {candidate.candidate_type === "tenant_invoice" && candidateName
+                                ? `${candidateName} — Pembayaran #${candidate.candidate_id}`
+                                : candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
                             </span>
                             <span className="flex shrink-0 items-center gap-1.5">
                               {candidateApproved && (
@@ -6335,6 +6337,7 @@ function MutationCard({
                             </span>
                           </span>
                           <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+                            {candidate.candidate_type === "tenant_invoice" && <span>ID Pembayaran #{candidate.candidate_id}</span>}
                             <span>{candidateReference}</span>
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
