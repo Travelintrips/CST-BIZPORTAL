@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Camera, FileText, Image as ImageIcon, LockKeyhole, ArrowLeft, RefreshCw } from "lucide-react";
 import { HrdDocumentManager } from "./hrd-document-manager";
+import { uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
 
 type Document = {
   id: string; doc_type: string; status: string; mime_type?: string;
@@ -124,22 +125,11 @@ export default function HrdEmployeeDetailPage() {
     const epoch = photoEpoch.current;
     setPhotoBusy(true); setPhotoError(""); setPhotoNotice("");
     try {
-      const prepared = await postPhoto<{
-        companyId:number; employeeId:number; documentId:string;
-        storageUrl:string; bucket:string; path:string; token:string;
-      }>("prepare", {mimeType:photo.type,processingAuthorizationConfirmed:true});
+      const prepared = await postPhoto<HrdSignedUpload>("prepare", {
+        mimeType:photo.type,processingAuthorizationConfirmed:true,
+      });
       if (epoch !== photoEpoch.current) return;
-      if (prepared.companyId !== companyId || prepared.employeeId !== employeeId ||
-          prepared.bucket !== "bizportal-hrd-documents-prod" ||
-          prepared.storageUrl !== "https://nzdweipzckfszczzqtuw.supabase.co") {
-        throw Error("Tujuan upload privat tidak sesuai perusahaan atau environment.");
-      }
-      const target = `${prepared.storageUrl}/storage/v1/object/upload/sign/${prepared.bucket}/${prepared.path}?token=${encodeURIComponent(prepared.token)}`;
-      const form = new FormData();
-      form.append("cacheControl","3600");
-      form.append("",photo);
-      const upload = await fetch(target,{method:"PUT",body:form,headers:{"x-upsert":"false"}});
-      if (!upload.ok) throw Error("Upload Pas Foto privat gagal.");
+      await uploadHrdSignedDocument(prepared,photo,companyId,employeeId);
       if (epoch !== photoEpoch.current) return;
       const done = await postPhoto<{status:string}>(`${prepared.documentId}/complete`,{});
       if (done.status !== "pending_review") throw Error("Status upload belum dapat diverifikasi.");
