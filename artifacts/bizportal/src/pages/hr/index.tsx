@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { useCompany } from "@/contexts/CompanyContext";
 import { Link } from "wouter";
 import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
 import { AppShell } from "@/components/layout/AppShell";
@@ -16,8 +18,27 @@ const COMING_SOON = [
 
 export default function HrHubPage() {
   const { user } = useSupabaseAuth();
-  const canOpenPrivateHrd = import.meta.env.VITE_HRD_PROD_ENABLED === "true"
-    && (user?.role ?? "").trim().toLowerCase() === "super_admin";
+  const { activeCompanyId, isConsolidated } = useCompany();
+  const [canOpenPrivateHrd, setCanOpenPrivateHrd] = useState(false);
+  const enabled = import.meta.env.VITE_HRD_PROD_ENABLED === "true";
+  const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) &&
+    Number(activeCompanyId) > 0 ? Number(activeCompanyId) : null;
+  useEffect(() => {
+    let disposed = false;
+    setCanOpenPrivateHrd(false);
+    if (!enabled || !user || companyId === null) return;
+    const controller = new AbortController();
+    void fetch(`/api/hrd/readiness?companyId=${companyId}`, {
+      credentials: "include", cache: "no-store", signal: controller.signal,
+    }).then(async response => {
+      if (!response.ok) return null;
+      return response.json();
+    }).then(body => {
+      if (!disposed && body?.ready === true && body?.roleIsolated === true &&
+          body?.companyId === companyId) setCanOpenPrivateHrd(true);
+    }).catch(() => undefined);
+    return () => { disposed = true; controller.abort(); };
+  }, [enabled, user?.id, companyId]);
   return (
     <AppShell>
       <div className="space-y-8 p-6">

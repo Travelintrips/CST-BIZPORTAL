@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   queries: [] as Array<{ sql: string; values?: unknown[] }>,
   role: [] as string[],
   activeUser: true,
+  dbUserId: "other_user",
 }));
 vi.mock("./dev-auth", () => ({
   getProductionSession: () => state.session,
@@ -17,7 +18,7 @@ vi.mock("./dev-auth", () => ({
 vi.mock("@workspace/db", () => ({
   pool: {
     query: async (sql: string) => {
-      if (sql.includes("FROM public.users")) return {rows:state.activeUser?[{ok:1}]:[],rowCount:state.activeUser?1:0};
+      if (sql.includes("FROM public.users")) return {rows:state.activeUser?[{db_user_id:state.dbUserId,db_company_id:state.actor?.companyId,db_role:state.actor?.role}]:[],rowCount:state.activeUser?1:0};
       throw Error("Unexpected unscoped HRD query");
     },
     connect: async () => ({
@@ -49,7 +50,7 @@ describe("HRD production API company isolation", () => {
   afterEach(async () => {
     if (originalHrdProdEnabled === undefined) delete process.env.HRD_PROD_ENABLED;
     else process.env.HRD_PROD_ENABLED = originalHrdProdEnabled;
-    state.session = null; state.actor = null; state.activeUser=true; state.queries.length = 0; state.role.length = 0;
+    state.session = null; state.actor = null; state.activeUser=true; state.dbUserId="other_user"; state.queries.length = 0; state.role.length = 0;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   async function start() {
@@ -129,6 +130,27 @@ describe("HRD production API company isolation", () => {
     response=await fetch(root+"/api/hrd/readiness?companyId=1");
     expect(response.status).toBe(403);
     expect(state.queries).toHaveLength(0);
+  });
+  it("grants only the explicitly verified CST Owner within company 1 while HRD remains OFF", async () => {
+    await start();
+    delete process.env.HRD_PROD_ENABLED;
+    state.session={id:"opaque-session-id",email:"owner@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"opaque-session-id",email:"owner@example.test",role:"owner",companyId:1,firstName:null,lastName:null};
+    state.dbUserId="google_103728868378401731050";
+    let response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ready:true,companyId:1,roleIsolated:true});
+    response=await fetch(root+"/api/hrd/readiness?companyId=3");
+    expect(response.status).toBe(403);
+    response=await fetch(root+"/api/hrd/employees?companyId=1");
+    expect(response.status).toBe(404);
+    state.dbUserId="other_owner";
+    response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(403);
+    state.dbUserId="google_103728868378401731050";
+    state.activeUser=false;
+    response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(403);
   });
   it("rejects anonymous calls before touching DB", async () => {
     await start();
