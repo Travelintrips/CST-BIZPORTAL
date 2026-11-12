@@ -16,7 +16,7 @@ const COMING_SOON = [
 
 export default function HrHubPage() {
   const { user } = useSupabaseAuth();
-  const canOpenPrivateHrd = ["owner", "super_admin", "hrd"].includes((user?.role ?? "").toLowerCase());
+  const canOpenPrivateHrd = (user?.role ?? "").trim().toLowerCase() === "super_admin";
   return (
     <AppShell>
       <div className="space-y-8 p-6">
