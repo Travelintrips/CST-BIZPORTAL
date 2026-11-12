@@ -45,16 +45,37 @@ import hrdRouter from "./hrd-routes";
 describe("HRD production API company isolation", () => {
   let server: ReturnType<typeof createServer>;
   let root: string;
+  const originalHrdProdEnabled = process.env.HRD_PROD_ENABLED;
   afterEach(async () => {
+    if (originalHrdProdEnabled === undefined) delete process.env.HRD_PROD_ENABLED;
+    else process.env.HRD_PROD_ENABLED = originalHrdProdEnabled;
     state.session = null; state.actor = null; state.activeUser=true; state.queries.length = 0; state.role.length = 0;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
   async function start() {
+    process.env.HRD_PROD_ENABLED = "true";
     const app = express(); app.use("/api", hrdRouter);
     server = createServer(app); server.listen(0, "127.0.0.1"); await once(server, "listening");
     const address = server.address(); if (!address || typeof address === "string") throw Error("no address");
     root = "http://127.0.0.1:" + address.port;
   }
+  it("stays dormant without an explicit production HRD release flag", async () => {
+    await start();
+    delete process.env.HRD_PROD_ENABLED;
+    state.session = {id:"u1",email:"test@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor = {id:"u1",email:"test@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
+    const paths=[
+      "/api/hrd/readiness?companyId=1",
+      "/api/hrd/employees?companyId=1",
+      "/api/hrd/employees/10?companyId=1",
+    ];
+    for(const path of paths) {
+      const response=await fetch(root+path);
+      expect(response.status).toBe(404);
+    }
+    expect(state.queries).toHaveLength(0);
+  });
+
   it("rejects anonymous calls before touching DB", async () => {
     await start();
     const response = await fetch(root + "/api/hrd/employees?companyId=1");
