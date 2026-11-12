@@ -38,11 +38,7 @@ function canRead(req: ScopedPayrollRequest): boolean {
 // PROD rollout after the additive migration. A false kill-switch disables
 // the feature immediately; non-production remains OFF unless explicitly enabled
 // for isolated tests. No posting, payment or payroll_items writes are exposed.
-const enabled = () =>
-  process.env.PAYROLL_PROD_COMPONENTS_ENABLED === "true" ||
-  (process.env.NODE_ENV === "production" &&
-   process.env.APP_ENV?.trim().toLowerCase() !== "development" &&
-   process.env.PAYROLL_PROD_COMPONENTS_ENABLED !== "false");
+const enabled = () => process.env.PAYROLL_PROD_COMPONENTS_ENABLED === "true";
 function unavailable(res: Response, write: boolean) {
   res.status(write ? 501 : 404).json({message:"Konfigurasi komponen Payroll PROD belum diaktifkan."});
 }

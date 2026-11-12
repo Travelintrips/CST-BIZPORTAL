@@ -96,12 +96,14 @@ describe("PROD standalone Payroll components — isolation and exact cash advanc
   expect((await fetch(root+"/api/payroll/components/employees")).status).toBe(404);
   expect(state.queries).toHaveLength(0);
  });
- it("opens only in explicit production environment and supports a false kill switch",async()=>{
+ it("requires explicit opt-in even in production; false or missing flag fails closed",async()=>{
   vi.stubEnv("NODE_ENV","production");vi.stubEnv("APP_ENV","development");
   expect((await fetch(url())).status).toBe(404);
   vi.stubEnv("APP_ENV","production");
-  expect((await fetch(url())).status).toBe(200);
+  expect((await fetch(url())).status).toBe(404);
   vi.stubEnv("APP_ENV","");
+  expect((await fetch(url())).status).toBe(404);
+  process.env.PAYROLL_PROD_COMPONENTS_ENABLED="true";
   expect((await fetch(url())).status).toBe(200);
   process.env.PAYROLL_PROD_COMPONENTS_ENABLED="false";
   expect((await fetch(url())).status).toBe(404);
