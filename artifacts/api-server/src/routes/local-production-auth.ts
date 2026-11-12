@@ -100,9 +100,10 @@ function isActivePrivilegedUser(user: RawUser | null): user is RawUser {
  * the existing admin/owner-only permission boundary.
  */
 function isActiveOtpLoginUser(user: RawUser | null): user is RawUser {
-  if (isActivePrivilegedUser(user)) return true;
+  if (!user) return false;
+  const role = user.role.trim().toLowerCase();
   return Boolean(
-    user?.role.trim().toLowerCase() === "super_admin"
+    (role === "admin" || role === "owner" || role === "super_admin")
     && user.isActive
     && (user.status === null || user.status.trim().toLowerCase() === "active"),
   );
