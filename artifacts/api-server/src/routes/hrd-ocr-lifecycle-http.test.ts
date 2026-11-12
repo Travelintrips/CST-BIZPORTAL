@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 
 type FixtureDoc = { id:string; companyId:number; employeeId:number; docType:string;
-  mime:string; path:string; status:string; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
+  mime:string; path:string; status:string; stale?:boolean; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
 const state = vi.hoisted(() => ({
   docs: new Map<string,FixtureDoc>(),
   audit: [] as string[],
@@ -31,7 +31,7 @@ vi.mock("./hrd-db",()=>({
       }
       if(sql.includes("SET status='scanning'")){
         const d=state.docs.get(String(v[0]));
-        if(!d||d.status!=="upload_pending"||d.companyId!==v[1]||d.employeeId!==v[2])
+        if(!d||!(d.status==="upload_pending"||d.status==="scan_failed"||(d.status==="scanning"&&d.stale))||d.companyId!==v[1]||d.employeeId!==v[2])
           return {rowCount:0,rows:[]};
         d.status="scanning";
         return {rowCount:1,rows:[{...d,doc_type:d.docType,mime_type:d.mime,storage_path:d.path}]};
@@ -162,6 +162,19 @@ describe("HRD OCR synthetic HTTP lifecycle (no production writes)",()=>{
     expect(preview.status).toBe(200);
     expect(preview.body.expiresIn).toBe(60);
     expect(state.audit).toHaveLength(3);
+  });
+  it("denies fresh scanning replay but recovers a stale scan without reuploading",async()=>{
+    const id=await preparedKtp();
+    const doc=state.docs.get(id)!;
+    doc.status="scanning";doc.stale=false;
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
+    doc.stale=true;
+    const result=await post(id+"/scan",{processingAuthorizationConfirmed:true});
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({status:"pending_review",masterChanged:false});
+    expect(state.docs.get(id)?.status).toBe("pending_review");
+    expect(state.profile).toBeNull();
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
   });
   it("rejects KTP payroll/job field injection before changing shared profile",async()=>{
     const id=await preparedKtp();
