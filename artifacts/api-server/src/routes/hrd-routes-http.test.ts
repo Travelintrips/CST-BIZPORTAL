@@ -60,9 +60,9 @@ describe("HRD production API company isolation", () => {
     const response = await fetch(root + "/api/hrd/employees?companyId=1");
     expect(response.status).toBe(401); expect(state.queries).toHaveLength(0);
   });
-  it("rejects cross-company selection for a company-scoped HR actor", async () => {
+  it("rejects an owner selecting another company", async () => {
     state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
-    state.actor = { id: "u1", email: "hr@example.test", role: "hrd", companyId: 1, firstName: null, lastName: null };
+    state.actor = { id: "u1", email: "hr@example.test", role: "owner", companyId: 1, firstName: null, lastName: null };
     await start();
     const response = await fetch(root + "/api/hrd/employees?companyId=3");
     expect(response.status).toBe(403); expect(state.queries).toHaveLength(0);
@@ -76,9 +76,9 @@ describe("HRD production API company isolation", () => {
     expect(response.status).toBe(401);
     expect(state.queries).toHaveLength(0);
   });
-  it("denies cross-company photo preparation before storage or database access", async () => {
+  it("denies owner photo preparation before storage or database access", async () => {
     state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
-    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    state.actor={id:"u1",email:"hr@example.test",role:"owner",companyId:1,firstName:null,lastName:null};
     await start();
     const response=await fetch(root + "/api/hrd/employees/10/photo/prepare?companyId=3", {
       method:"POST",headers:{"content-type":"application/json"},
@@ -89,7 +89,7 @@ describe("HRD production API company isolation", () => {
   });
   it("keeps photo upload unavailable until private PROD storage is enabled", async () => {
     state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
-    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    state.actor={id:"u1",email:"hr@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
     await start();
     const response=await fetch(root + "/api/hrd/employees/10/photo/prepare?companyId=1", {
       method:"POST",headers:{"content-type":"application/json"},
@@ -100,7 +100,7 @@ describe("HRD production API company isolation", () => {
   });
   it("refuses a disabled HRD account even with a signed session", async () => {
     state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
-    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    state.actor={id:"u1",email:"hr@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
     state.activeUser=false;
     await start();
     const response=await fetch(root+"/api/hrd/employees?companyId=1");
@@ -109,7 +109,7 @@ describe("HRD production API company isolation", () => {
   });
   it("validates production role and transaction-local scope without returning employee data", async () => {
     state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
-    state.actor={id:"u1",email:"hr@example.test",role:"hrd",companyId:1,firstName:null,lastName:null};
+    state.actor={id:"u1",email:"hr@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
     await start();
     const response=await fetch(root+"/api/hrd/readiness?companyId=1");
     expect(response.status).toBe(200);
@@ -118,7 +118,7 @@ describe("HRD production API company isolation", () => {
   });
   it("reads only the selected company in a transaction-local HRD role", async () => {
     state.session = { id: "u1", email: "hr@example.test", issuedAt: Date.now(), expiresAt: Date.now()+60000 };
-    state.actor = { id: "u1", email: "hr@example.test", role: "hrd", companyId: 1, firstName: null, lastName: null };
+    state.actor = { id: "u1", email: "hr@example.test", role: "super_admin", companyId: 1, firstName: null, lastName: null };
     await start();
     const response = await fetch(root + "/api/hrd/employees?companyId=1");
     expect(response.status).toBe(200);
