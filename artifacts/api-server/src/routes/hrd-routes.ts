@@ -53,19 +53,19 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
 }
 // An explicitly enabled release gate keeps all HRD routes dormant on a staged
 // PROD code deployment. Authorization and OCR/storage flags remain independent.
-router.use((req: HrdRequest, res: Response, next) => {
+router.use("/hrd", (req: HrdRequest, res: Response, next) => {
   // Read-only role readiness may run before HRD feature activation. Its
   // existing verified-session, active-account and Super Admin checks still
   // apply below, and it never returns employee records or secrets.
   // All other HRD paths stay dormant until the explicit rollout flag is ON.
   if (process.env.HRD_PROD_ENABLED !== "true" &&
-      !(req.method === "GET" && req.path === "/hrd/readiness")) {
+      !(req.method === "GET" && req.path === "/readiness")) {
     res.status(404).json({ message: "HRD belum diaktifkan." });
     return;
   }
   next();
 });
-router.use(authorize);
+router.use("/hrd", authorize);
 registerHrdPhotoRoutes(router);
 registerHrdOcrRoutes(router);
 
