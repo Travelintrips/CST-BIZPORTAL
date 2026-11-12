@@ -6,6 +6,8 @@
 export type HrdActor = {
   role: string;
   companyId: number | null;
+  /** Verified by the HRD route after a fresh public.users lookup. */
+  cstOwnerHrdApproved?: boolean;
 };
 
 export function authorizeHrdCompany(
@@ -17,9 +19,13 @@ export function authorizeHrdCompany(
 
   const companyId = Number(requestedCompanyId);
   if (!Number.isSafeInteger(companyId)) return null;
-  // Temporary policy: only a verified Super Admin session can access HRD.
-  // The requested company remains explicit, and row-level isolation still applies.
-  if (actor.role.trim().toLowerCase() !== "super_admin") return null;
+  // Existing Super Admin access remains unchanged.
+  // An explicitly verified, named CST owner may access ONLY company 1.
+  // This boolean must be supplied exclusively from the server-side DB identity check.
+  const role = actor.role.trim().toLowerCase();
+  if (role !== "super_admin" &&
+      !(role === "owner" && actor.companyId === 1 &&
+        companyId === 1 && actor.cstOwnerHrdApproved === true)) return null;
   return companyId;
 }
 
