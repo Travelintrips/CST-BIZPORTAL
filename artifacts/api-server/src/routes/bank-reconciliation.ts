@@ -1172,6 +1172,8 @@ async function loadLocalMatchCandidates(
         paid_date: string | null;
         payment_reference: string | null;
         description: string | null;
+        tenant_name: string | null;
+        invoice_number: string | null;
       }>(
         `select tp.id,
                 tp.amount,
@@ -1180,6 +1182,8 @@ async function loadLocalMatchCandidates(
                   (tp.created_at at time zone 'Asia/Jakarta')::date
                 )::text as paid_date,
                 tp.payment_number as payment_reference,
+                t.business_name as tenant_name,
+                ti.invoice_number,
                 concat_ws(
                   ' ',
                   t.business_name,
@@ -1190,6 +1194,7 @@ async function loadLocalMatchCandidates(
            from public.tenant_payments tp
            left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
            left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
+           left join public.tenant_invoices ti on ti.id = tp.invoice_id and ti.company_id = tp.company_id
           where tp.company_id = $1
             and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
             and nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '') is null
@@ -1221,6 +1226,8 @@ async function loadLocalMatchCandidates(
         candidates.push({
           candidateType: "tenant_invoice",
           candidateId: payment.id,
+          customerName: payment.tenant_name,
+          orderRef: payment.invoice_number ?? payment.payment_reference,
           score,
           amountMatch: true,
           dateMatch,
@@ -5416,7 +5423,17 @@ const mutationListColumns = `
       'order_id_match', match.order_id_match,
       'proof_match', match.proof_match,
       'status', match.status,
-      'customer_name', match.customer_name,
+      'customer_name', case
+        when match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments'
+          then coalesce((
+            select t.business_name
+              from public.tenant_payments tp
+              left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
+              join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
+             where tp.id = match.candidate_id and tp.company_id = bm.company_id
+             limit 1
+          ), match.customer_name)
+        else match.customer_name end,
        'order_ref', match.order_ref,
        'details', null
     ) order by match.match_score desc nulls last, match.id), '[]'::json)
@@ -5523,7 +5540,17 @@ const mutationListCompactColumns = `
       'order_id_match', match.order_id_match,
       'proof_match', match.proof_match,
       'status', match.status,
-      'customer_name', match.customer_name,
+      'customer_name', case
+        when match.candidate_type = 'tenant_invoice' and match.candidate_source = 'public.tenant_payments'
+          then coalesce((
+            select t.business_name
+              from public.tenant_payments tp
+              left join public.tenant_bookings tb on tb.id = tp.tenant_booking_id
+              join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
+             where tp.id = match.candidate_id and tp.company_id = bm.company_id
+             limit 1
+          ), match.customer_name)
+        else match.customer_name end,
        'order_ref', match.order_ref,
        'details', null
     ) order by match.match_score desc nulls last, match.id), '[]'::json)
