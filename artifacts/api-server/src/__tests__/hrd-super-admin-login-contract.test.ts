@@ -28,8 +28,8 @@ describe("Super Admin HRD authentication contract",()=>{
       local.indexOf("function isActiveOtpLoginUser"),
       local.indexOf("async function getPrivilegedProductionUserFromRequest"),
     );
-    expect(helper).toContain("isActivePrivilegedUser(user)");
-    expect(helper).toContain('user?.role.trim().toLowerCase() === "super_admin"');
+    expect(helper).toContain('role === "admin" || role === "owner" || role === "super_admin"');
+    expect(helper).toContain("user.role.trim().toLowerCase()");
     expect(helper).toContain("user.isActive");
     expect(helper).toContain('user.status.trim().toLowerCase() === "active"');
     const send=local.slice(local.indexOf('router.post("/auth/email-otp/send"'),local.indexOf('router.post("/auth/email-otp/verify"'));
