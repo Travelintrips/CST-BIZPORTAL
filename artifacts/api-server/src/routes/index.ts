@@ -8,6 +8,7 @@ import bankReconciliationRouter from "./bank-reconciliation";
 import reconClassificationRouter from "./recon-classification";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
+import devMarketplaceReadParityRouter from "./dev-marketplace-read-parity";
 import businessDashboardRouter from "./business-dashboard";
 import localProductionAuthRouter from "./local-production-auth";
 import salesCoreRouter from "./sales-core";
@@ -42,6 +43,9 @@ router.use(createDevAuthRouter());
 // Production auth is local to this deployment and is mounted before the
 // remaining API-owned routes.
 router.use(localProductionAuthRouter);
+
+// Match isolated Marketplace DEV read routes before broad legacy auth middleware.
+router.use(devMarketplaceReadParityRouter);
 
 router.post("/auth/email-login", (_request, response) => {
   response.status(404).json({ error: "Not found" });
