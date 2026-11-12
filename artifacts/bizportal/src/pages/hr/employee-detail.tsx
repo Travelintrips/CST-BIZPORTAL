@@ -45,6 +45,9 @@ export default function HrdEmployeeDetailPage() {
   const [privatePreview, setPrivatePreview] = useState<{id:string;url:string}|null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sequence = useRef(0);
+  const photoEpoch = useRef(0);
+  const scopedDetail = detail?.companyId === companyId && detail?.employeeId === employeeId
+    && detail?.employee?.company_id === companyId ? detail : null;
   const refresh = async () => {
     const seq = ++sequence.current;
     // Preserve the mounted OCR reviewer while refreshing the SAME employee.
@@ -66,7 +69,10 @@ export default function HrdEmployeeDetailPage() {
       }
       if (sequence.current === seq) setDetail(data as Detail);
     } catch (cause) {
-      if (sequence.current === seq) setError(cause instanceof Error ? cause.message : "Detail HRD tidak tersedia.");
+      if (sequence.current === seq) {
+        setDetail(null);
+        setError(cause instanceof Error ? cause.message : "Detail HRD tidak tersedia.");
+      }
     } finally {
       if (sequence.current === seq) setLoading(false);
     }
@@ -74,11 +80,11 @@ export default function HrdEmployeeDetailPage() {
   useEffect(() => {
     setDetail(null);
     setPrivatePreview(null);
+    photoEpoch.current++;
+    setPhotoBusy(false);
     void refresh();
-    return () => { sequence.current++; };
+    return () => { sequence.current++; photoEpoch.current++; };
   }, [companyId, employeeId]);
-  const scopedDetail = detail?.companyId === companyId && detail?.employeeId === employeeId
-    && detail?.employee?.company_id === companyId ? detail : null;
   useEffect(() => {
     if (!photo || !IMG_TYPES.includes(photo.type) || photo.size > MAX_BYTES) {
       setPhotoUrl(""); return;
@@ -114,13 +120,15 @@ export default function HrdEmployeeDetailPage() {
     return data as T;
   };
   const savePhoto = async () => {
-    if (!photo || !detail?.photoUploadEnabled || !companyId || photoBusy) return;
+    if (!photo || !scopedDetail?.photoUploadEnabled || !companyId || photoBusy) return;
+    const epoch = photoEpoch.current;
     setPhotoBusy(true); setPhotoError(""); setPhotoNotice("");
     try {
       const prepared = await postPhoto<{
         companyId:number; employeeId:number; documentId:string;
         storageUrl:string; bucket:string; path:string; token:string;
       }>("prepare", {mimeType:photo.type,processingAuthorizationConfirmed:true});
+      if (epoch !== photoEpoch.current) return;
       if (prepared.companyId !== companyId || prepared.employeeId !== employeeId ||
           prepared.bucket !== "bizportal-hrd-documents-prod" ||
           prepared.storageUrl !== "https://nzdweipzckfszczzqtuw.supabase.co") {
@@ -132,38 +140,43 @@ export default function HrdEmployeeDetailPage() {
       form.append("",photo);
       const upload = await fetch(target,{method:"PUT",body:form,headers:{"x-upsert":"false"}});
       if (!upload.ok) throw Error("Upload Pas Foto privat gagal.");
+      if (epoch !== photoEpoch.current) return;
       const done = await postPhoto<{status:string}>(`${prepared.documentId}/complete`,{});
       if (done.status !== "pending_review") throw Error("Status upload belum dapat diverifikasi.");
+      if (epoch !== photoEpoch.current) return;
       setPhotoNotice("Pas Foto tersimpan secara privat dan menunggu verifikasi HRD.");
       setPhoto(null); if (fileInput.current) fileInput.current.value = "";
       await refresh();
     } catch (cause) {
-      setPhotoError(cause instanceof Error ? cause.message : "Upload Pas Foto gagal.");
+      if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Upload Pas Foto gagal.");
     } finally { setPhotoBusy(false); }
   };
   const approvePhoto = async (documentId: string) => {
-    if (!detail?.photoUploadEnabled || photoBusy || !window.confirm("Setujui Pas Foto karyawan ini?")) return;
+    if (!scopedDetail?.photoUploadEnabled || photoBusy || !window.confirm("Setujui Pas Foto karyawan ini?")) return;
+    const epoch = photoEpoch.current;
     setPhotoBusy(true); setPhotoError("");
     try {
       const done = await postPhoto<{status:string}>(`${documentId}/verify`,{confirm:true});
       if (done.status !== "verified") throw Error("Verifikasi belum berhasil.");
+      if (epoch !== photoEpoch.current) return;
       setPhotoNotice("Pas Foto berhasil diverifikasi HRD.");
       await refresh();
     } catch (cause) {
-      setPhotoError(cause instanceof Error ? cause.message : "Verifikasi Pas Foto gagal.");
+      if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Verifikasi Pas Foto gagal.");
     } finally { setPhotoBusy(false); }
   };
   const showPrivatePhoto = async (documentId: string) => {
-    if (!detail?.photoUploadEnabled || photoBusy) return;
+    if (!scopedDetail?.photoUploadEnabled || photoBusy) return;
+    const epoch = photoEpoch.current;
     setPhotoBusy(true); setPhotoError("");
     try {
       const result = await postPhoto<{url:string;expiresIn:number}>(`${documentId}/preview`,{});
       if (!result.url.startsWith("https://nzdweipzckfszczzqtuw.supabase.co/storage/v1/object/sign/")) {
         throw Error("Alamat pratinjau privat tidak valid.");
       }
-      setPrivatePreview({id:documentId,url:result.url});
+      if (epoch === photoEpoch.current) setPrivatePreview({id:documentId,url:result.url});
     } catch (cause) {
-      setPhotoError(cause instanceof Error ? cause.message : "Pratinjau Pas Foto gagal.");
+      if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Pratinjau Pas Foto gagal.");
     } finally { setPhotoBusy(false); }
   };
   return <AppShell>
