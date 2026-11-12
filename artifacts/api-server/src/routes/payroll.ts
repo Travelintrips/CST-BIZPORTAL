@@ -4,6 +4,10 @@ import { authorizePayrollCompany } from "./payroll-access";
 import { registerStandalonePayrollComponents } from "./payroll-standalone-components";
 import { registerPayrollKasbonAutoRoutes } from "./payroll-kasbon-automatic-routes";
 import { registerPayrollSuperAdminApprovalRoutes } from "./payroll-super-admin-approval";
+import { registerEffectiveSetupPreviewRoutes } from "./payroll-setup-effective-routes";
+import { registerProdPayrollDraftRoutes } from "./payroll-prod-draft-routes";
+import { payrollProdDedicatedRequired } from "./payroll-prod-db";
+import { readPayrollSuperAdminApprovalReceipt } from "./payroll-super-admin-approval-receipt";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
 /**
@@ -46,8 +50,13 @@ function serializeRun(row: Record<string, unknown>) {
   let integrityError: string | null = null;
   if (status === "approved" && !accountingId) integrityError = "Payroll disetujui tanpa jurnal akrual.";
   if (status === "paid" && (!accountingId || !paymentId)) integrityError = "Payroll dibayar tanpa jurnal lengkap.";
+  const receipt=readPayrollSuperAdminApprovalReceipt(row.notes,row.approved_at,status);
   return {
     id: Number(row.id),
+    approvalType:receipt?"super_admin":null,
+    approvedAt:receipt?String(row.approved_at):null,
+    approvedBy:receipt?.actorEmail??null,
+    approvalNote:receipt?.note??null,
     companyId: Number(row.company_id),
     month: Number(row.month),
     year: Number(row.year),
@@ -64,6 +73,7 @@ registerStandalonePayrollComponents(router);
 // and one-stage Super Admin approval. Never enable without a dedicated DB role.
 registerPayrollKasbonAutoRoutes(router);
 registerPayrollSuperAdminApprovalRoutes(router);
+registerEffectiveSetupPreviewRoutes(router);
 
 router.get("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
   const companyId = req.payrollCompanyId!;
@@ -87,7 +97,7 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
   if (!runId) { res.status(400).json({ message: "ID payroll tidak valid." }); return; }
   try {
     const result = await pool.query(
-      `SELECT id, company_id, month, year, status, posting_status, accounting_entry_id, payment_entry_id
+      `SELECT id, company_id, month, year, status, posting_status, accounting_entry_id, payment_entry_id, notes, approved_at
          FROM public.payroll_runs WHERE company_id = $1 AND id = $2 LIMIT 1`,
       [companyId, runId],
     );
@@ -127,11 +137,18 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
 // Calculate, approval, salary disbursement and journal posting are deliberately
 // absent from this adapter. Requests fail closed instead of mutating financial data.
 router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
+  const prod=process.env.APP_ENV?.trim().toLowerCase()==="production";
+  const superAdmin=req.payrollActor?.role.toLowerCase()==="super_admin";
+  const dedicated=prod && payrollProdDedicatedRequired();
   res.json({
     companyId: req.payrollCompanyId,
-    canCreateDraft: isDevelopmentEnvironment()
+    canViewSetup: dedicated && superAdmin,
+    canApplySetup: dedicated && superAdmin && process.env.PAYROLL_PROD_SETUP_APPLY_ENABLED==="true",
+    canConfigureKasbon: dedicated && superAdmin && process.env.PAYROLL_PROD_KASBON_AUTO_WRITE_ENABLED==="true",
+    canApproveSuperAdmin: dedicated && superAdmin && process.env.PAYROLL_PROD_SUPER_ADMIN_APPROVAL_ENABLED==="true",
+    canCreateDraft: (dedicated && superAdmin && process.env.PAYROLL_PROD_DRAFT_ENABLED==="true") || (isDevelopmentEnvironment()
       && process.env.PAYROLL_DEV_DRAFT_ENABLED === "true"
-      && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? ""),
+      && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? "")),
     canGenerate: isDevelopmentEnvironment()
       && process.env.PAYROLL_DEV_GENERATE_ENABLED === "true"
       && ["admin", "owner", "super_admin"].includes(req.payrollActor?.role.toLowerCase() ?? ""),
@@ -148,6 +165,9 @@ router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
  * DEV-only opt-in. No payroll_items, cash-advance, payment or journal writes.
  * Serializes duplicate period creation with a transaction-scoped advisory lock.
  */
+// Dedicated-PROD route is mounted first; the existing DEV-only fallback
+// below continues unchanged for legacy DEV and is never called from PROD.
+registerProdPayrollDraftRoutes(router);
 router.post("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
   if (!isDevelopmentEnvironment() || process.env.PAYROLL_DEV_DRAFT_ENABLED !== "true") {
     res.status(501).json({ message: "Pembuatan draft payroll belum diaktifkan untuk lingkungan ini." });
