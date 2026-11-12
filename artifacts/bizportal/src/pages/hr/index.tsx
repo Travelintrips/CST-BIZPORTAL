@@ -16,7 +16,8 @@ const COMING_SOON = [
 
 export default function HrHubPage() {
   const { user } = useSupabaseAuth();
-  const canOpenPrivateHrd = (user?.role ?? "").trim().toLowerCase() === "super_admin";
+  const canOpenPrivateHrd = import.meta.env.VITE_HRD_PROD_ENABLED === "true"
+    && (user?.role ?? "").trim().toLowerCase() === "super_admin";
   return (
     <AppShell>
       <div className="space-y-8 p-6">
