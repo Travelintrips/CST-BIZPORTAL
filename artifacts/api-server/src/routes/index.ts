@@ -8,6 +8,7 @@ import purchaseWorkflowRouter from "./purchase-workflow";
 import businessDashboardRouter from "./business-dashboard";
 import localProductionAuthRouter from "./local-production-auth";
 import salesCoreRouter from "./sales-core";
+import customerArMatchPreviewRouter from "./customer-ar-match-preview";
 import adminRealtimeRouter from "./admin-realtime";
 import driverGeofenceRouter from "./driver-geofence";
 import {
@@ -44,6 +45,7 @@ router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
 router.use(businessDashboardRouter);
 router.use(salesCoreRouter);
+router.use(customerArMatchPreviewRouter);
 router.use(adminRealtimeRouter);
 router.use(driverGeofenceRouter);
 
