@@ -22,7 +22,7 @@ vi.mock("./hrd-db", () => ({
         if (sql.includes("SELECT id FROM public.employees"))
           return {rows:[{id:7}],rowCount:1};
         if (sql.includes("INSERT INTO hrd_private.employee_documents")) {
-          const [id,companyId,employeeId,,mime,path] = values as [string,number,number,string,string,string];
+          const [id,companyId,employeeId,mime,path] = values as [string,number,number,string,string,string];
           fixture.documents.set(id,{id,companyId,employeeId,mime,path,status:"upload_pending",hash:null});
           return {rows:[],rowCount:1};
         }
