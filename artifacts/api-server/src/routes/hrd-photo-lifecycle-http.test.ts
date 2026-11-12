@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   queries: [] as Array<{sql:string;values:unknown[]}>,
   object: Buffer.from([255,216,255,1,2,3,4]),
   enabled: true,
+  previewSignCalls: [] as string[],
 }));
 vi.mock("./hrd-db", () => ({
   withHrdCompanyScope: async <T>(companyId: number,
@@ -73,10 +74,11 @@ vi.mock("./hrd-photo-storage", () => ({
   validPhotoBytes: (bytes:Buffer,mime:string) =>
     mime==="image/jpeg"&&bytes.length>3&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255,
   photoSha256: () => "a".repeat(64),
-  signHrdPhotoPreview: async (path:string) => ({
-    url:"https://nzdweipzckfszczzqtuw.supabase.co/storage/v1/object/sign/bizportal-hrd-documents-prod/"+
-      path+"?token=synthetic-preview",expiresIn:60,
-  }),
+  signHrdPhotoPreview: async (path:string) => {
+    fixture.previewSignCalls.push(path);
+    return {url:"https://nzdweipzckfszczzqtuw.supabase.co/storage/v1/object/sign/bizportal-hrd-documents-prod/"+
+      path+"?token=synthetic-preview",expiresIn:60};
+  },
 }));
 import { registerHrdPhotoRoutes } from "./hrd-photo-routes";
 
@@ -107,7 +109,7 @@ describe("HRD Pas Foto synthetic HTTP lifecycle (no production writes)",()=>{
     server.close(error=>error?reject(error):resolve()));});
   beforeEach(()=>{
     fixture.companyId=1;fixture.enabled=true;
-    fixture.documents.clear();fixture.audit.length=0;fixture.queries.length=0;
+    fixture.documents.clear();fixture.audit.length=0;fixture.queries.length=0;fixture.previewSignCalls.length=0;
     fixture.object=Buffer.from([255,216,255,1,2,3,4]);
   });
   it("prepare → complete → verify → preview, with audit and replay rejection",async()=>{
@@ -149,6 +151,34 @@ describe("HRD Pas Foto synthetic HTTP lifecycle (no production writes)",()=>{
     });
     expect(response.status).toBe(409);
     expect(fixture.documents.get(id)?.status).toBe("upload_pending");
+  });
+  it("refuses cross-company signed preview before any signer call",async()=>{
+    const prepared=await req("prepare",{mimeType:"image/jpeg",processingAuthorizationConfirmed:true});
+    expect(prepared.status).toBe(201);
+    const id=String(prepared.json.documentId);
+    expect((await req(id+"/complete")).status).toBe(200);
+    // The synthetic session now represents another company while the
+    // document remains owned by company 1.
+    fixture.companyId=2;
+    const foreign=await req(id+"/preview");
+    expect(foreign.status).toBe(404);
+    expect(foreign.json).not.toHaveProperty("url");
+    expect(fixture.previewSignCalls).toHaveLength(0);
+    fixture.companyId=1;
+    const authorized=await req(id+"/preview");
+    expect(authorized.status).toBe(200);
+    expect(authorized.json.expiresIn).toBe(60);
+    expect(fixture.previewSignCalls).toHaveLength(1);
+  });
+  it("refuses a different employee signed preview before signing",async()=>{
+    const prepared=await req("prepare",{mimeType:"image/jpeg",processingAuthorizationConfirmed:true});
+    const id=String(prepared.json.documentId);
+    expect((await req(id+"/complete")).status).toBe(200);
+    const response=await fetch(origin+"/api/hrd/employees/8/photo/"+id+"/preview",{
+      method:"POST",headers:{"content-type":"application/json"},body:"{}",
+    });
+    expect(response.status).toBe(404);
+    expect(fixture.previewSignCalls).toHaveLength(0);
   });
   it("stays unavailable with production storage flag off",async()=>{
     fixture.enabled=false;
