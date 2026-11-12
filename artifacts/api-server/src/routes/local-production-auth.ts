@@ -95,6 +95,20 @@ function isActivePrivilegedUser(user: RawUser | null): user is RawUser {
   );
 }
 
+/** Login with email OTP may also serve an active Super Admin for private HRD.
+ * Do not use this for privileged account management routes: those retain
+ * the existing admin/owner-only permission boundary.
+ */
+function isActiveOtpLoginUser(user: RawUser | null): user is RawUser {
+  if (!user) return false;
+  const role = user.role.trim().toLowerCase();
+  return Boolean(
+    (role === "admin" || role === "owner" || role === "super_admin")
+    && user.isActive
+    && (user.status === null || user.status.trim().toLowerCase() === "active"),
+  );
+}
+
 async function getPrivilegedProductionUserFromRequest(request: Request): Promise<RawUser | null> {
   const session = getProductionSession(request);
   if (!session) return null;
@@ -474,7 +488,7 @@ router.post("/auth/email-otp/send", async (
     }
 
     const user = await findUserByEmail(email);
-    if (!isActivePrivilegedUser(user)) {
+    if (!isActiveOtpLoginUser(user)) {
       await pool.query(
         `insert into public.bizportal_email_otp_codes
           (email, request_ip, purpose, expires_at)
@@ -589,7 +603,7 @@ router.post("/auth/email-otp/verify", async (
     }
 
     const user = await findUserByEmail(email);
-    if (!isActivePrivilegedUser(user)) {
+    if (!isActiveOtpLoginUser(user)) {
       await pool.query(
         "update public.bizportal_email_otp_codes set verified_at = now() where id = $1 and verified_at is null",
         [otp.id],
