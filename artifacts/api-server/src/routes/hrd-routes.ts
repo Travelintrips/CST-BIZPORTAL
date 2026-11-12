@@ -51,6 +51,15 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
     res.status(503).json({ message: "Otorisasi HRD tidak tersedia." });
   }
 }
+// An explicitly enabled release gate keeps all HRD routes dormant on a staged
+// PROD code deployment. Authorization and OCR/storage flags remain independent.
+router.use((req: HrdRequest, res: Response, next) => {
+  if (process.env.HRD_PROD_ENABLED !== "true") {
+    res.status(404).json({ message: "HRD belum diaktifkan." });
+    return;
+  }
+  next();
+});
 router.use(authorize);
 registerHrdPhotoRoutes(router);
 registerHrdOcrRoutes(router);
