@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FileText, Upload, ShieldCheck } from "lucide-react";
+import { uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
 
 type DocumentType = "ktp"|"kk"|"sim"|"npwp"|"ijazah"|"skck"|"kontrak";
 type Document = {
@@ -69,18 +70,11 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
     const scope=generation.current;
     setBusy(true);setError("");setNotice("");setReviewDoc(null);setPreview(null);
     try{
-      const prep=await post<{companyId:number;employeeId:number;documentId:string;
-        storageUrl:string;bucket:string;path:string;token:string;maxBytes:number}>(
+      const prep=await post<HrdSignedUpload>(
         "prepare",{docType,mimeType:file.type,processingAuthorizationConfirmed:true},
       );
       if(scope!==generation.current)return;
-      if(prep.companyId!==companyId||prep.employeeId!==employeeId||
-        prep.storageUrl!=="https://nzdweipzckfszczzqtuw.supabase.co"||
-        prep.bucket!=="bizportal-hrd-documents-prod")throw Error("Tujuan dokumen tidak sesuai.");
-      const form=new FormData();form.append("cacheControl","3600");form.append("",file);
-      const url=`${prep.storageUrl}/storage/v1/object/upload/sign/${prep.bucket}/${prep.path}?token=${encodeURIComponent(prep.token)}`;
-      const upload=await fetch(url,{method:"PUT",body:form,headers:{"x-upsert":"false"}});
-      if(!upload.ok)throw Error("Upload dokumen privat gagal.");
+      await uploadHrdSignedDocument(prep,file,companyId,employeeId);
       if(scope!==generation.current)return;
       const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>}>(
         `${prep.documentId}/scan`,{processingAuthorizationConfirmed:true},
