@@ -47,7 +47,9 @@ export default function HrdEmployeeDetailPage() {
   const sequence = useRef(0);
   const refresh = async () => {
     const seq = ++sequence.current;
-    setDetail(null); setError("");
+    // Preserve the mounted OCR reviewer while refreshing the SAME employee.
+    // The render scope below masks any previous employee/company data.
+    setError("");
     if (!companyId || !Number.isSafeInteger(employeeId) || employeeId <= 0) {
       setError("Pilih satu perusahaan dan karyawan yang valid."); return;
     }
@@ -70,9 +72,13 @@ export default function HrdEmployeeDetailPage() {
     }
   };
   useEffect(() => {
+    setDetail(null);
+    setPrivatePreview(null);
     void refresh();
     return () => { sequence.current++; };
   }, [companyId, employeeId]);
+  const scopedDetail = detail?.companyId === companyId && detail?.employeeId === employeeId
+    && detail?.employee?.company_id === companyId ? detail : null;
   useEffect(() => {
     if (!photo || !IMG_TYPES.includes(photo.type) || photo.size > MAX_BYTES) {
       setPhotoUrl(""); return;
@@ -176,28 +182,28 @@ export default function HrdEmployeeDetailPage() {
       </div>
       {error && <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">{error}</div>}
       {loading && <p className="text-sm text-muted-foreground">Memuat rincian HRD...</p>}
-      {detail && <div className="grid gap-4 md:grid-cols-2">
+      {scopedDetail && <div className="grid gap-4 md:grid-cols-2">
         <Card><CardHeader><CardTitle>Identitas Karyawan</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p className="text-lg font-semibold">{detail.employee.first_name} {detail.employee.last_name}</p>
-            <p>Jabatan: {detail.employee.position || "Belum diisi"}</p>
-            <p>Status: {detail.employee.status || "Belum diketahui"}</p>
-            <p>Email: {detail.employee.email || "Belum diisi"}</p>
+            <p className="text-lg font-semibold">{scopedDetail.employee.first_name} {scopedDetail.employee.last_name}</p>
+            <p>Jabatan: {scopedDetail.employee.position || "Belum diisi"}</p>
+            <p>Status: {scopedDetail.employee.status || "Belum diketahui"}</p>
+            <p>Email: {scopedDetail.employee.email || "Belum diisi"}</p>
             <h3 className="pt-3 font-semibold">Hasil identitas terverifikasi</h3>
-            {Object.keys(detail.verifiedProfile).length === 0
+            {Object.keys(scopedDetail.verifiedProfile).length === 0
               ? <p className="text-muted-foreground">Belum ada identitas HRD terverifikasi.</p>
-              : Object.entries(detail.verifiedProfile).map(([key, value]) => <p key={key}>
+              : Object.entries(scopedDetail.verifiedProfile).map(([key, value]) => <p key={key}>
                   <span className="text-muted-foreground">{key.replaceAll("_", " ")}: </span>{value || "—"}
                 </p>)}
           </CardContent>
         </Card>
         <Card><CardHeader><CardTitle className="flex items-center gap-2"><FileText className="h-4 w-4" /> Dokumen</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm">
-            {detail.documents.length === 0 && <p className="text-muted-foreground">Belum ada dokumen HRD yang disimpan.</p>}
-            {detail.documents.map((doc) => <div key={doc.id} className="rounded-lg border p-3">
+            {scopedDetail.documents.length === 0 && <p className="text-muted-foreground">Belum ada dokumen HRD yang disimpan.</p>}
+            {scopedDetail.documents.map((doc) => <div key={doc.id} className="rounded-lg border p-3">
               <p className="font-medium">{DOCUMENT_NAMES[doc.doc_type] || doc.doc_type}</p>
               <p className="text-xs text-muted-foreground">Status: {doc.status} · {new Date(doc.created_at).toLocaleDateString("id-ID")}</p>
-              {doc.doc_type === "foto" && detail.photoUploadEnabled && (doc.status === "pending_review" || doc.status === "verified") && <div className="mt-2 flex flex-wrap gap-2">
+              {doc.doc_type === "foto" && scopedDetail.photoUploadEnabled && (doc.status === "pending_review" || doc.status === "verified") && <div className="mt-2 flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" disabled={photoBusy} onClick={() => void showPrivatePhoto(doc.id)}>Lihat Pas Foto</Button>
                 {doc.status === "pending_review" && <Button size="sm" disabled={photoBusy} onClick={() => void approvePhoto(doc.id)}>Setujui Pas Foto</Button>}
               </div>}
@@ -206,7 +212,7 @@ export default function HrdEmployeeDetailPage() {
             </div>)}
             <div className="rounded-lg border border-dashed p-3 text-muted-foreground">
               <LockKeyhole className="mb-2 h-5 w-5" />
-              {detail.photoUploadEnabled ? "Upload Pas Foto privat aktif sesuai konfigurasi server. OCR dokumen lain belum diaktifkan." : "Upload, scan OCR, persetujuan, dan pratinjau dokumen nonaktif sampai storage privat dan uji akses selesai."}
+              {scopedDetail.photoUploadEnabled ? "Upload Pas Foto privat aktif sesuai konfigurasi server. OCR dokumen lain belum diaktifkan." : "Upload, scan OCR, persetujuan, dan pratinjau dokumen nonaktif sampai storage privat dan uji akses selesai."}
             </div>
           </CardContent>
         </Card>
@@ -225,22 +231,22 @@ export default function HrdEmployeeDetailPage() {
               }}>Hapus pratinjau</Button>
             </div>}
             {photoNotice && <p role="status" className="text-sm text-green-700 dark:text-green-300">{photoNotice}</p>}
-            <Button className="w-full" disabled={!detail.photoUploadEnabled || !photo || photoBusy} onClick={() => void savePhoto()}>
-              {photoBusy ? "Memproses Pas Foto..." : detail.photoUploadEnabled ? "Unggah Pas Foto Privat" : "Simpan Pas Foto (belum diaktifkan)"}
+            <Button className="w-full" disabled={!scopedDetail.photoUploadEnabled || !photo || photoBusy} onClick={() => void savePhoto()}>
+              {photoBusy ? "Memproses Pas Foto..." : scopedDetail.photoUploadEnabled ? "Unggah Pas Foto Privat" : "Simpan Pas Foto (belum diaktifkan)"}
             </Button>
           </CardContent>
         </Card>
         <Card><CardHeader><CardTitle>Riwayat Verifikasi</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {detail.audit.length === 0 && <p className="text-muted-foreground">Belum ada riwayat dokumen HRD.</p>}
-            {detail.audit.map((entry, index) => <p key={index} className="border-b py-2">
+            {scopedDetail.audit.length === 0 && <p className="text-muted-foreground">Belum ada riwayat dokumen HRD.</p>}
+            {scopedDetail.audit.map((entry, index) => <p key={index} className="border-b py-2">
               {entry.action} — {new Date(entry.created_at).toLocaleString("id-ID")}
             </p>)}
           </CardContent>
         </Card>
       </div>}
-      {detail && companyId !== null && <HrdDocumentManager key={`${companyId}:${employeeId}`} companyId={companyId} employeeId={employeeId}
-        enabled={detail.ocrEnabled === true} documents={detail.documents} refresh={refresh} />}
+      {scopedDetail && companyId !== null && <HrdDocumentManager key={`${companyId}:${employeeId}`} companyId={companyId} employeeId={employeeId}
+        enabled={scopedDetail.ocrEnabled === true} documents={scopedDetail.documents} refresh={refresh} />}
     </div>
   </AppShell>;
 }
