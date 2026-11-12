@@ -34,6 +34,18 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
+app.get("/gpt02-approval-bridge", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  );
+  res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>GPT02 DEV Approval</title></head><body><script>location.replace("https://dev.cstlogistic.co.id/gpt02-approval-api/" + location.hash);</script><noscript>JavaScript diperlukan untuk menyelesaikan login GPT02 DEV.</noscript></body></html>`);
+});
+
 if (process.env.NODE_ENV === "production") {
   const distDir = path.dirname(fileURLToPath(import.meta.url));
   const publicDir = path.join(distDir, "public");
