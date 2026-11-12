@@ -1,6 +1,7 @@
 import React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
+import { PayrollProdRunControls } from "./PayrollProdRunControls";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,9 @@ export default function PayrollWorkspace() {
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [capabilitiesScope, setCapabilitiesScope] = useState<number | null>(null);
   const [canCreateDraft, setCanCreateDraft] = useState(false);
+  const [canViewSetup, setCanViewSetup] = useState(false);
+  const [canApplySetup, setCanApplySetup] = useState(false);
+  const [canApproveSuperAdmin, setCanApproveSuperAdmin] = useState(false);
   const [canGenerate, setCanGenerate] = useState(false);
   const [canEditItems, setCanEditItems] = useState(false);
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
@@ -96,6 +100,7 @@ export default function PayrollWorkspace() {
     setEmployeeSearch("");
     setCapabilitiesScope(null);
     setCanCreateDraft(false);
+    setCanViewSetup(false);setCanApplySetup(false);setCanApproveSuperAdmin(false);
     setCanGenerate(false);
     setCanEditItems(false);
     setEditingItemId(null);
@@ -109,7 +114,9 @@ export default function PayrollWorkspace() {
     setLoading(true);
     Promise.all([
       api<{ runs: PayrollRun[] }>(`/api/payroll/runs?companyId=${companyId}`),
-      api<{ companyId: number; canCreateDraft: boolean; canGenerate: boolean; canEditItems: boolean }>(`/api/payroll/capabilities?companyId=${companyId}`),
+      api<{ companyId: number; canCreateDraft: boolean; canGenerate: boolean; canEditItems: boolean;
+        canViewSetup?:boolean;canApplySetup?:boolean;canApproveSuperAdmin?:boolean
+      }>(`/api/payroll/capabilities?companyId=${companyId}`),
     ])
       .then(([{ runs: result }, capabilities]) => {
         if (cancelled) return;
@@ -118,6 +125,9 @@ export default function PayrollWorkspace() {
         setCanCreateDraft(capabilities.companyId === companyId && capabilities.canCreateDraft === true);
         setCanGenerate(capabilities.companyId === companyId && capabilities.canGenerate === true);
         setCanEditItems(capabilities.companyId === companyId && capabilities.canEditItems === true);
+        setCanViewSetup(capabilities.companyId === companyId && capabilities.canViewSetup === true);
+        setCanApplySetup(capabilities.companyId === companyId && capabilities.canApplySetup === true);
+        setCanApproveSuperAdmin(capabilities.companyId === companyId && capabilities.canApproveSuperAdmin === true);
       })
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -212,6 +222,7 @@ export default function PayrollWorkspace() {
   const createAllowed = canCreateDraft && capabilitiesScope === companyId;
   const generateAllowed = canGenerate && capabilitiesScope === companyId;
   const editAllowed = canEditItems && capabilitiesScope === companyId;
+  const prodActionsAllowed = capabilitiesScope === companyId && canViewSetup;
   const statusCounts = scopedRuns.reduce<Record<string, number>>((counts, run) => {
     const status = run.status.toLowerCase();
     counts[status] = (counts[status] ?? 0) + 1;
@@ -237,7 +248,7 @@ export default function PayrollWorkspace() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Gaji Karyawan</h1>
-          <p className="text-sm text-muted-foreground">Payroll multi-company — riwayat dan rincian. Pembuatan draft hanya tersedia di DEV saat diizinkan server.</p>
+          <p className="text-sm text-muted-foreground">Payroll multi-company — Draft, gaji, dan potongan. Akses kasbon otomatis dan satu persetujuan Super Admin hanya muncul setelah fitur diaktifkan server.</p>
         </div>
         <a className="rounded-md border px-3 py-2 text-sm hover:bg-muted" href="/hr/payroll-components">Atur Gaji &amp; Potongan</a>
         <Button variant="outline" disabled={companyId == null || loading || busy} onClick={async () => {
@@ -271,13 +282,13 @@ export default function PayrollWorkspace() {
             <label className="text-sm">Tahun
               <input aria-label="Tahun payroll" className="mt-1 block w-28 rounded-md border bg-background p-2" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
-            <Button disabled={!createAllowed || busy || loading || scopedRuns.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{createAllowed ? "Buat Draft DEV" : "Buat Draft (Belum Aktif)"}</Button>
+            <Button disabled={!createAllowed || busy || loading || scopedRuns.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{createAllowed ? "Buat Draft Payroll" : "Buat Draft (Belum Aktif)"}</Button>
           </CardContent>
         </Card>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Ringkasan periode payroll">
           <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Total Periode</p><p className="text-2xl font-semibold">{scopedRuns.length}</p></div>
           <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Draft</p><p className="text-2xl font-semibold">{statusCounts.draft ?? 0}</p></div>
-          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Approved (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.approved ?? 0}</p></div>
+          <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Approved (Data Tercatat)</p><p className="text-2xl font-semibold">{(statusCounts.approved ?? 0)+(statusCounts.reviewed ?? 0)}</p></div>
           <div className="rounded-lg border p-4"><p className="text-xs text-muted-foreground">Paid (Data Tercatat)</p><p className="text-2xl font-semibold">{statusCounts.paid ?? 0}</p></div>
         </div>
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -313,6 +324,15 @@ export default function PayrollWorkspace() {
                   {[[ "Karyawan", scopedDetail.items.length.toString() ], [ "Gaji Kotor", money(totals.gross) ], [ "Kasbon", money(totals.advances) ], [ "Gaji Bersih", money(totals.net) ]].map(([label, value]) =>
                     <div key={label} className="rounded-md border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="font-semibold">{value}</p></div>)}
                 </div>
+                {prodActionsAllowed && companyId!==null && selectedId!==null && (
+                  <PayrollProdRunControls key={companyId+"-"+selectedId}
+                    companyId={companyId} runId={selectedId}
+                    status={scopedDetail.run.status}
+                    canViewSetup={canViewSetup}
+                    canApplySetup={canApplySetup}
+                    canApproveSuperAdmin={canApproveSuperAdmin}
+                    onChanged={()=>refresh(companyId,selectedId)}/>
+                )}
                 {draft && <div className="flex flex-wrap gap-2">
                   <Button variant="outline" disabled={!generateAllowed || busy} title={generateAllowed ? "Muat karyawan aktif ke Draft DEV" : "Menunggu verifikasi backend DEV"} onClick={() => perform("generate")}><Users className="mr-2 h-4 w-4" />Muat Karyawan Aktif</Button>
                   <Button variant="outline" disabled title="Menunggu verifikasi alokasi kasbon" onClick={() => perform("calculate")}><Calculator className="mr-2 h-4 w-4" />Hitung Payroll</Button>
@@ -338,7 +358,8 @@ export default function PayrollWorkspace() {
                         <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditingItemId(null)}>Batal</Button></div>
                     </td></tr>}</React.Fragment>)}</tbody>
                 </table></div>
-                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />Pembuatan Draft dan memuat karyawan hanya tersedia di DEV saat diizinkan server. Edit komponen hanya aktif di DEV. Perhitungan kasbon otomatis, persetujuan, pembayaran, dan slip gaji masih dinonaktifkan.</p>
+                <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileText className="h-4 w-4" />
+                  Perhitungan Penuh/Cicilan dan persetujuan satu Super Admin menggunakan rute terpisah, wajib diaktifkan eksplisit. Pembayaran, posting dan pelunasan otomatis tetap tidak aktif.</p>
               </>}
             </CardContent>
           </Card>

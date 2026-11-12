@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useCompany } from "@/contexts/CompanyContext";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
+import { PayrollKasbonAutoPlanPanel } from "./payroll-kasbon-auto-plan";
 
 const fields = [
   {key:"baseSalary", label:"Gaji Pokok"},
@@ -56,6 +57,8 @@ export default function PayrollStandaloneComponents(){
   const [effectiveFrom,setEffectiveFrom]=useState(initialDate);
   const [notes,setNotes]=useState("");
   const [canEdit,setCanEdit]=useState(false);
+  const [canConfigureAutoKasbon,setCanConfigureAutoKasbon]=useState(false);
+  const [autoKasbonPreview,setAutoKasbonPreview]=useState<string|null>(null);
   const [loading,setLoading]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -64,9 +67,13 @@ export default function PayrollStandaloneComponents(){
   useEffect(()=>{
     let alive=true;
     setEmployees([]);setSelected("");setValues(blank());setCanEdit(false);
+    setCanConfigureAutoKasbon(false);setAutoKasbonPreview(null);
     setNotes("");setError("");setNotice("");setLastReadback(null);
     if(validCompany===null)return()=>{alive=false};
     setLoading(true);
+    api<{companyId:number;canConfigureKasbon?:boolean}>("/api/payroll/capabilities?companyId="+validCompany)
+      .then(d=>{if(alive&&d.companyId===validCompany)setCanConfigureAutoKasbon(d.canConfigureKasbon===true);})
+      .catch(()=>{if(alive)setCanConfigureAutoKasbon(false)});
     api<EmployeeResponse>("/api/payroll/components/employees?companyId="+validCompany)
       .then(d=>{if(!alive)return;if(d.companyId!==validCompany)throw Error("Perusahaan pada respons tidak cocok");
         setEmployees(d.employees);setCanEdit(d.canEdit===true);})
@@ -76,7 +83,7 @@ export default function PayrollStandaloneComponents(){
   },[validCompany]);
   useEffect(()=>{
     let alive=true;
-    setValues(blank());setNotes("");setLastReadback(null);setError("");
+    setValues(blank());setNotes("");setLastReadback(null);setError("");setAutoKasbonPreview(null);
     if(!selected||validCompany===null)return()=>{alive=false};
     setLoading(true);
     api<ConfigResponse>("/api/payroll/components/"+selected+"?companyId="+validCompany)
@@ -99,7 +106,9 @@ export default function PayrollStandaloneComponents(){
     return {gross,deductions,net:gross-deductions};
   },[values]);
   const kasbon=cents(values.kasbonDeduction);
+  useEffect(()=>setAutoKasbonPreview(null),[selected,effectiveFrom,validCompany]);
   const ready=!!selected&&canEdit&&!busy&&!loading&&calc!==null&&
+    (!canConfigureAutoKasbon || kasbon===0n)&&
     calc.gross>0n&&cents(values.baseSalary)!>0n&&calc.net>=0n&&
     (kasbon===0n||((notes.trim().length>=5)&&notes.length<=500));
   async function save(){
@@ -124,14 +133,16 @@ export default function PayrollStandaloneComponents(){
       if(!verify.complete||verify.summary?.net!==saved.net||verify.summary?.deductions!==saved.deductions)
         throw Error("Simpan berhasil tetapi baca ulang belum cocok; periksa sebelum melanjutkan.");
       setLastReadback({gross:saved.gross,deductions:saved.deductions,net:saved.net});
-      setNotice("Tujuh komponen tersimpan dan diverifikasi melalui baca ulang. Potongan kasbon bersifat manual, belum masuk Draft/Slip Payroll dan tidak mengubah saldo kasbon, jurnal, atau pembayaran.");
+      setNotice(canConfigureAutoKasbon
+        ? "Komponen gaji tersimpan. Kasbon manual tetap Rp0; potongan Penuh/Cicilan hanya melalui rencana terverifikasi saat menerapkan ke Draft. Belum ada pembayaran atau jurnal."
+        : "Tujuh komponen tersimpan dan diverifikasi melalui baca ulang. Potongan kasbon bersifat manual, belum masuk Draft/Slip Payroll dan tidak mengubah saldo kasbon, jurnal, atau pembayaran.");
     }catch(e){setError(e instanceof Error?e.message:"Gagal menyimpan komponen Payroll.");}
     finally{setBusy(false);}
   }
   return <AppShell><div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div><h1 className="text-2xl font-semibold">Gaji, Tunjangan dan Potongan</h1>
-        <p className="text-sm text-muted-foreground">Hanya modul Payroll. Potongan kasbon diisi manual, tidak otomatis mengambil Rekonsiliasi Bank atau melunasi saldo kasbon.</p></div>
+        <p className="text-sm text-muted-foreground">Komponen Payroll yang sudah ada tetap digunakan. Kasbon Penuh/Cicilan muncul hanya setelah diaktifkan oleh server; belum membayar gaji atau melunasi kasbon.</p></div>
       <Link href="/hr/payroll" className="rounded-md border p-2 text-sm">Kembali ke Gaji Karyawan</Link>
     </div>
     <p className="rounded-md border p-3 text-sm">Perusahaan: {isLoading?"Memuat...":validCompany===null?"Pilih satu perusahaan":activeCompany?.companyName}
@@ -157,12 +168,24 @@ export default function PayrollStandaloneComponents(){
             placeholder="Kosong jika belum diverifikasi; ketik 0 jika nihil"
             value={values[f.key]} onChange={e=>{setValues(v=>({...v,[f.key]:e.target.value.trim()}));setLastReadback(null)}}/>
           {f.key==="kasbonDeduction"&&<span className="mt-1 block text-xs text-muted-foreground">
-            Isi nominal potongan yang disetujui untuk gaji, <strong>bukan total kasbon yang diterima</strong>.
-            Contoh: kasbon Rp2.000.000, potongan gaji Rp500.000 → isi 500000.
-            Tidak otomatis dari Rekonsiliasi Bank dan tidak mengurangi saldo kasbon di modul lain.
+            {canConfigureAutoKasbon
+              ? "Ketika kasbon otomatis aktif, isi Rp0 pada potongan manual. Pilih Penuh/Cicilan pada panel sumber di bawah; sistem akan mengisi potongan ke Draft tanpa mencatat dua kali."
+              : <>Isi nominal potongan yang disetujui untuk gaji, <strong>bukan total kasbon yang diterima</strong>.
+                Contoh: kasbon Rp2.000.000, potongan gaji Rp500.000 → isi 500000.
+                Tidak otomatis dari Rekonsiliasi Bank dan tidak mengurangi saldo kasbon di modul lain.</>}
           </span>}
         </label>)}
       </div>
+      {canConfigureAutoKasbon && selected && validCompany!==null && <>
+        <div role="status" className="rounded border p-3 text-xs">
+          Kasbon otomatis yang terhitung untuk periode {effectiveFrom.slice(0,7)}:
+          <strong className="ml-2">{autoKasbonPreview===null?"Belum siap":formatted(autoKasbonPreview)}</strong>.
+          Potongan manual harus Rp0 agar tidak ada potongan ganda. Saldo kasbon tidak berkurang sebelum settlement sah.
+        </div>
+        <PayrollKasbonAutoPlanPanel key={validCompany+"-"+selected+"-"+effectiveFrom.slice(0,7)}
+          companyId={validCompany} employeeId={Number(selected)}
+          effectiveFrom={effectiveFrom} onCalculated={setAutoKasbonPreview}/>
+      </>}
       <label className="block text-sm">Catatan sumber persetujuan potongan kasbon (wajib jika lebih dari nol)
         <textarea aria-label="Sumber komponen gaji" className="mt-1 w-full rounded border bg-background p-2"
           maxLength={500} value={notes} onChange={e=>{setNotes(e.target.value);setLastReadback(null)}}
@@ -174,6 +197,8 @@ export default function PayrollStandaloneComponents(){
         <div className="rounded border p-3">Gaji bersih <strong className="block">
           {calc?(calc.net<0n?"Potongan melebihi gaji":formatted(asMoney(calc.net))):"Belum lengkap"}</strong></div>
       </div>
+      {canConfigureAutoKasbon && kasbon!==null && kasbon>0n &&
+        <p role="alert" className="text-sm text-red-600">Potongan kasbon manual harus Rp0 sebelum menggunakan rencana Penuh/Cicilan otomatis. Data lama tidak ditimpa otomatis.</p>}
       <Button onClick={()=>void save()} disabled={!ready}> {busy?"Menyimpan...":"Simpan Gaji & Seluruh Potongan"} </Button>
       {!canEdit&&<p className="text-xs text-muted-foreground">Penyimpanan belum diaktifkan atau akun tidak berwenang. Tidak ada data diubah.</p>}
       {lastReadback&&<p role="status" className="text-sm">Baca ulang terverifikasi: gaji bersih {formatted(lastReadback.net)}.</p>}
