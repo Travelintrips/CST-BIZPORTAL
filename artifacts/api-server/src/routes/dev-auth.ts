@@ -402,7 +402,18 @@ export function createDevAuthRouter(): Router {
         expiresAt: verified.expiresAt,
       };
       const user = await getProductionUser(productionSession);
-      if (!user || user.role !== "admin") {
+      // Keep existing admin login unchanged; permit only an active Super Admin
+      // for the private HRD workflow (never owner or generic HRD).
+      const activeSuperAdmin = user?.role === "super_admin" && (
+        await pool.query(
+          `SELECT 1 FROM public.users u
+            WHERE lower(btrim(u.email))=$1 AND lower(btrim(u.role))='super_admin'
+              AND u.is_active IS TRUE AND lower(btrim(u.status))='active'
+            LIMIT 1`,
+          [user.email],
+        )
+      ).rowCount === 1;
+      if (!user || (user.role !== "admin" && !activeSuperAdmin)) {
         response.status(403).json({
           error: "Email atau kode OTP tidak dapat digunakan untuk login admin.",
         });
