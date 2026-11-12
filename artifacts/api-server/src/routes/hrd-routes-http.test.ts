@@ -59,6 +59,31 @@ describe("HRD production API company isolation", () => {
     const address = server.address(); if (!address || typeof address === "string") throw Error("no address");
     root = "http://127.0.0.1:" + address.port;
   }
+  it("does not intercept Payroll or bank reconciliation when HRD is disabled", async () => {
+    await start();
+    delete process.env.HRD_PROD_ENABLED;
+    // Simulate downstream modules registered after the HRD router.
+    // A regression must not return the HRD-off 404 for unrelated API paths.
+    // start() owns the server, so use a separate app for this boundary check.
+    const otherApp = express();
+    otherApp.use("/api", hrdRouter);
+    otherApp.get("/api/payroll/runs", (_req, res) => res.status(401).json({message:"Payroll session required"}));
+    otherApp.get("/api/bank-reconciliation/check", (_req, res) => res.status(401).json({message:"Reconciliation session required"}));
+    const otherServer = createServer(otherApp);
+    otherServer.listen(0, "127.0.0.1");
+    await once(otherServer, "listening");
+    try {
+      const addr = otherServer.address();
+      if (!addr || typeof addr === "string") throw Error("no address");
+      for (const path of ["/api/payroll/runs", "/api/bank-reconciliation/check"]) {
+        const response = await fetch("http://127.0.0.1:" + addr.port + path);
+        expect(response.status).toBe(401);
+        expect(await response.text()).not.toContain("HRD belum diaktifkan");
+      }
+    } finally {
+      await new Promise<void>((resolve) => otherServer.close(() => resolve()));
+    }
+  });
   it("stays dormant without an explicit production HRD release flag", async () => {
     await start();
     delete process.env.HRD_PROD_ENABLED;
