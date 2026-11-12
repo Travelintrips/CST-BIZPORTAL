@@ -25,7 +25,7 @@ export function hrdPrivateStorageReady(): boolean {
  * Never returns the key, upstream response body, raw URL or backend internals.
  */
 export async function probeHrdPrivateStorage(): Promise<boolean> {
-  const base=process.env.HRD_PROD_SUPABASE_URL?.trim().replace(/\\/$/,"");
+  const base=process.env.HRD_PROD_SUPABASE_URL?.trim().replace(/\/$/,"");
   const key=process.env.HRD_PROD_STORAGE_SERVICE_KEY?.trim();
   if(process.env.APP_ENV!=="production" ||
      base!==`https://${PROD_REF}.supabase.co` || !key) return false;
