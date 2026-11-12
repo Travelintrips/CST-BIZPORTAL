@@ -80,7 +80,8 @@ export function registerHrdOcrRoutes(router:IRouter):void{
           `UPDATE hrd_private.employee_documents
            SET status='scanning',updated_at=now()
            WHERE id=$1 AND company_id=$2 AND employee_id=$3
-             AND doc_type<>'foto' AND status IN ('upload_pending','scan_failed')
+             AND doc_type<>'foto' AND (status IN ('upload_pending','scan_failed')
+               OR (status='scanning' AND updated_at < now() - interval '15 minutes'))
            RETURNING id,doc_type,mime_type,storage_path,status`,
           [documentId,companyId,employeeId],
         );

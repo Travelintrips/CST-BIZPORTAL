@@ -93,6 +93,27 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
       if(scope===generation.current)setError(cause instanceof Error?cause.message:"Scan gagal.");
     }finally{if(scope===generation.current)setBusy(false);}
   };
+  // Reuse the existing private object; do not create a second document or upload.
+  const retryScan=async(doc:Document)=>{
+    if(!enabled||!authorized||busy||!(["scanning","scan_failed"].includes(doc.status)))return;
+    const scope=generation.current;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>}>(
+        `${doc.id}/scan`,{processingAuthorizationConfirmed:true},
+      );
+      if(scan.status!=="pending_review")throw Error("Status scan OCR tidak sesuai.");
+      if(scope!==generation.current)return;
+      setNotice("OCR diproses ulang dari file yang sudah tersimpan. Periksa hasilnya.");
+      await refresh();
+      if(scope!==generation.current)return;
+      setReviewDoc({id:doc.id,doc_type:doc.doc_type,status:"pending_review",extracted_data:scan.extracted});
+      setReview(Object.fromEntries(KEYS[doc.doc_type as DocumentType].map(k=>[k,scan.extracted?.[k]??""])));
+    }catch(cause){
+      if(scope===generation.current)setError(cause instanceof Error?cause.message:"Pemrosesan ulang gagal.");
+      await refresh().catch(()=>undefined);
+    }finally{if(scope===generation.current)setBusy(false);}
+  };
   const approve=async()=>{
     if(!enabled||!reviewDoc||!confirmed||busy)return;
     const scope=generation.current;
@@ -153,6 +174,7 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
       <div className="flex flex-wrap gap-2">
         {(doc.status==="pending_review"||doc.status==="verified")&&<Button variant="outline" size="sm" disabled={!enabled||busy} onClick={()=>void showPreview(doc)}>Lihat Dokumen</Button>}
         {doc.status==="pending_review"&&<Button variant="outline" size="sm" disabled={!enabled||busy} onClick={()=>selectDocument(doc)}>Periksa / Koreksi</Button>}
+        {(doc.status==="scanning"||doc.status==="scan_failed")&&<Button variant="outline" size="sm" disabled={!enabled||busy||!authorized} onClick={()=>void retryScan(doc)}>Coba Scan Lagi</Button>}
       </div>
       {preview?.id===doc.id&&(preview.mime==="application/pdf"
         ?<iframe title="Preview privat dokumen HRD" src={preview.url} className="h-96 w-full rounded-lg border" />
