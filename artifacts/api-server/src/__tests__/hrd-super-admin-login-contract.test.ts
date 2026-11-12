@@ -41,8 +41,12 @@ describe("Super Admin HRD authentication contract",()=>{
     expect(existingManagementGate).not.toContain('"super_admin"');
     expect(local).toContain("return isActivePrivilegedUser(user) ? user : null");
   });
-  it("keeps the final sensitive HRD authorization Super Admin only",()=>{
-    expect(hrd).toContain('actor.role.trim().toLowerCase() !== "super_admin"');
+  it("keeps sensitive HRD access Super Admin or one verified CST Owner only",()=>{
+    expect(hrd).toContain('role !== "super_admin"');
+    expect(hrd).toContain('role === "owner"');
+    expect(hrd).toContain('actor.companyId === 1');
+    expect(hrd).toContain('companyId === 1');
+    expect(hrd).toContain('actor.cstOwnerHrdApproved === true');
     expect(hrd).not.toContain('"owner", "hrd"');
   });
 });
