@@ -67,7 +67,7 @@ export async function runHrdStorageCanary(): Promise<Result> {
           const url=new URL(relative,base);
           const expected="/storage/v1/object/sign/"+BUCKET+"/"+path;
           if (url.origin===base && url.pathname===expected && url.searchParams.has("token")) {
-            const signedRead=await fetch(url,{signal:timeout()});
+            const signedRead=await fetch(url.toString(),{signal:timeout()});
             if(signedRead.ok) {
               const bytes=Buffer.from(await signedRead.arrayBuffer());
               preview=bytes.length===PNG.length &&
