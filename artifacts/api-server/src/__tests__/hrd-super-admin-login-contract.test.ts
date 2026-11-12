@@ -17,7 +17,7 @@ describe("Super Admin HRD authentication contract",()=>{
     const exchange=auth.slice(start,end);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(exchange).toContain("verifySupabaseAccessToken(accessToken)");
-    expect(exchange).toContain('user.role === "super_admin"');
+    expect(exchange).toContain('user?.role === "super_admin"');
     expect(exchange).toContain("u.is_active IS TRUE");
     expect(exchange).toContain("lower(btrim(u.status))='active'");
     expect(exchange).toContain('user.role !== "admin" && !activeSuperAdmin');
