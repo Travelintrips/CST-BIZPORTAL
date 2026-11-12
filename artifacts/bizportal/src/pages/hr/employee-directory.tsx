@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ type Employee = {
   position: string | null; hire_date: string | null;
 };
 export default function HrdEmployeeDirectory() {
+  const [, navigate] = useLocation();
   const { activeCompanyId, isConsolidated } = useCompany();
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
@@ -77,7 +78,7 @@ export default function HrdEmployeeDirectory() {
               <p className="text-xs text-muted-foreground">{employee.email || employee.phone || "Kontak belum tersedia"}</p>
               <p className="text-xs text-muted-foreground">Status: {employee.status || "Tidak diketahui"}</p>
             </div>
-            <Link href={`/hr/employees/${employee.id}`}><Button size="sm" variant="outline">Detail</Button></Link>
+            <Button type="button" size="sm" variant="outline" onClick={() => navigate(`/hr/employees/${employee.id}`)}>Detail</Button>
           </CardContent>
         </Card>)}
       </div>
