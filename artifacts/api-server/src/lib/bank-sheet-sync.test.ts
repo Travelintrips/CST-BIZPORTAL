@@ -13,6 +13,20 @@ describe("bank sheet amount parsing", () => {
     expect(parseAmount("1,234.56")).toBe(1234.56);
   });
 
+  it("parses six QRTRAVELI source credits with Indonesian thousands separators", () => {
+    const cases: Record<string, number> = {
+      "923.700": 923700,
+      "487.900": 487900,
+      "1.421.250": 1421250,
+      "1.053.700": 1053700,
+      "953.700": 953700,
+      "30.000": 30000,
+    };
+    for (const [raw, expected] of Object.entries(cases)) {
+      expect(parseAmount(raw)).toBe(expected);
+    }
+  });
+
   it("handles currency labels and blank values", () => {
     expect(parseAmount("Rp 1.234.567")).toBe(1234567);
     expect(parseAmount("")).toBe(0);
