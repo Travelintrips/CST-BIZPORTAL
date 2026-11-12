@@ -149,7 +149,7 @@ export default function HrdEmployeeDetailPage() {
       await refresh();
     } catch (cause) {
       if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Upload Pas Foto gagal.");
-    } finally { setPhotoBusy(false); }
+    } finally { if (epoch === photoEpoch.current) setPhotoBusy(false); }
   };
   const approvePhoto = async (documentId: string) => {
     if (!scopedDetail?.photoUploadEnabled || photoBusy || !window.confirm("Setujui Pas Foto karyawan ini?")) return;
@@ -163,7 +163,7 @@ export default function HrdEmployeeDetailPage() {
       await refresh();
     } catch (cause) {
       if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Verifikasi Pas Foto gagal.");
-    } finally { setPhotoBusy(false); }
+    } finally { if (epoch === photoEpoch.current) setPhotoBusy(false); }
   };
   const showPrivatePhoto = async (documentId: string) => {
     if (!scopedDetail?.photoUploadEnabled || photoBusy) return;
@@ -177,7 +177,7 @@ export default function HrdEmployeeDetailPage() {
       if (epoch === photoEpoch.current) setPrivatePreview({id:documentId,url:result.url});
     } catch (cause) {
       if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Pratinjau Pas Foto gagal.");
-    } finally { setPhotoBusy(false); }
+    } finally { if (epoch === photoEpoch.current) setPhotoBusy(false); }
   };
   return <AppShell>
     <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
