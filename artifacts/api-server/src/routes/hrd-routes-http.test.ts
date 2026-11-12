@@ -65,9 +65,10 @@ describe("HRD production API company isolation", () => {
     state.session = {id:"u1",email:"test@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
     state.actor = {id:"u1",email:"test@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
     const paths=[
-      "/api/hrd/readiness?companyId=1",
       "/api/hrd/employees?companyId=1",
       "/api/hrd/employees/10?companyId=1",
+      "/api/hrd/employees/10/photo/prepare?companyId=1",
+      "/api/hrd/employees/10/documents/prepare?companyId=1",
     ];
     for(const path of paths) {
       const response=await fetch(root+path);
@@ -76,6 +77,34 @@ describe("HRD production API company isolation", () => {
     expect(state.queries).toHaveLength(0);
   });
 
+  it("allows only read-only Super Admin role readiness while HRD is OFF", async () => {
+    await start();
+    delete process.env.HRD_PROD_ENABLED;
+    state.session={id:"u1",email:"hr@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u1",email:"hr@example.test",role:"super_admin",companyId:1,firstName:null,lastName:null};
+    const response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ready:true,companyId:1,roleIsolated:true});
+    expect(state.role).toEqual(["BEGIN","SET LOCAL ROLE bizportal_hrd_prod","COMMIT"]);
+    expect(state.queries.some(q=>/\\bINSERT\\b|\\bUPDATE\\b|\\bDELETE\\b/i.test(q.sql))).toBe(false);
+    const writeProbe=await fetch(root+"/api/hrd/readiness?companyId=1",{method:"POST"});
+    expect(writeProbe.status).toBe(404);
+  });
+  it("rejects anonymous, non-Super Admin and inactive readiness while HRD is OFF", async () => {
+    await start();
+    delete process.env.HRD_PROD_ENABLED;
+    let response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(401);
+    state.session={id:"u2",email:"other@example.test",issuedAt:Date.now(),expiresAt:Date.now()+60000};
+    state.actor={id:"u2",email:"other@example.test",role:"owner",companyId:1,firstName:null,lastName:null};
+    response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(403);
+    state.actor.role="super_admin";
+    state.activeUser=false;
+    response=await fetch(root+"/api/hrd/readiness?companyId=1");
+    expect(response.status).toBe(403);
+    expect(state.queries).toHaveLength(0);
+  });
   it("rejects anonymous calls before touching DB", async () => {
     await start();
     const response = await fetch(root + "/api/hrd/employees?companyId=1");
