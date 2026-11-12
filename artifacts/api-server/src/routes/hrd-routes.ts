@@ -13,6 +13,9 @@ type HrdRequest = Request & {
   hrdCompanyId?: number;
 };
 const router = Router();
+// Explicit DB identity of the designated CST owner. NOT a general Owner role grant.
+// The ID comes from the existing public.users record for company 1.
+const CST_HRD_OWNER_DB_USER_ID = "google_103728868378401731050";
 const positiveId = (value: unknown): number | null => {
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return null;
   const id = Number(value);
@@ -31,7 +34,7 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
     // enforce status/is_active. HRD handles sensitive personal documents and
     // must independently reject disabled/revoked accounts.
     const active = await pool.query(
-      `SELECT 1 FROM public.users u
+      `SELECT u.id::text AS db_user_id, u.company_id AS db_company_id, lower(btrim(u.role)) AS db_role FROM public.users u
         WHERE lower(coalesce(to_jsonb(u)->>'email','')) = $1
           AND coalesce((to_jsonb(u)->>'is_active')::boolean,false) IS TRUE
           AND lower(coalesce(to_jsonb(u)->>'status','active')) = 'active'
@@ -41,7 +44,16 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
     if (active.rowCount !== 1) {
       res.status(403).json({ message: "Akses HRD akun nonaktif ditolak." }); return;
     }
-    const companyId = authorizeHrdCompany(actor, req.query.companyId);
+    const activeRecord = active.rows[0] as {
+      db_user_id: string; db_company_id: number | null; db_role: string;
+    };
+    const cstOwnerHrdApproved =
+      activeRecord.db_user_id === CST_HRD_OWNER_DB_USER_ID &&
+      Number(activeRecord.db_company_id) === 1 &&
+      activeRecord.db_role === "owner" &&
+      actor.role.trim().toLowerCase() === "owner" &&
+      actor.companyId === 1;
+    const companyId = authorizeHrdCompany({...actor, cstOwnerHrdApproved}, req.query.companyId);
     if (companyId === null) { res.status(403).json({ message: "Akses HRD untuk perusahaan ini ditolak." }); return; }
     req.hrdActor = actor;
     req.hrdCompanyId = companyId;
@@ -55,7 +67,7 @@ async function authorize(req: HrdRequest, res: Response, next: (error?: unknown)
 // PROD code deployment. Authorization and OCR/storage flags remain independent.
 router.use("/hrd", (req: HrdRequest, res: Response, next) => {
   // Read-only role readiness may run before HRD feature activation. Its
-  // existing verified-session, active-account and Super Admin checks still
+  // existing verified-session, active-account and verified HRD authorization checks still
   // apply below, and it never returns employee records or secrets.
   // All other HRD paths stay dormant until the explicit rollout flag is ON.
   if (process.env.HRD_PROD_ENABLED !== "true" &&
