@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const fixture = vi.hoisted(() => ({
   activeCompanyId: 1,
@@ -68,8 +68,9 @@ describe("HRD employee detail review persistence and tenant privacy",()=>{
     expect(screen.getByRole("textbox",{name:"HRD draft correction"})).toHaveProperty("value","Human reviewed correction");
     expect(fixture.mounts).toBe(1);
     expect(fixture.unmounts).toBe(0);
-    resolveRefresh(result(1,"Synthetic Employee One"));
-    await waitFor(()=>expect(fetcher).toHaveBeenCalledTimes(2));
+    resolveRefresh(result(1,"Synthetic Employee Revised"));
+    await screen.findByText("Synthetic Employee Revised");
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("textbox",{name:"HRD draft correction"})).toHaveProperty("value","Human reviewed correction");
     expect(fixture.mounts).toBe(1);
     expect(fixture.unmounts).toBe(0);
