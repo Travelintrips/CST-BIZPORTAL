@@ -37,12 +37,13 @@ export async function runHrdStorageCanary(): Promise<Result> {
     const signed = await prepared.json() as { token?:string;url?:string };
     const token = signed.token ?? (signed.url ? new URL(signed.url,base).searchParams.get("token") : null);
     if (!token) return notReady();
+    // A timed-out PUT may have succeeded. Always attempt cleanup after issuing it.
+    created = true;
     const put = await fetch(uploadSignUrl + "?token=" + encodeURIComponent(token), {
       method:"PUT",headers:{"content-type":"image/png","x-upsert":"false"},
       body:PNG,signal:timeout(),
     });
     if (!put.ok) return notReady();
-    created = true;
     uploaded = true;
 
     const read = await fetch(base + "/storage/v1/object/authenticated/" + BUCKET + "/" + path,{
