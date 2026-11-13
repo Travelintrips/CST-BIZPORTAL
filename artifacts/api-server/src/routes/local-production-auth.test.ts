@@ -170,8 +170,8 @@ describe("local production email OTP authentication", () => {
     const [sql, params] = inserted as [string, unknown[]];
     expect(sql).toContain("values ($1, $2, $3, $4, $5)");
     expect(params[0]).toBe("admin@example.com");
-    expect(params[1]).toMatch(/admin-email-login/);
-    expect(params[2]).toMatch(/^127\\.0\\.0\\.1$/);
+    expect(params[1]).toMatch(/^127\\.0\\.0\\.1$/);
+    expect(params[2]).toBe("admin-email-login");
   });
 
   it("creates the secure local session after one correct verification", async () => {
