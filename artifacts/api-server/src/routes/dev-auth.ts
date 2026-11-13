@@ -454,15 +454,15 @@ export function createDevAuthRouter(): Router {
     });
   });
 
-  router.get("/logout", (request, response, next) => {
-    if (!isDevelopmentEnvironment()) {
-      clearProductionSessionCookie(response);
-      response.redirect(getSafeRedirect(request.query.redirect));
-      return;
+  router.get("/logout", (request, response) => {
+    // Logging out never grants access. It must remain usable when the
+    // signed session is expired or absent, including OTP sessions in DEV.
+    // Clear both cookie types in development because OTP/password login
+    // uses bizportal_supabase_session rather than bizportal_dev_session.
+    if (isDevelopmentEnvironment()) {
+      clearSessionCookie(response);
     }
-    if (!getDevSession(request)) return next();
-
-    clearSessionCookie(response);
+    clearProductionSessionCookie(response);
     return response.redirect(getSafeRedirect(request.query.redirect));
   });
 
