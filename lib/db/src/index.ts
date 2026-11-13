@@ -72,3 +72,5 @@ export async function getRuntimeDatabaseUrl(): Promise<string> {
 
 export * from "./schema";
 export { getDatabaseUrl, resolveDatabaseUrl } from "./connection";
+
+export { getDatabaseSecretName, readSecret } from "./gcp-database-secret";
