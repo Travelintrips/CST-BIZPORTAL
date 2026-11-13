@@ -180,7 +180,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
   // found no trustworthy fields. Never fabricate a personal identifier.
   if(!hasLocalFields){
    if(local.source==="unavailable")throw Error("HRD_OCR_LOCAL_UNAVAILABLE");
-   return {...localResult,engine:"manual_review_required" as const,
+   return {...normalizeExtraction({},0,localResult.warnings),engine:"manual_review_required" as const,
     warnings:[...localResult.warnings,
      "OCR selesai, tetapi tidak ada field dokumen yang dikenali. Hasil ekstraksi kosong dan confidence 0.",
      "Periksa gambar dokumen asli melalui preview. Isi field hanya bila jelas terbaca; jangan menebak."]};
