@@ -86,8 +86,8 @@ SQL
 # Replay the already-applied standalone schema, then the dormant PROD role migration.
 psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261110131000_payroll_standalone_components_prod.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/payroll-prod-role-rls-historical-20261111.sql >/dev/null
-psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261113173000_payroll_prod_kasbon_reservation_guard.sql >/dev/null
-psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261113173100_payroll_prod_kasbon_single_reservation_guard.sql >/dev/null
+psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261113114459_payroll_prod_kasbon_reservation_guard_20261113.sql >/dev/null
+psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261113114522_payroll_prod_kasbon_single_reservation_guard_20261113.sql >/dev/null
 
 psql -X -v ON_ERROR_STOP=1 <<'SQL'
 DO $check$ DECLARE n integer; BEGIN
