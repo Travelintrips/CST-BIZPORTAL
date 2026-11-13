@@ -160,6 +160,20 @@ describe("local production email OTP authentication", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
   });
 
+  it("persists OTP purpose and request IP in their intended columns", async () => {
+    const response = await request(server, "/auth/email-otp/send", { email: "admin@example.com" });
+    expect(response.status).toBe(202);
+    const inserted = queryMock.mock.calls.find(([sql]) =>
+      String(sql).includes("insert into public.bizportal_email_otp_codes")
+      && String(sql).includes("with invalidated"));
+    expect(inserted).toBeDefined();
+    const [sql, params] = inserted as [string, unknown[]];
+    expect(sql).toContain("values ($1, $2, $3, $4, $5)");
+    expect(params[0]).toBe("admin@example.com");
+    expect(params[1]).toBe("127.0.0.1");
+    expect(params[2]).toBe("admin-email-login");
+  });
+
   it("creates the secure local session after one correct verification", async () => {
     await request(server, "/auth/email-otp/send", { email: "admin@example.com" });
     const response = await request(server, "/auth/email-otp/verify", {
