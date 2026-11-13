@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 
 type FixtureDoc = { id:string; companyId:number; employeeId:number; docType:string;
-  mime:string; path:string; status:string; stale?:boolean; zeroFieldPending?:boolean; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
+  mime:string; path:string; status:string; stale?:boolean; zeroFieldPending?:boolean; originalSha256?:string; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
 const state = vi.hoisted(() => ({
   docs: new Map<string,FixtureDoc>(),
   audit: [] as string[],
@@ -19,6 +19,14 @@ vi.mock("./hrd-db",()=>({
     if(companyId!==state.tenant)throw Error("TENANT_INVALID");
     return work({query:async(sql:string,v:unknown[]=[])=>{
       if(sql.includes("FROM public.employees"))return {rowCount:1,rows:[{id:7}]};
+      if(sql.includes("SELECT id FROM hrd_private.employee_documents")&&sql.includes("original_sha256")) {
+        const [companyId,employeeId,docType,hash]=v;
+        const existing=[...state.docs.values()].find(doc=>
+          doc.companyId===companyId&&doc.employeeId===employeeId&&
+          doc.docType===docType&&doc.originalSha256===hash&&
+          ["pending_review","verified"].includes(doc.status));
+        return existing?{rowCount:1,rows:[{id:existing.id}]}:{rowCount:0,rows:[]};
+      }
       if(sql.includes("INSERT INTO hrd_private.employee_documents")){
         const [id,companyId,employeeId,type,mime,path]=v as [string,number,number,string,string,string];
         state.docs.set(id,{id,companyId,employeeId,docType:type,mime,path,
@@ -43,7 +51,7 @@ vi.mock("./hrd-db",()=>({
         const d=state.docs.get(String(v[4]));
         if(!d||d.status!=="scanning"||d.companyId!==v[5]||d.employeeId!==v[6])
           return {rowCount:0,rows:[]};
-        d.status="pending_review";d.extracted=JSON.parse(String(v[0]));
+        d.status="pending_review";d.extracted=JSON.parse(String(v[0]));d.originalSha256=String(v[3]);
         return {rowCount:1,rows:[{id:d.id}]};
       }
       if(sql.includes("SET status='scan_failed'")){
@@ -165,6 +173,46 @@ describe("HRD OCR synthetic HTTP lifecycle (no production writes)",()=>{
     expect(preview.status).toBe(200);
     expect(preview.body.expiresIn).toBe(60);
     expect(state.audit).toHaveLength(3);
+  });
+  it("rejects matching scanned SHA before signing or creating an object",async()=>{
+    const id=await preparedKtp();
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(200);
+    const count=state.docs.size, audited=state.audit.length;
+    const duplicate=await post("prepare",{
+      docType:"ktp",mimeType:"image/jpeg",processingAuthorizationConfirmed:true,
+      originalSha256:"a".repeat(64),
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.code).toBe("HRD_DOCUMENT_DUPLICATE");
+    expect(JSON.stringify(duplicate.body)).not.toContain("signed-test-token");
+    expect(state.docs.size).toBe(count);
+    expect(state.audit.length).toBe(audited);
+  });
+  it("does not cross employee or doc-type boundaries with SHA preflight",async()=>{
+    const id=await preparedKtp();
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(200);
+    const differentType=await post("prepare",{
+      docType:"sim",mimeType:"image/jpeg",processingAuthorizationConfirmed:true,
+      originalSha256:"a".repeat(64),
+    });
+    expect(differentType.status).toBe(201);
+    const saved=state.docs.get(id)!;
+    saved.employeeId=99;
+    const differentEmployee=await post("prepare",{
+      docType:"ktp",mimeType:"image/jpeg",processingAuthorizationConfirmed:true,
+      originalSha256:"a".repeat(64),
+    });
+    expect(differentEmployee.status).toBe(201);
+  });
+  it("rejects malformed hashes instead of bypassing the duplicate query",async()=>{
+    const initial=state.docs.size;
+    for(const originalSha256 of ["not-a-sha", "A".repeat(64), "0".repeat(63), 5]){
+      const response=await post("prepare",{
+        docType:"ktp",mimeType:"image/jpeg",processingAuthorizationConfirmed:true,originalSha256,
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(state.docs.size).toBe(initial);
   });
   it("denies fresh scanning replay but recovers a stale scan without reuploading",async()=>{
     const id=await preparedKtp();
