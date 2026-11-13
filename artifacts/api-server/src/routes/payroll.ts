@@ -7,6 +7,7 @@ import { registerPayrollSuperAdminApprovalRoutes } from "./payroll-super-admin-a
 import { registerEffectiveSetupPreviewRoutes } from "./payroll-setup-effective-routes";
 import { registerProdPayrollDraftRoutes } from "./payroll-prod-draft-routes";
 import { payrollProdDedicatedRequired } from "./payroll-prod-db";
+import { isPayrollProdApprover } from "./payroll-prod-approver";
 import { readPayrollSuperAdminApprovalReceipt } from "./payroll-super-admin-approval-receipt";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
 
@@ -138,7 +139,7 @@ router.get("/payroll/runs/:id", async (req: PayrollRequest, res): Promise<void> 
 // absent from this adapter. Requests fail closed instead of mutating financial data.
 router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
   const prod=process.env.APP_ENV?.trim().toLowerCase()==="production";
-  const superAdmin=req.payrollActor?.role.toLowerCase()==="super_admin";
+  const superAdmin=isPayrollProdApprover(req.payrollActor,req.payrollCompanyId);
   const dedicated=prod && payrollProdDedicatedRequired();
   res.json({
     companyId: req.payrollCompanyId,
