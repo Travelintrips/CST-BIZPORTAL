@@ -22,7 +22,7 @@ describe("HRD consented managed OpenAI fallback",()=>{
  it("reads existing managed key only after local OCR is incomplete",async()=>{
   let requested=0,called=0;
   const result=await scanEmployeeDocument(Buffer.from("fixture"),"image/png","sim",
-   local,async(...args)=>{called++;return provider(...args);},
+   local,async()=>{called++;return provider();},
    async(key)=>{expect(key).toBe("OPENAI_API_KEY");requested++;return "fixture-credential";});
   expect(result.engine).toBe("openai_fallback");
   expect(result.fields.nomor_dokumen).toBe("123456789012");
