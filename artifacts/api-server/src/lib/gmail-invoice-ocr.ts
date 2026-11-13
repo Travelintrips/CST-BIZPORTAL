@@ -191,7 +191,9 @@ async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
   const response = await fetch(url, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
-  const payload = (await response.json()) as T & {
+  // Even a non-JSON quota response must trigger backpressure, not a
+  // parser failure that marks every queued invoice as permanently failed.
+  const payload = (await response.json().catch(() => ({}))) as T & {
     error?: { message?: string };
   };
   if (!response.ok) {

@@ -93,17 +93,15 @@ function sourceEmail(): string {
 }
 
 async function googleClientId(): Promise<string> {
-  return (
-    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_ID")) ||
-    (await getRuntimeConfig("GOOGLE_CLIENT_ID"))
-  );
+  const dedicated = await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_ID");
+  if (isDevelopmentEnvironment()) return dedicated;
+  return dedicated || await getRuntimeConfig("GOOGLE_CLIENT_ID");
 }
 
 async function googleClientSecret(): Promise<string> {
-  return (
-    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_SECRET")) ||
-    (await getRuntimeConfig("GOOGLE_CLIENT_SECRET"))
-  );
+  const dedicated = await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_SECRET");
+  if (isDevelopmentEnvironment()) return dedicated;
+  return dedicated || await getRuntimeConfig("GOOGLE_CLIENT_SECRET");
 }
 
 function safeReturnPath(value: unknown): string {
@@ -201,11 +199,12 @@ async function setConfig(
     `insert into public.app_config(
        key,value,is_secret,description,environment,updated_at,updated_by
      )
-     values($1,$2,$3,$4,'production',now(),$5)
+     values($1,$2,$3,$4,$6,now(),$5)
      on conflict(key) do update set
        value=excluded.value,
        is_secret=excluded.is_secret,
        description=excluded.description,
+       environment=excluded.environment,
        updated_at=now(),
        updated_by=excluded.updated_by`,
     [
@@ -214,6 +213,7 @@ async function setConfig(
       options.secret ?? false,
       options.description ?? null,
       options.actor ?? null,
+      isDevelopmentEnvironment() ? "development" : "production",
     ],
   );
 }
