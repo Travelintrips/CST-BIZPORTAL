@@ -3,6 +3,8 @@ import {
   MAX_OCR_RATE_LIMIT_DELAY_MS,
   MIN_OCR_RATE_LIMIT_DELAY_MS,
   rateLimitRetryAt,
+  gmailRateLimitRetryAt,
+  GmailProviderRateLimitError,
   requiresInvoiceExtractionReview,
 } from "../lib/gmail-invoice-rate-limit";
 
@@ -28,6 +30,24 @@ describe("Gmail invoice OCR backpressure", () => {
       .toBe(now + 30 * 60_000);
     expect(rateLimitRetryAt(429, "not a date", now))
       .toBe(now + MIN_OCR_RATE_LIMIT_DELAY_MS);
+  });
+
+
+  it("recognizes Google Gmail 403 user-rate-limit messages with explicit UTC retry", () => {
+    const retry = new Date(now + 25 * 60_000).toISOString();
+    expect(gmailRateLimitRetryAt(403, null, "User-rate limit exceeded. Retry after " + retry, now))
+      .toBe(now + 25 * 60_000);
+  });
+
+  it("does not convert unrelated Gmail 403 permissions errors into cooldown", () => {
+    expect(gmailRateLimitRetryAt(403, null, "Insufficient permission", now)).toBeNull();
+    expect(gmailRateLimitRetryAt(429, null, null, now)).toBe(now + MIN_OCR_RATE_LIMIT_DELAY_MS);
+  });
+
+  it("propagates a typed, secret-free Gmail retry marker", () => {
+    const marker = new GmailProviderRateLimitError(now + 30_000);
+    expect(marker.retryAt).toBe(now + 30_000);
+    expect(marker.name).toBe("GmailProviderRateLimitError");
   });
 
   it("never promotes PDF-text or provider-error fallback to OCR-ready", () => {
