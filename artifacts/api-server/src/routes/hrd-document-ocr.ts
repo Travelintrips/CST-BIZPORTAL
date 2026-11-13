@@ -159,7 +159,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
   return {fields:normalizeExtraction({},0,[]).fields,confidence:0,
    warnings:["Pas foto tidak memerlukan OCR."],engine:"not_required" as const};
  }
- const local=localOcrEnabled()?await localReader(bytes,mime):{
+ const local=localOcrEnabled()?await localReader(bytes,mime,docType):{
   text:"",confidence:0,source:"unavailable" as const,warnings:["OCR lokal dinonaktifkan."]
  };
  const localFields=parseLocalDocumentFields(docType,local.text);

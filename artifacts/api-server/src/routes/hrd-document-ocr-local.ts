@@ -2,6 +2,7 @@ import {createRequire} from "node:module";
 import {mkdir} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
+import {upscaleLowResolutionPng} from "./hrd-ocr-image-upscale";
 
 const require=createRequire(import.meta.url);
 const Tesseract=require("tesseract.js") as typeof import("tesseract.js");
@@ -41,7 +42,7 @@ async function getWorker():Promise<Worker>{
  return workerPromise;
 }
 
-export async function extractLocalOcrText(bytes:Buffer,mime:string):Promise<LocalOcrText>{
+export async function extractLocalOcrText(bytes:Buffer,mime:string,docType?:LocalDocumentType):Promise<LocalOcrText>{
  if(mime==="application/pdf"){
   try{
    let parsed:{text?:string};
@@ -70,12 +71,32 @@ export async function extractLocalOcrText(bytes:Buffer,mime:string):Promise<Loca
  const task=imageQueue.then(async()=>{
   const worker=await getWorker();
   const result=await worker.recognize(bytes,{rotateAuto:true});
-  return {
-   text:String(result.data.text??"").trim(),
-   confidence:Math.max(0,Math.min(1,Number(result.data.confidence??0)/100)),
-   source:"tesseract" as const,
-   warnings:["Gambar dibaca menggunakan OCR lokal Tesseract."]
-  };
+  let text=String(result.data.text??"").trim();
+  let confidence=Math.max(0,Math.min(1,Number(result.data.confidence??0)/100));
+  const warnings=["Gambar dibaca menggunakan OCR lokal Tesseract."];
+  // Do not alter stored bytes or run a duplicate scan. Only retry low-res PNG
+  // in memory when the FIRST OCR transcript lacks required document fields.
+  if(mime==="image/png"&&docType){
+   const initialCoverage=localDocumentFieldCoverage(
+    docType,parseLocalDocumentFields(docType,text));
+   if(initialCoverage<1){
+    const enlarged=upscaleLowResolutionPng(bytes);
+    if(enlarged){
+     try{
+      const retry=await worker.recognize(enlarged,{rotateAuto:true});
+      const retryText=String(retry.data.text??"").trim();
+      const retryCoverage=localDocumentFieldCoverage(
+       docType,parseLocalDocumentFields(docType,retryText));
+      if(retryCoverage>initialCoverage){
+       text=retryText;
+       confidence=Math.max(0,Math.min(1,Number(retry.data.confidence??0)/100));
+       warnings.push("Gambar resolusi rendah diperbesar sebelum OCR; file asli tidak diubah.");
+      }
+     }catch{ /* Preserve original result when resize OCR fails. */ }
+    }
+   }
+  }
+  return {text,confidence,source:"tesseract" as const,warnings};
  });
  imageQueue=task.then(()=>undefined,()=>undefined);
  try{
