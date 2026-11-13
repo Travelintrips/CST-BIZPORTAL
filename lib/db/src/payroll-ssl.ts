@@ -18,7 +18,7 @@ export const SUPABASE_ROOT_2021_CA_SHA256 =
 export function buildPayrollDedicatedSslOptions(connectionString: string) {
   const url = new URL(connectionString);
   const host = url.hostname.toLowerCase();
-  if (!(/^aws-[0-9]+-[a-z0-9-]+\\.pooler\\.supabase\\.com$/.test(host) ||
+  if (!(/^aws-[0-9]+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(host) ||
         host === "db.nzdweipzckfszczzqtuw.supabase.co")) {
     throw new Error("PAYROLL_PROD_TLS_HOST_NOT_ALLOWED");
   }
