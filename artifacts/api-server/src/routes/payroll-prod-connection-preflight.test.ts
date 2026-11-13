@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   identityError: false,
   identityCalls: 0,
   configured: true,
+  sharedMode: false,
   configError: false,
   configReason: "secret:never-return-this",
   dbError: false,
@@ -38,10 +39,11 @@ vi.mock("@workspace/db", () => ({
 }));
 
 vi.mock("./payroll-prod-db", () => ({
-  payrollProdDedicatedRequired: () => {
+  payrollReadOnlyReady: () => {
     if (state.configError) throw Error(state.configReason);
-    return state.configured;
+    return state.configured || state.sharedMode;
   },
+  payrollProdSharedReadOnlyEnabled: () => state.sharedMode,
   payrollScopedQuery: async (companyId: number, sql: string, values: unknown[]) => {
     state.calls.push({ companyId, sql, values });
     if (state.dbError) throw Object.assign(new Error(state.dbErrorMessage), {code: state.dbErrorCode});
@@ -93,6 +95,7 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     state.identityError = false;
     state.identityCalls = 0;
     state.configured = true;
+    state.sharedMode = false;
     state.configError = false;
     state.configReason = "secret:never-return-this";
     state.dbError = false;
@@ -107,6 +110,34 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     const response = await fetch(root + "/api/payroll/connection-preflight");
     return { response, body: await response.json() as Record<string, unknown> };
   }
+
+  it("verifies explicit BizPortal shared read-only mode without claiming dedicated connection", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.configured = false;
+    state.sharedMode = true;
+    const {response,body} = await request();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ready:true,readOnly:true,
+      dedicatedConnectionVerified:false,
+      sharedRoleScopedVerified:true,
+      connectionMode:"BIZPORTAL_SHARED_ROLE_SCOPED_READ_ONLY",
+      roleVerified:true,companyScopeVerified:true,
+      canPay:false,canPostJournal:false,canApprove:false,canWriteKasbon:false,
+    });
+    expect(state.calls).toHaveLength(1);
+  });
+
+  it("does not mark shared connection ready when PostgreSQL role scope mismatches", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.configured = false;
+    state.sharedMode = true;
+    state.dbRole = "postgres";
+    const {response,body} = await request();
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("PAYROLL_PROD_ROLE_OR_SCOPE_INVALID");
+    expect(body.ready).toBe(false);
+  });
 
   it("never probes or exposes readiness outside PROD", async () => {
     vi.stubEnv("APP_ENV", "development");
