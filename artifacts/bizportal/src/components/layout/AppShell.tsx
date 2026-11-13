@@ -380,6 +380,19 @@ export function AppShell({ children, noPadding }: AppShellProps) {
         { titleKey: "Audit COA Talangan",  href: "/expense/audit-dana-talangan",        icon: ShieldAlert },
       ],
     },
+    // ── HRD ──────────────────────────────────────────────────────────
+    // Reuse the existing HR hub. Its private employee link is shown only
+    // after the existing authenticated HRD readiness check succeeds.
+    // Do not link directly to /hr/employees from the generic sidebar.
+    {
+      type: "flat",
+      titleKey: "HRD",
+      href: "/hr",
+      icon: Users,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/hr/employees"],
+    },
+
     // ── 9b. CASH & BANK ──────────────────────────────────────────────
     {
       type: "group",
