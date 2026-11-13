@@ -90,6 +90,7 @@ vi.mock("./dev-auth",()=>({
 }));
 vi.mock("@workspace/db",()=>({pool:{query:()=>{throw Error("SHARED_POOL_FORBIDDEN")}}}));
 vi.mock("./payroll-prod-db",()=>({
+ payrollReadOnlyReady:()=>state.available,
  payrollDedicatedEnabled:()=>state.available,
  payrollProdDedicatedRequired:()=>state.available,
  payrollScopedQuery:async(_company:number,sql:string,values:unknown[])=>{
