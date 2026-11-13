@@ -1,4 +1,5 @@
 import { PAYROLL_SUPER_ADMIN_APPROVAL_MARKER, payrollSuperAdminApprovalDigest } from "./payroll-super-admin-approval-receipt";
+import { isPayrollProdApprover } from "./payroll-prod-approver";
 import type { IRouter, Request, Response } from "express";
 import type { PayrollDbClient } from "@workspace/db";
 import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
@@ -28,7 +29,9 @@ const validId = (raw: unknown): number | null =>
   typeof raw === "string" && /^[1-9][0-9]*$/.test(raw) &&
   Number.isSafeInteger(Number(raw)) ? Number(raw) : null;
 const actorAllowed = (req: ScopedRequest): boolean =>
-  req.payrollActor?.role?.trim().toLowerCase() === "super_admin" &&
+  (isDevelopmentEnvironment()
+    ? req.payrollActor?.role?.trim().toLowerCase() === "super_admin"
+    : isPayrollProdApprover(req.payrollActor,req.payrollCompanyId)) &&
   Boolean(String(req.payrollActor?.id ?? "").trim()) &&
   Boolean(String(req.payrollActor?.email ?? "").trim());
 const enabled = (): boolean => isDevelopmentEnvironment()
