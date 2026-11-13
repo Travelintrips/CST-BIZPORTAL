@@ -15,6 +15,7 @@ import {
   syncGmailInvoiceCandidates,
 } from "../lib/gmail-invoice-candidates";
 import { getRuntimeConfig } from "../lib/gmail-invoice-runtime";
+import { GmailProviderRateLimitError } from "../lib/gmail-invoice-rate-limit";
 import {
   listGmailOrganizationRules,
   provisionGmailOrganizationRules,
@@ -1259,9 +1260,11 @@ router.post(
         setConfig(
           companyId,
           "LAST_SYNC_STATUS",
-          result.failed > 0
-            ? "partial"
-            : "ok",
+          result.deferred > 0
+            ? "deferred"
+            : result.failed > 0
+              ? "partial"
+              : "ok",
           {
             description:
               "Last Gmail invoice source synchronization status",
@@ -1270,6 +1273,17 @@ router.post(
         ),
       ]);
 
+      if (result.deferred > 0) {
+        res.status(429).json({
+          ok: false,
+          code: "GMAIL_RATE_LIMIT_DEFERRED",
+          error: "Gmail membatasi permintaan. Sinkronisasi dihentikan sementara, kandidat pending tidak ditandai gagal.",
+          email: profile.emailAddress,
+          ...result,
+          syncedAt: now,
+        });
+        return;
+      }
       res.json({
         ok: true,
         email: profile.emailAddress,
@@ -1277,6 +1291,16 @@ router.post(
         syncedAt: now,
       });
     } catch (error) {
+      if (error instanceof GmailProviderRateLimitError) {
+        res.setHeader("Retry-After", String(Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000))));
+        res.status(429).json({
+          ok: false,
+          code: "GMAIL_RATE_LIMIT_DEFERRED",
+          error: error.message,
+          retryAt: new Date(error.retryAt).toISOString(),
+        });
+        return;
+      }
       req.log.error(
         { error },
         "Gmail invoice source sync failed",
