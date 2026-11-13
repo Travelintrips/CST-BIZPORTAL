@@ -1,6 +1,5 @@
 import {createHash} from "node:crypto";
 import {extractLocalOcrText,parseLocalDocumentFields,localDocumentFieldsComplete,localDocumentFieldCoverage} from "./hrd-document-ocr-local";
-import {getRuntimeConfig} from "../lib/gmail-invoice-runtime";
 
 export const HRD_BUCKET="bizportal-hrd-documents-prod";
 export const HRD_DOC_TYPES=["ktp","kk","foto","sim","npwp","ijazah","skck","kontrak"] as const;
@@ -81,16 +80,6 @@ function localOcrEnabled(){
 function openAiFallbackEnabled(){
  return process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED!=="false" &&
   Boolean(process.env.HRD_PROD_OPENAI_API_KEY?.trim());
-}
-// Dedicated HRD key has priority. Otherwise reuse the existing managed
-// production OPENAI_API_KEY resolver already used for Invoice OCR.
-// Never log or return credentials; calls remain behind HRD consent and scope.
-async function resolveHrdFallbackKey():Promise<string>{
- if(process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED==="false")return "";
- const dedicated=process.env.HRD_PROD_OPENAI_API_KEY?.trim();
- if(dedicated)return dedicated;
- try{return (await getRuntimeConfig("OPENAI_API_KEY")).trim();}
- catch{return "";}
 }
 export function hrdOcrReady(){
  return process.env.APP_ENV==="production" &&
@@ -186,8 +175,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
   return {...localResult,engine:"local" as const,
    warnings:[...localResult.warnings,"Sumber: OCR lokal; tidak menggunakan kuota OpenAI."]};
  }
- const fallbackKey=await resolveHrdFallbackKey();
- if(!fallbackKey){
+ if(!openAiFallbackEnabled()){
   // Distinguish a failed OCR engine from a completed scan that simply
   // found no trustworthy fields. Never fabricate a personal identifier.
   if(!hasLocalFields){
@@ -201,7 +189,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
    warnings:[...localResult.warnings,
     "AI cadangan tidak aktif. Periksa dan lengkapi field kosong secara manual."]};
  }
- const apiKey=fallbackKey;
+ const apiKey=process.env.HRD_PROD_OPENAI_API_KEY!.trim();
  const instruction=[
   "Ekstraksi dokumen HRD Indonesia tipe "+docType.toUpperCase()+".",
   "Hanya ekstrak nilai yang terlihat jelas. Jangan menebak informasi hilang.",
