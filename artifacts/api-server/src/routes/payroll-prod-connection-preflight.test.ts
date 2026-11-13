@@ -135,6 +135,17 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     expect(state.calls).toHaveLength(1);
   });
 
+  it("accepts signed session ID distinct from the designated public.users DB ID", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "unrelated-supabase-auth-sub";
+    state.actorEmail = "admcst001@gmail.com";
+    const { response } = await request();
+    expect(response.status).toBe(200);
+    expect(state.identityCalls).toBe(1);
+    expect(state.calls).toHaveLength(1);
+  });
+
   it("rejects revoked designated Owner without entering dedicated Payroll connection", async () => {
     vi.stubEnv("APP_ENV", "production");
     state.role = "owner";
@@ -162,16 +173,19 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     expect(state.calls).toHaveLength(0);
   });
 
-  it("does not allow spoofed Owner email or ID to access the readiness endpoint", async () => {
+  it("does not allow other Owner email or a non-designated public.users ID", async () => {
     vi.stubEnv("APP_ENV", "production");
     state.role = "owner";
-    state.actorId = "google_103728868378401731050";
+    state.actorId = "auth-session-id-not-equal-to-public-user-id";
     state.actorEmail = "other@example.test";
     expect((await request()).response.status).toBe(403);
-    state.actorEmail = "admcst001@gmail.com";
-    state.actorId = "someone_else";
-    expect((await request()).response.status).toBe(403);
     expect(state.identityCalls).toBe(0);
+    state.actorEmail = "admcst001@gmail.com";
+    // A valid Supabase session ID is not the same as the internal public.users row ID.
+    // Access requires server-side active public.users row pinned by ID and email.
+    state.identityRows = 0;
+    expect((await request()).response.status).toBe(403);
+    expect(state.identityCalls).toBe(1);
     expect(state.calls).toHaveLength(0);
   });
 
