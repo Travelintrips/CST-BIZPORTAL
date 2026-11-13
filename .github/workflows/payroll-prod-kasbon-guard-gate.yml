@@ -1,0 +1,48 @@
+name: Payroll PROD kasbon reservation PostgreSQL gate
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/20261113173000_payroll_prod_kasbon_reservation_guard.sql"
+      - "supabase/migrations/20261113173100_payroll_prod_kasbon_single_reservation_guard.sql"
+      - "scripts/tests/payroll-prod-reservation-pg.sh"
+      - "scripts/tests/fixtures/payroll-prod-role-rls-historical-20261111.sql"
+      - ".github/workflows/payroll-prod-kasbon-guard-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-kasbon-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: payroll_setup_ci
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d payroll_setup_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "54329"
+      PGUSER: postgres
+      PGPASSWORD: ci
+      PGDATABASE: payroll_setup_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PostgreSQL client
+        run: |
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Verify dedicated role and kasbon guard using synthetic database only
+        run: bash scripts/tests/payroll-prod-reservation-pg.sh
