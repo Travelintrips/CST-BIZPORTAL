@@ -1,6 +1,7 @@
 import type { IRouter, Request, Response } from "express";
 import { pool } from "@workspace/db";
-import { payrollProdDedicatedRequired, payrollScopedQuery } from "./payroll-prod-db";
+import { payrollReadOnlyReady, payrollProdSharedReadOnlyEnabled, payrollScopedQuery } from "./payroll-prod-db";
+import { payrollReadinessSafeReason } from "./payroll-prod-readiness-error";
 
 type ScopedPayrollRequest = Request & {
   payrollCompanyId?: number;
@@ -61,11 +62,23 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
 
     let configured: boolean;
     try {
-      configured = payrollProdDedicatedRequired();
-    } catch {
+      configured = payrollReadOnlyReady();
+    } catch (error) {
+      // Explicit allowlist: never return the URL, password, username, host or raw DB error.
+      const safeReasons = new Set([
+        "PAYROLL_PROD_URL_MALFORMED",
+        "PAYROLL_PROD_URL_SCHEME_INVALID",
+        "PAYROLL_PROD_PROJECT_MISMATCH",
+        "PAYROLL_PROD_USERNAME_MISMATCH",
+        "PAYROLL_PROD_HOST_MISMATCH",
+        "PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED",
+        "PAYROLL_PROD_DATABASE_NAME_MISSING",
+      ]);
+      const rawReason=error instanceof Error ? error.message : "";
       res.status(503).json({
         ready: false, readOnly: true, dedicatedConnectionVerified: false,
         code: "PAYROLL_PROD_DEDICATED_CONFIG_INVALID",
+        reasonCode: safeReasons.has(rawReason) ? rawReason : "PAYROLL_PROD_URL_MALFORMED",
       });
       return;
     }
@@ -98,20 +111,27 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
         });
         return;
       }
+      const shared=payrollProdSharedReadOnlyEnabled();
       res.status(200).json({
         ready: true,
         readOnly: true,
-        dedicatedConnectionVerified: true,
+        connectionMode: shared ? "BIZPORTAL_SHARED_ROLE_SCOPED_READ_ONLY" : "DEDICATED_ROLE_SCOPED_READ_ONLY",
+        dedicatedConnectionVerified: !shared,
+        sharedRoleScopedVerified: shared,
         companyScopeVerified: true,
         roleVerified: true,
         canPay: false,
         canPostJournal: false,
+        canApprove: false,
+        canWriteKasbon: false,
       });
-    } catch {
-      // Deliberately do not serialize DB errors, URLs, credentials, or query text.
+    } catch (error) {
+      // Deliberately do not serialize DB errors, URLs, credentials, query text or
+      // the failing SQL. Only a predefined, non-sensitive diagnosis is returned.
       res.status(503).json({
         ready: false, readOnly: true, dedicatedConnectionVerified: false,
         code: "PAYROLL_PROD_DATABASE_READINESS_FAILED",
+        reasonCode: payrollReadinessSafeReason(error),
       });
     }
   });

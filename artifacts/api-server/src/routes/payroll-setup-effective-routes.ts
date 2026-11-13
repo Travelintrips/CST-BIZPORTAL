@@ -1,6 +1,6 @@
 import { type IRouter, type Request, type Response } from "express";
 import type { PayrollDbClient } from "@workspace/db";
-import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
+import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollReadOnlyReady, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
 import { isDevelopmentEnvironment } from "./dev-auth";
 import { createHash } from "node:crypto";
 import {loadAutoKasbonSources} from "./payroll-kasbon-draft-db";
@@ -51,7 +51,7 @@ function canApplyEffectiveSetup(req: ScopedRequest): boolean {
     role === "super_admin";
 }
 function effectiveSetupReadReady(): boolean {
-  return isDevelopmentEnvironment() ? payrollDedicatedEnabled() : payrollProdDedicatedRequired();
+  return isDevelopmentEnvironment() ? payrollDedicatedEnabled() : payrollReadOnlyReady();
 }
 
 /**

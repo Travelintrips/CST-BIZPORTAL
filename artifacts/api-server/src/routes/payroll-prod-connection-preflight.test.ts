@@ -14,8 +14,12 @@ const state = vi.hoisted(() => ({
   identityError: false,
   identityCalls: 0,
   configured: true,
+  sharedMode: false,
   configError: false,
+  configReason: "secret:never-return-this",
   dbError: false,
+  dbErrorCode: "",
+  dbErrorMessage: "postgres://password@host/secret-database",
   dbRole: "bizportal_payroll_prod",
   scopedCompany: "1",
   calls: [] as Array<{ companyId: number; sql: string; values: unknown[] }>,
@@ -35,13 +39,14 @@ vi.mock("@workspace/db", () => ({
 }));
 
 vi.mock("./payroll-prod-db", () => ({
-  payrollProdDedicatedRequired: () => {
-    if (state.configError) throw Error("secret:never-return-this");
-    return state.configured;
+  payrollReadOnlyReady: () => {
+    if (state.configError) throw Error(state.configReason);
+    return state.configured || state.sharedMode;
   },
+  payrollProdSharedReadOnlyEnabled: () => state.sharedMode,
   payrollScopedQuery: async (companyId: number, sql: string, values: unknown[]) => {
     state.calls.push({ companyId, sql, values });
-    if (state.dbError) throw Error("postgres://password@host/secret-database");
+    if (state.dbError) throw Object.assign(new Error(state.dbErrorMessage), {code: state.dbErrorCode});
     return {
       rowCount: 1,
       rows: [{ dbRole: state.dbRole, companyScope: state.scopedCompany, visibleRuns: "1", visibleProfiles: "0" }],
@@ -90,8 +95,12 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     state.identityError = false;
     state.identityCalls = 0;
     state.configured = true;
+    state.sharedMode = false;
     state.configError = false;
+    state.configReason = "secret:never-return-this";
     state.dbError = false;
+    state.dbErrorCode = "";
+    state.dbErrorMessage = "postgres://password@host/secret-database";
     state.dbRole = "bizportal_payroll_prod";
     state.scopedCompany = "1";
     state.calls.length = 0;
@@ -101,6 +110,34 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     const response = await fetch(root + "/api/payroll/connection-preflight");
     return { response, body: await response.json() as Record<string, unknown> };
   }
+
+  it("verifies explicit BizPortal shared read-only mode without claiming dedicated connection", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.configured = false;
+    state.sharedMode = true;
+    const {response,body} = await request();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ready:true,readOnly:true,
+      dedicatedConnectionVerified:false,
+      sharedRoleScopedVerified:true,
+      connectionMode:"BIZPORTAL_SHARED_ROLE_SCOPED_READ_ONLY",
+      roleVerified:true,companyScopeVerified:true,
+      canPay:false,canPostJournal:false,canApprove:false,canWriteKasbon:false,
+    });
+    expect(state.calls).toHaveLength(1);
+  });
+
+  it("does not mark shared connection ready when PostgreSQL role scope mismatches", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.configured = false;
+    state.sharedMode = true;
+    state.dbRole = "postgres";
+    const {response,body} = await request();
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("PAYROLL_PROD_ROLE_OR_SCOPE_INVALID");
+    expect(body.ready).toBe(false);
+  });
 
   it("never probes or exposes readiness outside PROD", async () => {
     vi.stubEnv("APP_ENV", "development");
@@ -226,6 +263,32 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     expect(state.calls).toHaveLength(0);
   });
 
+  it("exposes allowlisted URL error codes only, without secrets", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    const allowlist=[
+      "PAYROLL_PROD_URL_MALFORMED",
+      "PAYROLL_PROD_URL_SCHEME_INVALID",
+      "PAYROLL_PROD_PROJECT_MISMATCH",
+      "PAYROLL_PROD_USERNAME_MISMATCH",
+      "PAYROLL_PROD_HOST_MISMATCH",
+      "PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED",
+      "PAYROLL_PROD_DATABASE_NAME_MISSING",
+    ];
+    state.configError=true;
+    for(const reason of allowlist){
+      state.configReason=reason;
+      const {response,body}=await request();
+      expect(response.status).toBe(503);
+      expect(body.code).toBe("PAYROLL_PROD_DEDICATED_CONFIG_INVALID");
+      expect(body.reasonCode).toBe(reason);
+      expect(state.calls).toHaveLength(0);
+    }
+    state.configReason="postgres://secret-password@private-host-name";
+    const {body}=await request();
+    expect(body.reasonCode).toBe("PAYROLL_PROD_URL_MALFORMED");
+    expect(JSON.stringify(body)).not.toContain("secret-password");
+  });
+
   it("rejects invalid company scope without a database call", async () => {
     vi.stubEnv("APP_ENV", "production");
     state.companyId = 0;
@@ -276,6 +339,28 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     }
   });
 
+
+  it("classifies an actual PostgreSQL authentication error without exposing the supplied username", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.dbError = true;
+    state.dbErrorCode = "28P01";
+    state.dbErrorMessage = 'password authentication failed for user "secret-login-name"';
+    const {response,body} = await request();
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("PAYROLL_PROD_DATABASE_READINESS_FAILED");
+    expect(body.reasonCode).toBe("PAYROLL_PROD_DATABASE_PASSWORD_REJECTED");
+    expect(JSON.stringify(body)).not.toContain("secret-login-name");
+  });
+
+  it("distinguishes a missing pooler tenant from a database role permission error", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.dbError = true;
+    state.dbErrorMessage = "FATAL: (ENOTFOUND) tenant/user missing";
+    expect((await request()).body.reasonCode).toBe("PAYROLL_PROD_POOLER_ROUTING_FAILED");
+    state.dbErrorMessage = 'permission denied to set role "bizportal_payroll_prod"';
+    state.dbErrorCode = "42501";
+    expect((await request()).body.reasonCode).toBe("PAYROLL_PROD_DATABASE_PERMISSION_DENIED");
+  });
   it("fails closed without leaking the connection string on DB failure", async () => {
     vi.stubEnv("APP_ENV", "production");
     state.dbError = true;

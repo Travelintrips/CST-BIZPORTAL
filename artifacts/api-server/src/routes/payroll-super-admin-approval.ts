@@ -1,7 +1,7 @@
 import { PAYROLL_SUPER_ADMIN_APPROVAL_MARKER, payrollSuperAdminApprovalDigest } from "./payroll-super-admin-approval-receipt";
 import type { IRouter, Request, Response } from "express";
 import type { PayrollDbClient } from "@workspace/db";
-import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
+import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollReadOnlyReady, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
 import { isDevelopmentEnvironment } from "./dev-auth";
 import { buildPayrollPreview, type PayrollPreviewItem } from "./payroll-preview";
 import { verifyKasbonReviewLedger } from "./payroll-kasbon-hr-review-guard";
@@ -35,7 +35,7 @@ const enabled = (): boolean => isDevelopmentEnvironment()
   ? payrollDedicatedEnabled() && process.env.PAYROLL_DEV_SUPER_ADMIN_APPROVAL_ENABLED === "true"
   : payrollProdDedicatedRequired() && process.env.PAYROLL_PROD_SUPER_ADMIN_APPROVAL_ENABLED === "true";
 const approvalReadReady = (): boolean =>
-  isDevelopmentEnvironment() ? payrollDedicatedEnabled() : payrollProdDedicatedRequired();
+  isDevelopmentEnvironment() ? payrollDedicatedEnabled() : payrollReadOnlyReady();
 
 const itemSQL = `SELECT pi.id, pi.employee_id, pi.base_salary::text,
  pi.allowance::text, pi.gross_salary::text, pi.bpjs_jht_employee::text,

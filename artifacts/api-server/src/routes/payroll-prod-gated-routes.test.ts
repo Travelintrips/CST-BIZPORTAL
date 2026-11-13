@@ -65,13 +65,29 @@ describe("canonical PROD Payroll gated endpoints — never use shared DB",()=>{
   vi.stubEnv("APP_ENV","production");
   vi.stubEnv("PAYROLL_PROD_REQUIRE_DEDICATED_DB","true");
   const variants=[
-   "postgresql://postgres:ci@db.nzdweipzckfszczzqtuw.supabase.co/postgres",
-   "postgresql://bizportal_payroll_prod_login.xssrfshdrtdfupgqwfdw:ci@aws-1-ap-southeast-2.pooler.supabase.com/postgres",
-   "postgresql://bizportal_payroll_dev.xssrfshdrtdfupgqwfdw:ci@db.xssrfshdrtdfupgqwfdw.supabase.co/postgres",
-  ];
-  for(const value of variants) {
+    ["postgresql://postgres:ci@db.nzdweipzckfszczzqtuw.supabase.co/postgres", "PAYROLL_PROD_USERNAME_MISMATCH"],
+    ["postgresql://bizportal_payroll_prod_login.xssrfshdrtdfupgqwfdw:ci@aws-1-ap-southeast-2.pooler.supabase.com/postgres", "PAYROLL_PROD_PROJECT_MISMATCH"],
+    ["postgresql://bizportal_payroll_dev.xssrfshdrtdfupgqwfdw:ci@db.xssrfshdrtdfupgqwfdw.supabase.co/postgres", "PAYROLL_PROD_PROJECT_MISMATCH"],
+    ["postgresql://bizportal_payroll_prod_login:ci@aws-1-ap-southeast-2.pooler.supabase.com/postgres", "PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED"],
+    ["postgresql://bizportal_payroll_prod_login:ci@other.supabase.co/postgres", "PAYROLL_PROD_HOST_MISMATCH"],
+    ["postgresql://bizportal_payroll_prod_login:ci@db.nzdweipzckfszczzqtuw.supabase.co", "PAYROLL_PROD_DATABASE_NAME_MISSING"],
+    ["https://bizportal_payroll_prod_login:ci@db.nzdweipzckfszczzqtuw.supabase.co/postgres", "PAYROLL_PROD_URL_SCHEME_INVALID"],
+    ["not-a-postgres-connection-string", "PAYROLL_PROD_URL_MALFORMED"],
+  ] as const;
+  for(const [value, reason] of variants) {
    vi.stubEnv("PAYROLL_DATABASE_URL_PROD",value);
-   expect(()=>payrollProdDedicatedRequired()).toThrow(/PAYROLL_PROD_DATABASE_PROJECT_OR_ROLE_MISMATCH/);
+   expect(()=>payrollProdDedicatedRequired()).toThrow(reason);
+  } });
+ it("accepts direct PROD and password-encoded pooler URL without a DB query",()=>{
+  vi.stubEnv("APP_ENV","production");
+  vi.stubEnv("PAYROLL_PROD_REQUIRE_DEDICATED_DB","true");
+  const formats=[
+    "postgresql://bizportal_payroll_prod_login:test@db.nzdweipzckfszczzqtuw.supabase.co:5432/postgres",
+    "postgresql://bizportal_payroll_prod_login.nzdweipzckfszczzqtuw:test%40encoded@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres?sslmode=require",
+  ];
+  for(const url of formats){
+    vi.stubEnv("PAYROLL_DATABASE_URL_PROD",url);
+    expect(payrollProdDedicatedRequired()).toBe(true);
   }
  });
  it("valid-looking separate PROD identity still requires runtime opt-in and no query is executed",()=>{
