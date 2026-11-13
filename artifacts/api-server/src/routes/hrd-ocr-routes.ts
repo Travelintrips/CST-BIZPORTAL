@@ -23,7 +23,25 @@ const extFor=(mime:string)=>({
 const unavailable=(res:Response)=>res.status(503).json({message:"OCR HRD PROD belum diaktifkan atau storage privat belum siap."});
 const fail=(req:ScopedRequest,res:Response,error:unknown,operation:string)=>{
   req.log?.error?.({error,operation,companyId:req.hrdCompanyId},"HRD private OCR request failed");
-  res.status(503).json({message:"Operasi OCR HRD tidak tersedia. Identitas karyawan tidak berubah."});
+  // Only pre-approved diagnostic codes: never return exception messages,
+  // private document content, SQL, provider payloads or credentials.
+  const raw=error instanceof Error?error.message:"";
+  const safeCodes=new Set([
+    "HRD_OCR_LOCAL_UNAVAILABLE","HRD_OCR_MIME_MISMATCH",
+    "INVALID_DOCUMENT_SIZE","PRIVATE_DOCUMENT_NOT_UPLOADED",
+    "HRD_OCR_FALLBACK_UNAVAILABLE",
+  ]);
+  const code=safeCodes.has(raw)||/^HRD_OCR_PROVIDER_HTTP_[45]\\d{2}(?:_[A-Z0-9_]+)?$/.test(raw)?
+    raw:"HRD_OCR_SCAN_FAILED";
+  res.setHeader("Cache-Control","no-store");
+  res.status(503).json({
+    message:code==="HRD_OCR_LOCAL_UNAVAILABLE"?
+      "Mesin OCR lokal tidak tersedia. File tersimpan, tetapi belum dapat diekstrak.":
+      code==="HRD_OCR_MIME_MISMATCH"?
+      "Isi file tidak cocok dengan format dokumen yang dipilih.":
+      "OCR dokumen belum berhasil. File aman; tidak ada perubahan identitas karyawan.",
+    code,
+  });
 };
 async function employeeExists(client:PoolClient,companyId:number,employeeId:number){
   const result=await client.query(
