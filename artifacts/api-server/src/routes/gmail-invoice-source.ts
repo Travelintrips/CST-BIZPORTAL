@@ -87,12 +87,9 @@ function requireCompanyScope(
 }
 
 function sourceEmail(): string {
-  return (
-    process.env.GMAIL_INVOICE_SOURCE_EMAIL ||
-    DEFAULT_SOURCE_EMAIL
-  )
-    .trim()
-    .toLowerCase();
+  const configured = process.env.GMAIL_INVOICE_SOURCE_EMAIL?.trim().toLowerCase() ?? "";
+  // DEV must never silently fall back to the operational PROD mailbox.
+  return isDevelopmentEnvironment() ? configured : configured || DEFAULT_SOURCE_EMAIL;
 }
 
 async function googleClientId(): Promise<string> {
@@ -899,6 +896,16 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+      // DEV requires a dedicated explicitly configured mailbox; never use
+      // the hardcoded production source as the default OAuth target.
+      if (!sourceEmail()) {
+        res.status(409).json({
+          code: "GMAIL_DEV_SOURCE_EMAIL_REQUIRED",
+          error: "Atur GMAIL_INVOICE_SOURCE_EMAIL khusus DEV sebelum menghubungkan atau menyinkronkan Gmail.",
+        });
+        return;
+      }
+
 
       const [clientId, clientSecret] =
         await Promise.all([
@@ -1194,6 +1201,16 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+      // DEV requires a dedicated explicitly configured mailbox; never use
+      // the hardcoded production source as the default OAuth target.
+      if (!sourceEmail()) {
+        res.status(409).json({
+          code: "GMAIL_DEV_SOURCE_EMAIL_REQUIRED",
+          error: "Atur GMAIL_INVOICE_SOURCE_EMAIL khusus DEV sebelum menghubungkan atau menyinkronkan Gmail.",
+        });
+        return;
+      }
+
       scopedCompanyId = companyId;
       // Persisted quota gate prevents other API workers / restarts from
       // repeating calls before Google's Retry after window elapses.
