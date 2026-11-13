@@ -188,31 +188,34 @@ function A4Canvas({ config, blocks, selectedId, onSelect }: {
         };
 
         if (block.type === "header") {
+          // This is a print-preview projection, not a change to company master data.
+          const cstPreview = config.companyName.trim().toUpperCase() === "PT CAHAYA SEJATI TEKNOLOGI";
+          const previewLogo = config.logoUrl || (cstPreview ? "/cst-logo.png" : "");
+          const previewAddress = cstPreview
+            ? "GEDUNG SPORT CENTER\nBandar Udara Internasional Soekarno–Hatta, Jl. C3 No.831, RT.001/RW.010, Pajang, Kec. Benda, Kota Tangerang, Banten 15126"
+            : config.companyAddress;
+
           return (
-            <div key={block.id} className={`px-8 pt-6 pb-4 ${base}`} onClick={() => onSelect(block.id)} {...blockA11y}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  {config.logoUrl ? (
-                    <img src={config.logoUrl} alt="Logo" className="h-12 w-auto object-contain" />
-                  ) : (
-                    <div
-                      className="h-12 w-28 rounded flex items-center justify-center text-white text-xs font-bold"
-                      style={{ background: primary }}
-                    >
-                      <span className="opacity-50 text-[10px]">LOGO</span>
-                    </div>
-                  )}
-                  <div>
-                    <div className="font-bold text-base" style={{ color: primary }}>{config.companyName}</div>
-                    <div className="text-xs text-gray-500">Jl. Logistik No. 1, Jakarta</div>
+            <div key={block.id} className={`px-8 pt-4 pb-3 ${base}`} onClick={() => onSelect(block.id)} {...blockA11y}>
+              <div className="mx-auto grid w-full max-w-[650px] grid-cols-[132px_minmax(0,1fr)] items-center gap-6">
+                {previewLogo ? (
+                  <img src={previewLogo} alt="Logo perusahaan" className="h-[132px] w-[132px] object-contain" />
+                ) : (
+                  <div className="h-[132px] w-[132px] rounded bg-slate-100 flex items-center justify-center text-xs font-semibold text-slate-500">
+                    LOGO
                   </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-extrabold tracking-wide" style={{ color: accent }}>{docTitle}</div>
-                  <div className="text-xs text-gray-400 mt-0.5"># {`{nomor_${config.documentType}}`}</div>
+                )}
+                <div className="min-w-0 text-center">
+                  <div className="font-extrabold text-[19px] tracking-[0.01em] uppercase leading-tight" style={{ color: primary }}>{config.companyName}</div>
+                  <div className="mt-2 whitespace-pre-line break-words text-[11px] font-medium leading-[1.5] text-slate-600">{previewAddress}</div>
                 </div>
               </div>
-              <div className="mt-3 h-[2px] w-full" style={{ background: primary }} />
+              <div className="mt-4 w-full border-b-[3px]" style={{ borderColor: primary }} />
+              <div className="mt-[3px] h-px w-full bg-sky-600" />
+              <div className="mt-6 mb-2 text-center" data-testid="document-centered-title">
+                <h1 className="text-[19px] font-bold tracking-[0.035em] leading-tight" style={{ color: primary }}>{docTitle}</h1>
+                <p className="mt-1 text-[10px] font-medium text-slate-600"># {`{nomor_${config.documentType}}`}</p>
+              </div>
             </div>
           );
         }
