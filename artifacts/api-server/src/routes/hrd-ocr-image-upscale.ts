@@ -1,9 +1,7 @@
-import {createRequire} from "node:module";
+import {PNG} from "pngjs";
 
-const require=createRequire(import.meta.url);
-// pngjs is pure JavaScript. No native/image service, no disk write.
-// The original uploaded image and its SHA-256 remain unchanged.
-const PNG=require("pngjs").PNG;
+// pngjs is pure JavaScript, bundled into the production server.
+// No native/image service, no disk write; the original SHA remains unchanged.
 const signature=Buffer.from([137,80,78,71,13,10,26,10]);
 const MAX_INPUT=5*1024*1024;
 const MAX_RESIZED=12*1024*1024;
