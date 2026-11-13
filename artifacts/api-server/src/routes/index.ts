@@ -11,6 +11,7 @@ import salesCoreRouter from "./sales-core";
 import adminRealtimeRouter from "./admin-realtime";
 import driverGeofenceRouter from "./driver-geofence";
 import gmailInvoiceSourceRouter from "./gmail-invoice-source";
+import customerArMatchPreviewRouter from "./customer-ar-match-preview";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -46,6 +47,7 @@ router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
 router.use(businessDashboardRouter);
 router.use(salesCoreRouter);
+router.use(customerArMatchPreviewRouter);
 router.use(adminRealtimeRouter);
 router.use(driverGeofenceRouter);
 
