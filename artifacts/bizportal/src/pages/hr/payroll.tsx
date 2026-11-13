@@ -35,6 +35,13 @@ type PayrollItem = {
   employee: { firstName: string; lastName: string } | null;
 };
 type RunDetail = { run: PayrollRun; items: PayrollItem[]; integrityError?: string | null };
+type PayrollSetupReadiness = {
+  companyId:number; year:number; month:number; effectiveThrough:string;
+  employeeCount:number; salaryConfiguredCount:number; missingSalaryCount:number;
+  deductionConfiguredCount:number; missingDeductionCount:number;
+  invalidSalaryCount:number; invalidDeductionCount:number; readyEmployeeCount:number;
+  dataComplete:boolean; readOnly:true;
+};
 const money = (value: number | string) => new Intl.NumberFormat("id-ID", {
   style: "currency", currency: "IDR", maximumFractionDigits: 0,
 }).format(Number(value || 0));
@@ -76,6 +83,10 @@ export default function PayrollWorkspace() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [setupReadiness, setSetupReadiness] = useState<PayrollSetupReadiness|null>(null);
+  const [setupReadinessError, setSetupReadinessError] = useState("");
+  const [setupReadinessLoading, setSetupReadinessLoading] = useState(false);
+  const [setupReadinessRefresh, setSetupReadinessRefresh] = useState(0);
   const endpoint = companyId === null ? "" : `/api/payroll/runs?companyId=${companyId}`;
   const runUrl = (id: number, suffix = "") => `/api/payroll/runs/${id}${suffix}?companyId=${companyId}`;
 
@@ -133,6 +144,37 @@ export default function PayrollWorkspace() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [companyId]);
+
+  // Independent of Draft creation: show precisely which master-data setup is missing.
+  useEffect(() => {
+    let cancelled = false;
+    setSetupReadiness(null);
+    setSetupReadinessError("");
+    if (companyId === null || !Number.isInteger(year) || year < 2020 || year > 2099 ||
+        !Number.isInteger(month) || month < 1 || month > 12) {
+      setSetupReadinessLoading(false);
+      return () => { cancelled = true; };
+    }
+    setSetupReadinessLoading(true);
+    api<PayrollSetupReadiness>(
+      `/api/payroll/setup-readiness?companyId=${companyId}&year=${year}&month=${month}`
+    )
+      .then((result) => {
+        if (cancelled) return;
+        if (result.companyId !== companyId || result.year !== year || result.month !== month) {
+          setSetupReadinessError("Data kesiapan tidak sesuai perusahaan atau periode terpilih.");
+          return;
+        }
+        setSetupReadiness(result);
+      })
+      .catch((e) => {
+        if (!cancelled) setSetupReadinessError(
+          e instanceof Error ? e.message : "Rekap kesiapan gaji belum tersedia."
+        );
+      })
+      .finally(() => { if (!cancelled) setSetupReadinessLoading(false); });
+    return () => { cancelled = true; };
+  }, [companyId, year, month, setupReadinessRefresh]);
 
   useEffect(() => {
     if (companyId == null || selectedId == null) return;
@@ -223,6 +265,8 @@ export default function PayrollWorkspace() {
   const generateAllowed = canGenerate && capabilitiesScope === companyId;
   const editAllowed = canEditItems && capabilitiesScope === companyId;
   const prodActionsAllowed = capabilitiesScope === companyId && canViewSetup;
+  const scopedReadiness = setupReadiness?.companyId === companyId &&
+    setupReadiness.year === year && setupReadiness.month === month ? setupReadiness : null;
   const statusCounts = scopedRuns.reduce<Record<string, number>>((counts, run) => {
     const status = run.status.toLowerCase();
     counts[status] = (counts[status] ?? 0) + 1;
@@ -254,7 +298,10 @@ export default function PayrollWorkspace() {
         <Button variant="outline" disabled={companyId == null || loading || busy} onClick={async () => {
           if (companyId === null) return;
           setLoading(true); setError("");
-          try { await refresh(companyId, selectedId); } catch (e) { setError(e instanceof Error ? e.message : "Gagal memuat."); }
+          try {
+            await refresh(companyId, selectedId);
+            setSetupReadinessRefresh((count) => count + 1);
+          } catch (e) { setError(e instanceof Error ? e.message : "Gagal memuat."); }
           finally { setLoading(false); }
         }}><RefreshCcw className="mr-2 h-4 w-4" />Refresh</Button>
       </div>
@@ -283,6 +330,45 @@ export default function PayrollWorkspace() {
               <input aria-label="Tahun payroll" className="mt-1 block w-28 rounded-md border bg-background p-2" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
             </label>
             <Button disabled={!createAllowed || busy || loading || scopedRuns.some((run) => run.month === month && run.year === year)} onClick={() => perform("create")}>{createAllowed ? "Buat Draft Payroll" : "Buat Draft (Belum Aktif)"}</Button>
+          </CardContent>
+        </Card>
+        <Card aria-label="Kesiapan data Payroll per perusahaan">
+          <CardHeader><CardTitle className="text-lg">Kesiapan Struktur Gaji &amp; Potongan</CardTitle></CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              Pemeriksaan baca-saja untuk
+              {String(month).padStart(2, "0")}/{year} — hanya perusahaan yang dipilih.
+              Tidak membuat Draft, mengesahkan gaji, atau melakukan pembayaran.
+            </p>
+            {setupReadinessLoading && <div role="status" className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Memeriksa kelengkapan data gaji...
+            </div>}
+            {!setupReadinessLoading && setupReadinessError &&
+              <p role="status" className="text-muted-foreground">
+                Kesiapan belum dapat ditampilkan: {setupReadinessError}
+              </p>}
+            {scopedReadiness && !setupReadinessLoading && <>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Karyawan aktif</p>
+                  <p className="text-xl font-semibold">{scopedReadiness.employeeCount}</p></div>
+                <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Struktur gaji terisi</p>
+                  <p className="text-xl font-semibold">{scopedReadiness.salaryConfiguredCount}/{scopedReadiness.employeeCount}</p></div>
+                <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Potongan lengkap</p>
+                  <p className="text-xl font-semibold">{scopedReadiness.deductionConfiguredCount}/{scopedReadiness.employeeCount}</p></div>
+                <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Siap secara data</p>
+                  <p className="text-xl font-semibold">{scopedReadiness.readyEmployeeCount}/{scopedReadiness.employeeCount}</p></div>
+              </div>
+              <p role="status" className={scopedReadiness.dataComplete ? "text-emerald-700" : "text-amber-700"}>
+                {scopedReadiness.dataComplete
+                  ? "Komponen terisi secara data. Pembuatan Draft dan persetujuan tetap memerlukan otorisasi terpisah."
+                  : scopedReadiness.employeeCount === 0
+                    ? "Belum ada karyawan aktif pada perusahaan ini."
+                    : `Belum lengkap: ${scopedReadiness.missingSalaryCount} karyawan tanpa struktur gaji, ${scopedReadiness.missingDeductionCount} tanpa lima komponen potongan lengkap; ${scopedReadiness.invalidSalaryCount + scopedReadiness.invalidDeductionCount} indikasi komponen tidak valid.`}
+              </p>
+              <a className="inline-block rounded-md border px-3 py-2 hover:bg-muted" href="/hr/payroll-components">
+                Buka Atur Gaji &amp; Potongan
+              </a>
+            </>}
           </CardContent>
         </Card>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Ringkasan periode payroll">
