@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Camera, FileText, Image as ImageIcon, LockKeyhole, ArrowLeft, RefreshCw } from "lucide-react";
 import { HrdDocumentManager } from "./hrd-document-manager";
 import { uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
+import { optimizeHrdPhotoBeforeUpload } from "./hrd-photo-compression";
 
 type Document = {
   id: string; doc_type: string; status: string; mime_type?: string;
@@ -125,16 +126,21 @@ export default function HrdEmployeeDetailPage() {
     const epoch = photoEpoch.current;
     setPhotoBusy(true); setPhotoError(""); setPhotoNotice("");
     try {
+      // Optimize only Pas Foto. OCR identity documents continue to upload their original bytes.
+      const uploadPhoto = await optimizeHrdPhotoBeforeUpload(photo);
+      if (epoch !== photoEpoch.current) return;
       const prepared = await postPhoto<HrdSignedUpload>("prepare", {
-        mimeType:photo.type,processingAuthorizationConfirmed:true,
+        mimeType:uploadPhoto.type,processingAuthorizationConfirmed:true,
       });
       if (epoch !== photoEpoch.current) return;
-      await uploadHrdSignedDocument(prepared,photo,companyId,employeeId);
+      await uploadHrdSignedDocument(prepared,uploadPhoto,companyId,employeeId);
       if (epoch !== photoEpoch.current) return;
       const done = await postPhoto<{status:string}>(`${prepared.documentId}/complete`,{});
       if (done.status !== "pending_review") throw Error("Status upload belum dapat diverifikasi.");
       if (epoch !== photoEpoch.current) return;
-      setPhotoNotice("Pas Foto tersimpan secara privat dan menunggu verifikasi HRD.");
+      setPhotoNotice(uploadPhoto===photo
+        ? "Pas Foto tersimpan secara privat dan menunggu verifikasi HRD."
+        : "Pas Foto berhasil dikompresi "+Math.round((1-uploadPhoto.size/photo.size)*100)+"% dan tersimpan privat; menunggu verifikasi HRD.");
       setPhoto(null); if (fileInput.current) fileInput.current.value = "";
       await refresh();
     } catch (cause) {
@@ -221,7 +227,7 @@ export default function HrdEmployeeDetailPage() {
         </Card>
         <Card><CardHeader><CardTitle className="flex items-center gap-2"><Camera className="h-4 w-4" /> Pas Foto dari HP</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <p className="text-muted-foreground">Di HP, pilih kamera depan jika browser mendukung. Kamera tidak aktif otomatis. Foto tidak dikirim ke server.</p>
+            <p className="text-muted-foreground">Di HP, pilih kamera depan jika browser mendukung. Kamera tidak aktif otomatis. Pratinjau tetap pada perangkat; Pas Foto dioptimalkan sebelum upload privat jika ukurannya lebih hemat. Dokumen identitas OCR tetap disimpan asli.</p>
             <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" capture="user"
               className="block w-full text-sm" aria-label="Ambil Pas Foto atau pilih dari galeri"
               onChange={(e) => choosePhoto(e.target.files?.[0])} />
