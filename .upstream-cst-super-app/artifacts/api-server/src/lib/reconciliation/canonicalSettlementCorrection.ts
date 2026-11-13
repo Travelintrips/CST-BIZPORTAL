@@ -184,6 +184,30 @@ export async function reverseCanonicalSettlementForCorrection(
       throw new Error("Batch canonical tidak memiliki active payment item.");
     }
 
+    if (postedUnlinked) {
+      // A compensating correction is valid only for a genuinely invalid
+      // historical membership. Do not reverse an otherwise valid posted batch.
+      const originalEvidence = await tx.execute(sql`
+        SELECT
+          COUNT(*)::integer AS member_count,
+          COUNT(*) FILTER (WHERE p.id IS NULL
+            OR p.paid_at IS NULL
+            OR (p.paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1
+                IS DISTINCT FROM b.settlement_date)::integer AS wrong_date_count,
+          COALESCE(SUM(p.amount),0)::numeric AS source_gross,
+          COALESCE(SUM(p.mdr_amount),0)::numeric AS source_mdr
+        FROM sport_center.payment_settlement_items i
+        JOIN sport_center.payment_settlement_batches b ON b.id=i.settlement_id
+        LEFT JOIN sport_center.sport_payments p ON p.id=i.payment_id
+        WHERE i.settlement_id=${settlementId} AND i.item_status='active'
+      `);
+      const original = originalEvidence.rows[0] as Record<string, unknown> | undefined;
+      if (!original || Number(original.member_count) !== activeItemsResult.rows.length
+        || Number(original.wrong_date_count) < 1) {
+        throw new Error("Posted settlement must contain a real H+1-invalid member before correction.");
+      }
+    }
+
     const paymentIdList = replacementPaymentIds.join(",");
     const replacementResult = await tx.execute(sql.raw(`
       SELECT
@@ -205,6 +229,21 @@ export async function reverseCanonicalSettlementForCorrection(
     `));
     if (replacementResult.rows.length !== replacementPaymentIds.length) {
       throw new Error("Satu atau lebih replacement payment tidak ditemukan.");
+    }
+    if (postedUnlinked) {
+      const oldTotals = await tx.execute(sql`
+        SELECT COUNT(*)::integer AS payment_count,
+               COALESCE(SUM(gross_amount),0)::numeric AS gross_amount
+        FROM sport_center.payment_settlement_items
+        WHERE settlement_id=${settlementId} AND item_status='active'
+      `);
+      const old = oldTotals.rows[0] as Record<string,unknown> | undefined;
+      const newGross = replacementResult.rows.reduce(
+        (sum,row) => sum + Number((row as Record<string,unknown>).amount),0);
+      if (replacementPaymentIds.length !== Number(old?.payment_count)
+        || Math.abs(newGross - Number(old?.gross_amount)) > 0.01) {
+        throw new Error("Replacement cohort must preserve member count and gross settlement value.");
+      }
     }
 
     const batchCompanyId = Number(batch.company_id);
