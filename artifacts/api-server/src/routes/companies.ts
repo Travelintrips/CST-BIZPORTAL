@@ -26,23 +26,17 @@ const router: IRouter = Router();
 
 const authorizeCompanyRoutes = async (req: any, res: any, next: any) => {
   try {
-    if (isDevelopmentEnvironment()) {
-      if (!getDevSession(req)) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-      }
-      next();
-      return;
-    }
-    const session = getProductionSession(req);
-    if (!session) {
+    // Both legacy DEV login and signed email OTP/password sessions are valid
+    // identities in DEV. A missing or invalid signed session stays unauthorized.
+    const devActor = isDevelopmentEnvironment() ? getDevSession(req) : null;
+    const signedSession = devActor ? null : getProductionSession(req);
+    const actor = devActor ?? (signedSession ? await getProductionUser(signedSession) : null);
+    if (!actor) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    if (!await getProductionUser(session)) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
+    // Preserve the authenticated user's company scope for all three routes.
+    res.locals.companyActor = actor;
     next();
   } catch (error) {
     req.log.error({ error }, "Company authorization failed");
@@ -54,7 +48,7 @@ router.use(["/companies", "/companies/list", "/accounting/companies"], authorize
 
 router.get(["/companies", "/companies/list", "/accounting/companies"], async (req, res) => {
   try {
-    const sessionCompanyId = getDevSession(req)?.companyId ?? null;
+    const sessionCompanyId = (res.locals.companyActor as { companyId: number | null }).companyId;
     const result = await pool.query<CompanyRow>(`
       select
         id,
