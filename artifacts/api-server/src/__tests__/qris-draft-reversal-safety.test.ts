@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 // The financial writer must NOT become reachable from the active BizPortal API
 // until rollback, duplicate, 2-cohort rebuild and bank approval tests pass.
 const pendingCorrection = readFileSync(
-  new URL("../../../../../.upstream-cst-super-app/artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrection.ts", import.meta.url),
+  new URL("../../../../.upstream-cst-super-app/artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrection.ts", import.meta.url),
   "utf8",
 );
 const scopedTrigger = readFileSync(
-  new URL("../../../../../scripts/sql/20261113_guarded_finalized_settlement_membership_compensation.sql", import.meta.url),
+  new URL("../../../../scripts/sql/20261113_guarded_finalized_settlement_membership_compensation.sql", import.meta.url),
   "utf8",
 );
 
