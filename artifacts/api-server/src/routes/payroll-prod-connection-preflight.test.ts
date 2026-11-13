@@ -6,13 +6,32 @@ import { registerPayrollProdConnectionPreflightRoutes } from "./payroll-prod-con
 
 const state = vi.hoisted(() => ({
   role: "super_admin",
+  actorId: "super_admin_test",
+  actorEmail: "admin@example.test",
+  actorCompanyId: 1,
   companyId: 1,
+  identityRows: 1,
+  identityError: false,
+  identityCalls: 0,
   configured: true,
   configError: false,
   dbError: false,
   dbRole: "bizportal_payroll_prod",
   scopedCompany: "1",
   calls: [] as Array<{ companyId: number; sql: string; values: unknown[] }>,
+}));
+
+vi.mock("@workspace/db", () => ({
+  pool: {
+    query: async (sql: string, values: unknown[]) => {
+      state.identityCalls += 1;
+      if (state.identityError) throw Error("private-postgres-error-password");
+      if (!sql.includes("is_active IS TRUE") || !sql.includes("public.users") ||
+          values[0] !== "google_103728868378401731050" ||
+          values[1] !== "admcst001@gmail.com") throw Error("UNSAFE_IDENTITY_QUERY");
+      return { rowCount: state.identityRows, rows: state.identityRows ? [{ "?column?": 1 }] : [] };
+    },
+  },
 }));
 
 vi.mock("./payroll-prod-db", () => ({
@@ -39,10 +58,10 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     const router = Router();
     router.use((request, _response, next) => {
       const req = request as typeof request & {
-        payrollActor?: { role: string };
+        payrollActor?: { id: string; email: string; role: string; companyId: number | null };
         payrollCompanyId?: number;
       };
-      req.payrollActor = { role: state.role };
+      req.payrollActor = { role: state.role, id: state.actorId, email: state.actorEmail, companyId: state.actorCompanyId };
       req.payrollCompanyId = state.companyId;
       next();
     });
@@ -63,7 +82,13 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
   afterEach(() => {
     vi.unstubAllEnvs();
     state.role = "super_admin";
+    state.actorId = "super_admin_test";
+    state.actorEmail = "admin@example.test";
+    state.actorCompanyId = 1;
     state.companyId = 1;
+    state.identityRows = 1;
+    state.identityError = false;
+    state.identityCalls = 0;
     state.configured = true;
     state.configError = false;
     state.dbError = false;
@@ -84,13 +109,82 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     expect(state.calls).toHaveLength(0);
   });
 
-  it("rejects Owner and Admin even when PROD connection is configured", async () => {
+  it("rejects unrecognized Owner and other roles, without accessing DB", async () => {
     vi.stubEnv("APP_ENV", "production");
     for (const role of ["owner", "admin", "finance", "viewer"]) {
       state.role = role;
       const { response } = await request();
       expect(response.status).toBe(403);
     }
+    expect(state.calls).toHaveLength(0);
+    expect(state.identityCalls).toBe(0);
+  });
+
+  it("allows only the active designated CST Owner for read-only connection probe", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "google_103728868378401731050";
+    state.actorEmail = "admcst001@gmail.com";
+    const { response, body } = await request();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ready: true, readOnly: true, dedicatedConnectionVerified: true,
+      canPay: false, canPostJournal: false,
+    });
+    expect(state.identityCalls).toBe(1);
+    expect(state.calls).toHaveLength(1);
+  });
+
+  it("rejects revoked designated Owner without entering dedicated Payroll connection", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "google_103728868378401731050";
+    state.actorEmail = "admcst001@gmail.com";
+    state.identityRows = 0;
+    const { response } = await request();
+    expect(response.status).toBe(403);
+    expect(state.identityCalls).toBe(1);
+    expect(state.calls).toHaveLength(0);
+  });
+
+  it("rejects designated Owner for other company and actor tenant mismatch", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "google_103728868378401731050";
+    state.actorEmail = "admcst001@gmail.com";
+    for (const [scope, tenant] of [[2, 1], [1, 2]] as const) {
+      state.companyId = scope;
+      state.actorCompanyId = tenant;
+      const { response } = await request();
+      expect(response.status).toBe(403);
+    }
+    expect(state.identityCalls).toBe(0);
+    expect(state.calls).toHaveLength(0);
+  });
+
+  it("does not allow spoofed Owner email or ID to access the readiness endpoint", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "google_103728868378401731050";
+    state.actorEmail = "other@example.test";
+    expect((await request()).response.status).toBe(403);
+    state.actorEmail = "admcst001@gmail.com";
+    state.actorId = "someone_else";
+    expect((await request()).response.status).toBe(403);
+    expect(state.identityCalls).toBe(0);
+    expect(state.calls).toHaveLength(0);
+  });
+
+  it("does not leak database error if Owner revalidation fails", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.role = "owner";
+    state.actorId = "google_103728868378401731050";
+    state.actorEmail = "admcst001@gmail.com";
+    state.identityError = true;
+    const { response, body } = await request();
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("PAYROLL_PROD_OWNER_VERIFICATION_UNAVAILABLE");
+    expect(JSON.stringify(body)).not.toContain("private-postgres-error-password");
     expect(state.calls).toHaveLength(0);
   });
 
