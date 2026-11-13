@@ -173,6 +173,13 @@ describe("DEV-only Marketplace read parity security", () => {
     expect(sql.toLowerCase()).toMatch(/^select /);
     expect(sql.toLowerCase()).not.toMatch(/\b(insert|update|delete|truncate)\b/);
     expect(params).toEqual([2]);
+    expect(sql).toContain("vi.company_id=p.company_id");
+    expect(sql).toContain("vi.supplier_id=p.vendor_id");
+    expect(sql).toContain("gr.inspection_status='passed'");
+    expect(sql).toContain("sh.shipment_status='delivered'");
+    expect(sql).toContain("vi.three_way_match_status='passed'");
+    expect(sql).toContain("ap.mkt_goods_receipt_id=vi.mkt_goods_receipt_id");
+    expect(sql).toContain("ah.company_id=p.company_id");
     expect((await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness",{method:"POST"})).status).toBe(404);
   });
   it("reports a missing PO without any write", async () => {

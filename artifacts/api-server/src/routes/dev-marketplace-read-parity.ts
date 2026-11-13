@@ -115,12 +115,26 @@ router.get("/mkt/admin/purchase-orders/:id/finance-readiness", async (req, res):
               (select count(*)::int from public.vendor_invoices vi
                 where vi.mkt_purchase_order_id=p.id) as "vendorInvoiceCount",
               (select count(*)::int from public.vendor_invoices vi
-                where vi.mkt_purchase_order_id=p.id
+                join public.mkt_po_goods_receipts gr on gr.id=vi.mkt_goods_receipt_id
+                join public.mkt_po_shipments sh on sh.id=gr.shipment_id
+                where vi.mkt_purchase_order_id=p.id and sh.po_id=p.id
+                and p.company_id is not null and vi.company_id=p.company_id
+                and vi.supplier_id=p.vendor_id
+                and gr.inspection_status='passed' and sh.shipment_status='delivered'
                 and vi.status='ready_for_ap' and vi.three_way_match_status='passed') as "matchedVendorInvoiceCount",
               (select count(*)::int from public.mkt_ap_preparations ap
-                where ap.mkt_purchase_order_id=p.id) as "apPreparationCount",
+                join public.vendor_invoices vi on vi.id=ap.vendor_invoice_id
+                where ap.mkt_purchase_order_id=p.id
+                and vi.mkt_purchase_order_id=p.id
+                and p.company_id is not null and ap.company_id=p.company_id
+                and vi.company_id=p.company_id and ap.supplier_id=p.vendor_id
+                and ap.mkt_goods_receipt_id=vi.mkt_goods_receipt_id
+                and vi.status='ready_for_ap' and vi.three_way_match_status='passed') as "apPreparationCount",
               (select count(*)::int from public.mkt_accounting_handoffs ah
-                where ah.mkt_purchase_order_id=p.id) as "accountingHandoffCount"
+                join public.mkt_ap_preparations ap on ap.id=ah.ap_preparation_id
+                where ah.mkt_purchase_order_id=p.id and ap.mkt_purchase_order_id=p.id
+                and p.company_id is not null and ah.company_id=p.company_id
+                and ap.company_id=p.company_id) as "accountingHandoffCount"
          from public.mkt_purchase_orders p where p.id=$1 limit 1`,
       [poId],
     );
