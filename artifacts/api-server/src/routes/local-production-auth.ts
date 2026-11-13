@@ -72,7 +72,7 @@ async function findUserByEmail(email: string): Promise<RawUser | null> {
 function isActiveAdmin(user: RawUser | null): user is RawUser {
   return Boolean(
     user
-    && user.role.trim().toLowerCase() === "admin"
+    && ["admin", "super_admin"].includes(user.role.trim().toLowerCase())
     && user.isActive
     && (user.status === null || user.status.trim().toLowerCase() === "active"),
   );
@@ -93,27 +93,17 @@ function isValidEmail(value: string): boolean {
 }
 
 async function ensureEmailOtpTable(): Promise<void> {
-  await pool.query(`
-    create table if not exists public.bizportal_email_otp_codes (
-      id bigserial primary key,
-      email text not null,
-      request_ip text not null,
-      purpose text not null,
-      code_hash text,
-      attempts integer not null default 0,
-      expires_at timestamptz not null,
-      verified_at timestamptz,
-      created_at timestamptz not null default now()
-    )
-  `);
-  await pool.query(`
-    create index if not exists bizportal_email_otp_rate_idx
-      on public.bizportal_email_otp_codes (email, request_ip, created_at desc)
-  `);
-  await pool.query(`
-    create index if not exists bizportal_email_otp_lookup_idx
-      on public.bizportal_email_otp_codes (email, purpose, created_at desc)
-  `);
+  // Schema is provisioned by migrations, not on every login request. The
+  // application runtime needs only DML privileges, never table ownership.
+  const result = await pool.query<{ ready: boolean }>(
+    `select to_regclass('public.bizportal_email_otp_codes') is not null
+       and to_regclass('public.bizportal_email_otp_rate_idx') is not null
+       and to_regclass('public.bizportal_email_otp_lookup_idx') is not null
+       as ready`,
+  );
+  if (!result.rows[0]?.ready) {
+    throw new Error("Email OTP schema is not provisioned");
+  }
 }
 
 async function countRecentEmailOtpRequests(email: string, requestIp: string): Promise<number> {

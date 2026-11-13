@@ -42,9 +42,10 @@ function validateAddress(value: string): string {
   return match[1];
 }
 
-function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
+export function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: string }> {
   return new Promise((resolve, reject) => {
     let buffer = "";
+    const replyLines: string[] = [];
     let timer: NodeJS.Timeout | undefined;
 
     const cleanup = () => {
@@ -67,9 +68,11 @@ function waitForResponse(socket: SmtpSocket): Promise<{ code: number; text: stri
       for (const line of lines) {
         const match = line.match(/^(\d{3})([ -])(.*)$/);
         if (!match) continue;
+        replyLines.push(line);
         if (match[2] === " ") {
           const code = Number(match[1]);
-          finish(() => resolve({ code, text: line }));
+          // Preserve intermediate 250- lines (e.g. AUTH capabilities).
+          finish(() => resolve({ code, text: replyLines.join("\n") }));
           return;
         }
       }
