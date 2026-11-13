@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 
 type FixtureDoc = { id:string; companyId:number; employeeId:number; docType:string;
-  mime:string; path:string; status:string; stale?:boolean; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
+  mime:string; path:string; status:string; stale?:boolean; zeroFieldPending?:boolean; extracted:Record<string,string|null>; verified:Record<string,string|null>|null };
 const state = vi.hoisted(() => ({
   docs: new Map<string,FixtureDoc>(),
   audit: [] as string[],
@@ -31,7 +31,10 @@ vi.mock("./hrd-db",()=>({
       }
       if(sql.includes("SET status='scanning'")){
         const d=state.docs.get(String(v[0]));
-        if(!d||!(d.status==="upload_pending"||d.status==="scan_failed"||(d.status==="scanning"&&d.stale))||d.companyId!==v[1]||d.employeeId!==v[2])
+        if(!d||!(d.status==="upload_pending"||d.status==="scan_failed"||
+          (d.status==="scanning"&&d.stale)||
+          (d.status==="pending_review"&&d.zeroFieldPending))||
+          d.companyId!==v[1]||d.employeeId!==v[2])
           return {rowCount:0,rows:[]};
         d.status="scanning";
         return {rowCount:1,rows:[{...d,doc_type:d.docType,mime_type:d.mime,storage_path:d.path}]};
@@ -175,6 +178,33 @@ describe("HRD OCR synthetic HTTP lifecycle (no production writes)",()=>{
     expect(state.docs.get(id)?.status).toBe("pending_review");
     expect(state.profile).toBeNull();
     expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
+  });
+  it("reuses one zero-field pending-review image after low-res OCR fix, with no second document or approval",async()=>{
+    const id=await preparedKtp();
+    const saved=state.docs.get(id)!;
+    saved.status="pending_review";
+    saved.extracted={nik:null,nama_lengkap:null};
+    saved.zeroFieldPending=true; // Simulates persisted 0 confidence, empty JSON, aged scan and hash.
+    const before=state.docs.size;
+    const res=await post(id+"/scan",{processingAuthorizationConfirmed:true});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({status:"pending_review",masterChanged:false});
+    expect(state.docs.size).toBe(before);
+    expect(state.profile).toBeNull();
+    expect(state.docs.get(id)?.status).toBe("pending_review");
+    expect(state.audit).toHaveLength(2); // one prepare, one extraction, never another prepare
+    saved.zeroFieldPending=false;
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
+  });
+  it("denies OCR rescan of pending review with existing recognized fields and verified documents",async()=>{
+    const id=await preparedKtp();
+    const doc=state.docs.get(id)!;
+    doc.status="pending_review";
+    doc.extracted={nama_lengkap:"REVIEWED PERSON"};
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
+    doc.status="verified";
+    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(409);
+    expect(state.profile).toBeNull();
   });
   it("rejects KTP payroll/job field injection before changing shared profile",async()=>{
     const id=await preparedKtp();

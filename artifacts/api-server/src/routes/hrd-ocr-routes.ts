@@ -99,7 +99,13 @@ export function registerHrdOcrRoutes(router:IRouter):void{
            SET status='scanning',updated_at=now()
            WHERE id=$1 AND company_id=$2 AND employee_id=$3
              AND doc_type<>'foto' AND (status IN ('upload_pending','scan_failed')
-               OR (status='scanning' AND updated_at < now() - interval '15 minutes'))
+               OR (status='scanning' AND updated_at < now() - interval '15 minutes')
+               OR (status='pending_review'
+                   AND scanned_at < now() - interval '15 minutes'
+                   AND verified_at IS NULL
+                   AND original_sha256 IS NOT NULL
+                   AND confidence = 0
+                   AND jsonb_strip_nulls(coalesce(extracted_data,'{}'::jsonb))='{}'::jsonb))
            RETURNING id,doc_type,mime_type,storage_path,status`,
           [documentId,companyId,employeeId],
         );
