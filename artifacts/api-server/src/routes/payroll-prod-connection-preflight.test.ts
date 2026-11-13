@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   configError: false,
   configReason: "secret:never-return-this",
   dbError: false,
+  dbErrorCode: "",
+  dbErrorMessage: "postgres://password@host/secret-database",
   dbRole: "bizportal_payroll_prod",
   scopedCompany: "1",
   calls: [] as Array<{ companyId: number; sql: string; values: unknown[] }>,
@@ -42,7 +44,7 @@ vi.mock("./payroll-prod-db", () => ({
   },
   payrollScopedQuery: async (companyId: number, sql: string, values: unknown[]) => {
     state.calls.push({ companyId, sql, values });
-    if (state.dbError) throw Error("postgres://password@host/secret-database");
+    if (state.dbError) throw Object.assign(new Error(state.dbErrorMessage), {code: state.dbErrorCode});
     return {
       rowCount: 1,
       rows: [{ dbRole: state.dbRole, companyScope: state.scopedCompany, visibleRuns: "1", visibleProfiles: "0" }],
@@ -94,6 +96,8 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     state.configError = false;
     state.configReason = "secret:never-return-this";
     state.dbError = false;
+    state.dbErrorCode = "";
+    state.dbErrorMessage = "postgres://password@host/secret-database";
     state.dbRole = "bizportal_payroll_prod";
     state.scopedCompany = "1";
     state.calls.length = 0;
@@ -304,6 +308,28 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     }
   });
 
+
+  it("classifies an actual PostgreSQL authentication error without exposing the supplied username", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.dbError = true;
+    state.dbErrorCode = "28P01";
+    state.dbErrorMessage = 'password authentication failed for user "secret-login-name"';
+    const {response,body} = await request();
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("PAYROLL_PROD_DATABASE_READINESS_FAILED");
+    expect(body.reasonCode).toBe("PAYROLL_PROD_DATABASE_PASSWORD_REJECTED");
+    expect(JSON.stringify(body)).not.toContain("secret-login-name");
+  });
+
+  it("distinguishes a missing pooler tenant from a database role permission error", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    state.dbError = true;
+    state.dbErrorMessage = "FATAL: (ENOTFOUND) tenant/user missing";
+    expect((await request()).body.reasonCode).toBe("PAYROLL_PROD_POOLER_ROUTING_FAILED");
+    state.dbErrorMessage = 'permission denied to set role "bizportal_payroll_prod"';
+    state.dbErrorCode = "42501";
+    expect((await request()).body.reasonCode).toBe("PAYROLL_PROD_DATABASE_PERMISSION_DENIED");
+  });
   it("fails closed without leaking the connection string on DB failure", async () => {
     vi.stubEnv("APP_ENV", "production");
     state.dbError = true;
