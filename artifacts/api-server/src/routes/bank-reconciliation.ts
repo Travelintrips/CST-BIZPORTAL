@@ -3458,6 +3458,7 @@ async function approveCanonicalSettlementLink(
   const batchResult = await client.query<{
     id: number;
     company_id: number;
+    provider_code: string;
     bank_account_id: string | null;
     settlement_date: string;
     net_amount: string;
@@ -3466,7 +3467,7 @@ async function approveCanonicalSettlementLink(
     canonical_bank_mutation_id: number | null;
     settlement_journal_id: number | null;
   }>(
-    `select id,company_id,bank_account_id,settlement_date::text as settlement_date,net_amount,
+    `select id,company_id,provider_code,bank_account_id,settlement_date::text as settlement_date,net_amount,
             status::text as status,bank_mutation_id,canonical_bank_mutation_id,settlement_journal_id
        from sport_center.payment_settlement_batches
       where id=$1 and company_id=$2
