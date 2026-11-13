@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   identityCalls: 0,
   configured: true,
   configError: false,
+  configReason: "secret:never-return-this",
   dbError: false,
   dbRole: "bizportal_payroll_prod",
   scopedCompany: "1",
@@ -36,7 +37,7 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("./payroll-prod-db", () => ({
   payrollProdDedicatedRequired: () => {
-    if (state.configError) throw Error("secret:never-return-this");
+    if (state.configError) throw Error(state.configReason);
     return state.configured;
   },
   payrollScopedQuery: async (companyId: number, sql: string, values: unknown[]) => {
@@ -91,6 +92,7 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     state.identityCalls = 0;
     state.configured = true;
     state.configError = false;
+    state.configReason = "secret:never-return-this";
     state.dbError = false;
     state.dbRole = "bizportal_payroll_prod";
     state.scopedCompany = "1";
@@ -224,6 +226,32 @@ describe("Payroll PROD dedicated role and scoped connection preflight (read only
     expect(response.status).toBe(503);
     expect(JSON.stringify(body)).not.toContain("secret:never-return-this");
     expect(state.calls).toHaveLength(0);
+  });
+
+  it("exposes allowlisted URL error codes only, without secrets", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    const allowlist=[
+      "PAYROLL_PROD_URL_MALFORMED",
+      "PAYROLL_PROD_URL_SCHEME_INVALID",
+      "PAYROLL_PROD_PROJECT_MISMATCH",
+      "PAYROLL_PROD_USERNAME_MISMATCH",
+      "PAYROLL_PROD_HOST_MISMATCH",
+      "PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED",
+      "PAYROLL_PROD_DATABASE_NAME_MISSING",
+    ];
+    state.configError=true;
+    for(const reason of allowlist){
+      state.configReason=reason;
+      const {response,body}=await request();
+      expect(response.status).toBe(503);
+      expect(body.code).toBe("PAYROLL_PROD_DEDICATED_CONFIG_INVALID");
+      expect(body.reasonCode).toBe(reason);
+      expect(state.calls).toHaveLength(0);
+    }
+    state.configReason="postgres://secret-password@private-host-name";
+    const {body}=await request();
+    expect(body.reasonCode).toBe("PAYROLL_PROD_URL_MALFORMED");
+    expect(JSON.stringify(body)).not.toContain("secret-password");
   });
 
   it("rejects invalid company scope without a database call", async () => {
