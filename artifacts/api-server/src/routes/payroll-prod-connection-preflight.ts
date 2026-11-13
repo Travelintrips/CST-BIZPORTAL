@@ -1,9 +1,10 @@
 import type { IRouter, Request, Response } from "express";
+import { pool } from "@workspace/db";
 import { payrollProdDedicatedRequired, payrollScopedQuery } from "./payroll-prod-db";
 
 type ScopedPayrollRequest = Request & {
   payrollCompanyId?: number;
-  payrollActor?: { role: string };
+  payrollActor?: { id: string; email: string; role: string; companyId: number | null };
 };
 
 /**
@@ -18,13 +19,43 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
       res.status(404).json({ message: "Pemeriksaan ini hanya tersedia di PROD." });
       return;
     }
-    if (req.payrollActor?.role?.toLowerCase() !== "super_admin") {
-      res.status(403).json({ message: "Pemeriksaan koneksi Payroll hanya untuk Super Admin." });
-      return;
-    }
     const companyId = req.payrollCompanyId;
     if (!Number.isSafeInteger(companyId) || !companyId || companyId <= 0) {
       res.status(403).json({ message: "Perusahaan Payroll tidak valid." });
+      return;
+    }
+    const actor = req.payrollActor;
+    const isSuperAdmin = actor?.role.trim().toLowerCase() === "super_admin";
+    // CST's already-designated owner may inspect connection readiness only.
+    // Resolve the signed account through its email; Supabase session.id may differ
+    // from public.users.id. The database row ID itself remains strictly pinned.
+    // This is NOT a general Owner privilege and does not alter any write/approval routes.
+    const designatedOwner =
+      companyId === 1 &&
+      actor?.email.trim().toLowerCase() === "admcst001@gmail.com" &&
+      actor.role.trim().toLowerCase() === "owner" &&
+      actor.companyId === 1;
+    let ownerVerified = false;
+    if (!isSuperAdmin && designatedOwner) {
+      try {
+        // Recheck active DB identity. A revoked/suspended session must not pass.
+        const active = await pool.query(
+          `SELECT 1 FROM public.users WHERE id=$1 AND lower(btrim(email))=$2
+             AND company_id=1 AND lower(btrim(role))='owner'
+             AND is_active IS TRUE AND lower(btrim(status))='active' LIMIT 1`,
+          ["google_103728868378401731050", "admcst001@gmail.com"],
+        );
+        ownerVerified = active.rowCount === 1;
+      } catch {
+        res.status(503).json({
+          ready: false, readOnly: true, dedicatedConnectionVerified: false,
+          code: "PAYROLL_PROD_OWNER_VERIFICATION_UNAVAILABLE",
+        });
+        return;
+      }
+    }
+    if (!isSuperAdmin && !ownerVerified) {
+      res.status(403).json({ message: "Pemeriksaan koneksi Payroll hanya untuk Super Admin atau Owner CST terverifikasi." });
       return;
     }
 
