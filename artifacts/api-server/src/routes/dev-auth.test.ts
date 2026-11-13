@@ -189,6 +189,26 @@ describe("development login bridge", () => {
     expect(upstreamRequest).not.toHaveBeenCalled();
   });
 
+  it("logs out without requiring an existing dev cookie after OTP login", async () => {
+    const response = await requestApi("GET", "/api/logout?redirect=%2F", undefined,
+      "bizportal_supabase_session=stale-or-expired");
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("/");
+    const cookies = response.headers["set-cookie"] ?? [];
+    expect(cookies.some((cookie) => cookie.startsWith("bizportal_supabase_session=; Max-Age=0;"))).toBe(true);
+    expect(cookies.some((cookie) => cookie.startsWith("bizportal_dev_session=; Max-Age=0;"))).toBe(true);
+
+    const repeat = await requestApi("GET", "/api/logout?redirect=%2F");
+    expect(repeat.status).toBe(302);
+    expect(repeat.headers.location).toBe("/");
+  });
+
+  it("does not redirect logout to an external website", async () => {
+    const response = await requestApi("GET", "/api/logout?redirect=%2F%2Fevil.example");
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("/");
+  });
+
   it("blocks an email that is not on the development allowlist", async () => {
     const upstreamRequest = mockUpstreamLogin({
       kind: "response",
