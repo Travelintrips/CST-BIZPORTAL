@@ -1,6 +1,6 @@
 import { getRuntimeConfig, GMAIL_SEARCH_QUERY, GMAIL_MAX_MESSAGES } from "./gmail-invoice-runtime";
 import { fallbackInvoiceExtraction } from "./gmail-invoice-fallback";
-import { rateLimitRetryAt } from "./gmail-invoice-rate-limit";
+import { GmailProviderRateLimitError, gmailRateLimitRetryAt, rateLimitRetryAt } from "./gmail-invoice-rate-limit";
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -177,7 +177,13 @@ function collectAttachments(
   return output;
 }
 
+// Google quota applies across message listing and attachment downloads.
+let gmailRateLimitedUntil = 0;
+
 async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
+  if (Date.now() < gmailRateLimitedUntil) {
+    throw new GmailProviderRateLimitError(gmailRateLimitedUntil);
+  }
   const response = await fetch(url, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
@@ -185,6 +191,15 @@ async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
     error?: { message?: string };
   };
   if (!response.ok) {
+    const retryAt = gmailRateLimitRetryAt(
+      response.status,
+      response.headers.get("retry-after"),
+      payload.error?.message ?? null,
+    );
+    if (retryAt !== null) {
+      gmailRateLimitedUntil = Math.max(gmailRateLimitedUntil, retryAt);
+      throw new GmailProviderRateLimitError(gmailRateLimitedUntil);
+    }
     throw new Error(
       payload.error?.message || `Gmail request failed: HTTP ${response.status}`,
     );
