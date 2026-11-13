@@ -8,6 +8,7 @@ import reconClassificationRouter from "./recon-classification";
 import accountingRouter from "./accounting";
 import purchaseWorkflowRouter from "./purchase-workflow";
 import devMarketplaceReadParityRouter from "./dev-marketplace-read-parity";
+import devMarketplaceFinanceWriterRouter from "./dev-marketplace-finance-writer";
 import businessDashboardRouter from "./business-dashboard";
 import localProductionAuthRouter from "./local-production-auth";
 import salesCoreRouter from "./sales-core";
@@ -45,6 +46,23 @@ router.use(localProductionAuthRouter);
 
 // Match isolated Marketplace DEV read routes before broad legacy auth middleware.
 router.use(devMarketplaceReadParityRouter);
+router.use(devMarketplaceFinanceWriterRouter);
+// Restore the original upstream token-scoped vendor invoice handler only in
+// explicitly enabled DEV runtime. Do not load its Storage dependencies in PROD.
+router.use("/mkt/vendor-invoice", async (req, res, next) => {
+  if (!isDevelopmentEnvironment() || process.env.NODE_ENV === "production"
+    || process.env.BIZPORTAL_MARKETPLACE_VENDOR_INVOICE_ENABLED_DEV !== "true") {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  try {
+    const { default: canonicalVendorInvoiceRouter } = await import("./mktVendorInvoice");
+    canonicalVendorInvoiceRouter(req, res, next);
+  } catch (error) {
+    req.log?.error({ error }, "Canonical Marketplace vendor invoice handler unavailable");
+    res.status(503).json({ error: "Canonical vendor invoice unavailable" });
+  }
+});
 
 router.post("/auth/email-login", (_request, response) => {
   response.status(404).json({ error: "Not found" });
