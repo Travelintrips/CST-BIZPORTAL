@@ -719,6 +719,31 @@ async function loadLocalMatchCandidates(
             and psb.canonical_bank_mutation_id is null
             and abs(psb.net_amount::numeric - $2::numeric) < 0.01
             and psb.settlement_date between ($3::date - 1) and ($3::date + 1)
+            -- A posted settlement with an old/wrong member must never seed
+            -- current QRIS matching merely because its net and date match.
+            and exists (
+              select 1 from sport_center.payment_settlement_items si
+              where si.settlement_id = psb.id and si.item_status = 'active'
+            )
+            and not exists (
+              select 1
+              from sport_center.payment_settlement_items si
+              left join sport_center.sport_payments sp on sp.id = si.payment_id
+              where si.settlement_id = psb.id and si.item_status = 'active'
+                and (
+                  sp.id is null
+                  or lower(coalesce(sp.status::text,'')) <> 'confirmed'
+                  or lower(coalesce(sp.payment_method::text,'')) <> 'qris'
+                  or sp.company_id is distinct from psb.company_id
+                  or lower(coalesce(sp.payment_provider::text,'')) <>
+                     lower(coalesce(psb.provider_code::text,''))
+                  or sp.bank_account_id is distinct from psb.bank_account_id
+                  or sp.paid_at is null
+                  or (sp.paid_at at time zone 'Asia/Jakarta')::date + 1
+                       is distinct from psb.settlement_date
+                  or sp.expected_settlement_date::date is distinct from psb.settlement_date
+                )
+            )
             and (
               $4::text is null
               or cba.id::text = $4::text
@@ -3433,6 +3458,7 @@ async function approveCanonicalSettlementLink(
   const batchResult = await client.query<{
     id: number;
     company_id: number;
+    provider_code: string;
     bank_account_id: string | null;
     settlement_date: string;
     net_amount: string;
@@ -3441,7 +3467,7 @@ async function approveCanonicalSettlementLink(
     canonical_bank_mutation_id: number | null;
     settlement_journal_id: number | null;
   }>(
-    `select id,company_id,bank_account_id,settlement_date::text as settlement_date,net_amount,
+    `select id,company_id,provider_code,bank_account_id,settlement_date::text as settlement_date,net_amount,
             status::text as status,bank_mutation_id,canonical_bank_mutation_id,settlement_journal_id
        from sport_center.payment_settlement_batches
       where id=$1 and company_id=$2
@@ -3549,11 +3575,19 @@ async function approveCanonicalSettlementLink(
         and item.item_status='active'
         and (
           lower(coalesce(payment.status::text,'')) <> 'confirmed'
-          or lower(coalesce(payment.payment_method::text,'')) not like '%qris%'
+          or lower(coalesce(payment.payment_method::text,'')) <> 'qris'
+          or payment.company_id is distinct from $2::integer
+          or lower(coalesce(payment.payment_provider::text,'')) <>
+             lower(coalesce($3::text,''))
+          or payment.bank_account_id is distinct from $4::text
+          or payment.paid_at is null
+          or (payment.paid_at at time zone 'Asia/Jakarta')::date + 1
+                is distinct from $5::date
+          or payment.expected_settlement_date::date is distinct from $5::date
         )
       limit 1
       for update of item,payment`,
-    [settlementId],
+    [settlementId, mutation.company_id, batch.provider_code, batch.bank_account_id, batch.settlement_date],
   );
   const itemCount = await client.query<{ count: string }>(
     `select count(*)::text as count
@@ -3562,7 +3596,39 @@ async function approveCanonicalSettlementLink(
     [settlementId],
   );
   if (Number(itemCount.rows[0]?.count ?? 0) < 1 || invalidPayment.rows[0]) {
-    throw new ApprovalError("Payment settlement tidak seluruhnya QRIS confirmed aktif.", 409, "CANONICAL_SETTLEMENT_PAYMENT_INVALID");
+    throw new ApprovalError(
+      "Anggota settlement QRIS tidak memenuhi tanggal pembayaran H+1, provider, rekening, atau status confirmed.",
+      409,
+      "CANONICAL_SETTLEMENT_PAYMENT_INVALID",
+    );
+  }
+
+  const memberTotals = await client.query<{
+    gross: string; mdr: string;
+  }>(
+    `select coalesce(sum(si.gross_amount),0)::text as gross,
+            coalesce(sum(sp.mdr_amount),0)::text as mdr
+       from sport_center.payment_settlement_items si
+       join sport_center.sport_payments sp on sp.id=si.payment_id
+      where si.settlement_id=$1 and si.item_status='active'`,
+    [settlementId],
+  );
+  const totals = memberTotals.rows[0];
+  const headerFinancials = await client.query<{
+    gross_amount: string; mdr_amount: string;
+  }>(
+    `select gross_amount::text,mdr_amount::text
+       from sport_center.payment_settlement_batches where id=$1`,
+    [settlementId],
+  );
+  const financialHeader = headerFinancials.rows[0];
+  if (!totals || !financialHeader ||
+      Math.abs(Number(totals.gross) - Number(financialHeader.gross_amount)) > 0.01 ||
+      Math.abs(Number(totals.mdr) - Number(financialHeader.mdr_amount)) > 0.01) {
+    throw new ApprovalError(
+      "Gross/MDR anggota settlement tidak sama dengan header batch.",
+      409, "CANONICAL_SETTLEMENT_MEMBER_TOTALS_INVALID",
+    );
   }
 
   const otherMutationLink = await client.query<{ id: number }>(
