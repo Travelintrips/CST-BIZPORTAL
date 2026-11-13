@@ -39,6 +39,12 @@ describe("Issue 292 draft compensation safety boundary", () => {
     expect(scopedTrigger).toContain("(to_jsonb(NEW)-'item_status')");
     expect(scopedTrigger).toContain("FINALIZED_SETTLEMENT_ITEMS_ARE_IMMUTABLE");
   });
+  it("clears stale matched status and QRIS review projection together", () => {
+    expect(pendingCorrection).toContain("reconciliation_status = 'unmatched'");
+    expect(pendingCorrection).toContain("review_code = 'QRIS_MEMBERSHIP_CORRECTION_PENDING'");
+    expect(pendingCorrection).toContain("SET status = 'unmatched'");
+    expect(pendingCorrection).toContain("SET status = 'superseded'");
+  });
   it("keeps pending upstream financial writer out of active reconciliation route", () => {
     const liveRoute = readFileSync(
       new URL("../routes/bank-reconciliation.ts", import.meta.url),
