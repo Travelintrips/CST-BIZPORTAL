@@ -7,7 +7,7 @@ import { uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-uplo
 
 type DocumentType = "ktp"|"kk"|"sim"|"npwp"|"ijazah"|"skck"|"kontrak";
 type Document = {
-  id:string; doc_type:string; mime_type?:string; status:string;
+  id:string; doc_type:string; mime_type?:string; status:string; confidence?:number|string|null;
   extracted_data?:Record<string,string|null>;
   verified_data?:Record<string,string|null>|null;
 };
@@ -96,8 +96,15 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
     }finally{if(scope===generation.current)setBusy(false);}
   };
   // Reuse the existing private object; do not create a second document or upload.
+  const canRetryScan=(doc:Document):boolean=>{
+    if(doc.status==="scanning"||doc.status==="scan_failed")return true;
+    if(doc.status!=="pending_review"||!(doc.doc_type in KEYS)||
+       doc.confidence==null||Number(doc.confidence)!==0)return false;
+    const keys=KEYS[doc.doc_type as DocumentType];
+    return keys.length>0&&keys.every(key=>!String(doc.extracted_data?.[key]??"").trim());
+  };
   const retryScan=async(doc:Document)=>{
-    if(!enabled||!authorized||busy||!(["scanning","scan_failed"].includes(doc.status)))return;
+    if(!enabled||!authorized||busy||!canRetryScan(doc))return;
     const scope=generation.current;
     setBusy(true);setError("");setNotice("");
     try{
@@ -178,7 +185,7 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
       <div className="flex flex-wrap gap-2">
         {(doc.status==="pending_review"||doc.status==="verified")&&<Button variant="outline" size="sm" disabled={!enabled||busy} onClick={()=>void showPreview(doc)}>Lihat Dokumen</Button>}
         {doc.status==="pending_review"&&<Button variant="outline" size="sm" disabled={!enabled||busy} onClick={()=>selectDocument(doc)}>Periksa / Koreksi</Button>}
-        {(doc.status==="scanning"||doc.status==="scan_failed")&&<Button variant="outline" size="sm" disabled={!enabled||busy||!authorized} onClick={()=>void retryScan(doc)}>Coba Scan Lagi</Button>}
+        {canRetryScan(doc)&&<Button variant="outline" size="sm" disabled={!enabled||busy||!authorized} onClick={()=>void retryScan(doc)}>{doc.status==="pending_review"?"Ulang OCR File Ini":"Coba Scan Lagi"}</Button>}
       </div>
       {preview?.id===doc.id&&(preview.mime==="application/pdf"
         ?<iframe title="Preview privat dokumen HRD" src={preview.url} className="h-96 w-full rounded-lg border" />
