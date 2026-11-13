@@ -180,6 +180,10 @@ function collectAttachments(
 // Google quota applies across message listing and attachment downloads.
 let gmailRateLimitedUntil = 0;
 
+export function getGmailRateLimitUntil(): number {
+  return gmailRateLimitedUntil;
+}
+
 async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
   if (Date.now() < gmailRateLimitedUntil) {
     throw new GmailProviderRateLimitError(gmailRateLimitedUntil);
