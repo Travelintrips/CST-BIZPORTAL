@@ -2,8 +2,8 @@ name: Payroll PROD kasbon reservation PostgreSQL gate
 on:
   pull_request:
     paths:
-      - "supabase/migrations/20261113173000_payroll_prod_kasbon_reservation_guard.sql"
-      - "supabase/migrations/20261113173100_payroll_prod_kasbon_single_reservation_guard.sql"
+      - "supabase/migrations/20261113114459_payroll_prod_kasbon_reservation_guard_20261113.sql"
+      - "supabase/migrations/20261113114522_payroll_prod_kasbon_single_reservation_guard_20261113.sql"
       - "scripts/tests/payroll-prod-reservation-pg.sh"
       - "scripts/tests/fixtures/payroll-prod-role-rls-historical-20261111.sql"
       - ".github/workflows/payroll-prod-kasbon-guard-gate.yml"
