@@ -1,6 +1,7 @@
 import type { IRouter, Request, Response } from "express";
 import { pool } from "@workspace/db";
 import { payrollProdDedicatedRequired, payrollScopedQuery } from "./payroll-prod-db";
+import { payrollReadinessSafeReason } from "./payroll-prod-readiness-error";
 
 type ScopedPayrollRequest = Request & {
   payrollCompanyId?: number;
@@ -119,11 +120,13 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
         canPay: false,
         canPostJournal: false,
       });
-    } catch {
-      // Deliberately do not serialize DB errors, URLs, credentials, or query text.
+    } catch (error) {
+      // Deliberately do not serialize DB errors, URLs, credentials, query text or
+      // the failing SQL. Only a predefined, non-sensitive diagnosis is returned.
       res.status(503).json({
         ready: false, readOnly: true, dedicatedConnectionVerified: false,
         code: "PAYROLL_PROD_DATABASE_READINESS_FAILED",
+        reasonCode: payrollReadinessSafeReason(error),
       });
     }
   });
