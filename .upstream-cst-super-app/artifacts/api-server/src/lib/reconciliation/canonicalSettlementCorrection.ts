@@ -89,6 +89,9 @@ export async function reverseCanonicalSettlementForCorrection(
       ? null
       : asPositiveInt(batch.bank_mutation_id);
     const journalId = asPositiveInt(batch.settlement_journal_id);
+    const postedUnlinked = batchStatus === "posted"
+      && bankMutationId === null && batch.canonical_bank_mutation_id == null;
+    const correctionBankMutationId = postedUnlinked ? expectedBankMutationId : bankMutationId;
 
     const reversalResult = await tx.execute(sql`
       SELECT id
@@ -98,38 +101,37 @@ export async function reverseCanonicalSettlementForCorrection(
         AND is_reversal = TRUE
         AND status = 'posted'
         AND notes LIKE ${`%CANONICAL_MEMBERSHIP_CORRECTION:${settlementId}%`}
+        AND reversal_of_id = ${journalId}
       ORDER BY id DESC
       LIMIT 1
       FOR UPDATE
     `);
     const existingReversal = reversalResult.rows[0] as Record<string, unknown> | undefined;
     if (existingReversal) {
+      if (batchStatus !== "reversed") {
+        throw new Error("Posted reversal exists but original settlement is not reversed.");
+      }
       return {
         ok: true,
         idempotent: true,
         settlementId,
         reversedSettlementJournalId: asPositiveInt(existingReversal.id),
         replacementPaymentIds,
-        bankMutationId,
+        bankMutationId: correctionBankMutationId,
         settlementStatus: "reversed",
         bankMutationStatus: bankMutationId == null ? "unchanged" : "unmatched",
       };
     }
 
-    if (batchStatus !== "reconciled") {
-      throw new Error(
-        "Membership correction hanya boleh dimulai dari batch canonical reconciled; "
-        + "batch posted tanpa link memakai workflow historical repair.",
-      );
-    }
-    if (bankMutationId == null || batch.canonical_bank_mutation_id == null) {
-      throw new Error("Batch reconciled tidak memiliki link bank canonical yang lengkap.");
-    }
-    if (bankMutationId !== expectedBankMutationId) {
-      throw new Error("mutationId tidak sama dengan link bank canonical settlement.");
-    }
-    if (asPositiveInt(batch.canonical_bank_mutation_id) !== bankMutationId) {
-      throw new Error("Link bank canonical batch tidak konsisten.");
+    if (!postedUnlinked) {
+      if (batchStatus !== "reconciled" ||
+          bankMutationId == null || batch.canonical_bank_mutation_id == null) {
+        throw new Error("Batch harus reconciled/linked atau posted/unlinked.");
+      }
+      if (bankMutationId !== expectedBankMutationId ||
+          asPositiveInt(batch.canonical_bank_mutation_id) !== bankMutationId) {
+        throw new Error("Link bank canonical berbeda dengan mutation koreksi.");
+      }
     }
 
     const journalResult = await tx.execute(sql`
@@ -256,11 +258,11 @@ export async function reverseCanonicalSettlementForCorrection(
     const publicMutationResult = await tx.execute(sql`
       SELECT id, status, journal_entry_id
       FROM public.bank_mutations
-      WHERE id = ${bankMutationId}
+      WHERE id = ${correctionBankMutationId}
       FOR UPDATE
     `);
     const publicMutation = publicMutationResult.rows[0] as Record<string, unknown> | undefined;
-    if (!publicMutation) throw new Error(`Mutasi bank #${bankMutationId} tidak ditemukan.`);
+    if (!publicMutation) throw new Error(`Mutasi bank #${correctionBankMutationId} tidak ditemukan.`);
     if (publicMutation.journal_entry_id != null) {
       throw new Error("Mutasi bank memiliki journal generic; correction dihentikan.");
     }
@@ -269,11 +271,38 @@ export async function reverseCanonicalSettlementForCorrection(
     )) {
       throw new Error("Status mutasi bank berubah; correction dihentikan.");
     }
+    if (postedUnlinked) {
+      const bankIdentity = await tx.execute(sql`
+        SELECT m.id,m.company_id,m.amount,m.transaction_date,
+               m.source_classification,m.direction,m.approved_at,m.posted_at,
+               a.account_number,a.company_id AS account_company_id,a.is_active
+        FROM public.bank_mutations m
+        JOIN public.company_bank_accounts a ON a.id::text=m.bank_account_id
+        WHERE m.id=${correctionBankMutationId}
+      `);
+      const bank = bankIdentity.rows[0] as Record<string, unknown> | undefined;
+      if (!bank || bank.source_classification !== "actual_bank_mutation"
+        || bank.direction !== "IN" || bank.approved_at != null || bank.posted_at != null
+        || bank.is_active !== true
+        || Number(bank.company_id) !== Number(batch.company_id)
+        || Number(bank.account_company_id) !== Number(batch.company_id)
+        || String(bank.account_number) !== String(identity.bank_account_id)
+        || String(bank.transaction_date).slice(0,10) !== String(identity.settlement_date).slice(0,10)) {
+        throw new Error("Posted/unlinked correction requires an unapproved bank mutation with matching owner/date.");
+      }
+      const originalFinancials = await tx.execute(sql`
+        SELECT net_amount FROM sport_center.payment_settlement_batches
+        WHERE id=${settlementId}
+      `);
+      if (Number(bank.amount) !== Number((originalFinancials.rows[0] as Record<string,unknown>).net_amount)) {
+        throw new Error("Posted/unlinked correction net amount does not match bank.");
+      }
+    }
 
     const matchResult = await tx.execute(sql`
       SELECT id, candidate_id, candidate_source, status
       FROM public.bank_reconciliation_matches
-      WHERE mutation_id = ${bankMutationId}
+      WHERE mutation_id = ${correctionBankMutationId}
         AND candidate_type = 'qris_settlement'
         AND candidate_id::text = ${String(settlementId)}
         AND candidate_source = 'sport_center.payment_settlement_batches'
@@ -308,6 +337,16 @@ export async function reverseCanonicalSettlementForCorrection(
     const selectExpressions = columns.map((column) => {
       if (column === "status") return `'draft' AS ${quoteIdentifier(column)}`;
       if (column === "is_reversal") return `TRUE AS ${quoteIdentifier(column)}`;
+      if (column === "reversal_of_id") return `${journalId} AS ${quoteIdentifier(column)}`;
+      if (column === "correlation_id") {
+        return `'canonical-membership-reversal:${settlementId}:${journalId}' AS ${quoteIdentifier(column)}`;
+      }
+      if (column === "settlement_reference" || column === "source_event_id"
+        || column === "posted_at" || column === "posted_by"
+        || column === "approved_at" || column === "approved_by") {
+        return `NULL AS ${quoteIdentifier(column)}`;
+      }
+      if (column === "settlement_status") return `'reversed' AS ${quoteIdentifier(column)}`;
       if (column === "notes") {
         return `COALESCE(${quoteIdentifier(column)}, '') || ' CANONICAL_MEMBERSHIP_CORRECTION:${settlementId}' AS ${quoteIdentifier(column)}`;
       }
@@ -349,41 +388,60 @@ export async function reverseCanonicalSettlementForCorrection(
         AND status = 'draft'
     `);
 
+    // The original batch must be reversed before its protected item statuses
+    // can be changed. The item trigger then independently requires a posted,
+    // balanced reversal linked to the exact original settlement journal.
+    const reversedBatch = await tx.execute(sql`
+      UPDATE sport_center.payment_settlement_batches
+         SET status='reversed',
+             bank_mutation_id=NULL,
+             canonical_bank_mutation_id=NULL,
+             updated_at=NOW()
+       WHERE id=${settlementId}
+         AND ((status='reconciled'
+               AND bank_mutation_id=${correctionBankMutationId}
+               AND canonical_bank_mutation_id=${correctionBankMutationId})
+           OR (status='posted'
+               AND bank_mutation_id IS NULL
+               AND canonical_bank_mutation_id IS NULL))
+       RETURNING id
+    `);
+    if (reversedBatch.rows.length !== 1) {
+      throw new Error("Settlement status changed before correction commit.");
+    }
     await tx.execute(sql`
+      SELECT set_config('sport_center.allow_finalized_membership_reversal',
+                        'owner-audited-compensation-v1',true)
+    `);
+    const reversedItems = await tx.execute(sql`
       UPDATE sport_center.payment_settlement_items
-      SET item_status = 'reversed'
-      WHERE settlement_id = ${settlementId}
-        AND item_status = 'active'
+         SET item_status='reversed'
+       WHERE settlement_id=${settlementId} AND item_status='active'
+       RETURNING payment_id
+    `);
+    if (reversedItems.rows.length !== activeItemsResult.rows.length) {
+      throw new Error("Compensation item count mismatch.");
+    }
+    await tx.execute(sql`
+      SELECT set_config('sport_center.allow_posted_payment_metadata_correction','on',true)
+    `);
+    await tx.execute(sql`
+      SELECT set_config('sport_center.allow_posted_accounting_metadata_correction','on',true)
     `);
     await tx.execute(sql`
       UPDATE sport_center.sport_payments p
-      SET settlement_status = 'unsettled',
-          updated_at = NOW()
-      WHERE p.id IN (
-        SELECT DISTINCT payment_id
-        FROM sport_center.payment_settlement_items
-        WHERE settlement_id = ${settlementId}
-      )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM sport_center.payment_settlement_items active_item
-          JOIN sport_center.payment_settlement_batches active_batch
-            ON active_batch.id = active_item.settlement_id
-          WHERE active_item.payment_id = p.id
-            AND active_item.item_status = 'active'
-            AND active_batch.status IN ('draft', 'calculated', 'posted', 'reconciled')
-        )
-    `);
-    await tx.execute(sql`
-      UPDATE sport_center.payment_settlement_batches
-      SET status = 'reversed',
-          bank_mutation_id = NULL,
-          canonical_bank_mutation_id = NULL,
-          updated_at = NOW()
-      WHERE id = ${settlementId}
-        AND status = 'reconciled'
-        AND bank_mutation_id = ${bankMutationId}
-        AND canonical_bank_mutation_id = ${bankMutationId}
+         SET settlement_status='unsettled', updated_at=NOW()
+       WHERE p.id IN (
+         SELECT DISTINCT payment_id
+         FROM sport_center.payment_settlement_items
+         WHERE settlement_id=${settlementId}
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM sport_center.payment_settlement_items i
+         JOIN sport_center.payment_settlement_batches b ON b.id=i.settlement_id
+         WHERE i.payment_id=p.id AND i.item_status='active'
+           AND b.status IN ('draft','calculated','posted','reconciled')
+       )
     `);
     await tx.execute(sql`
       UPDATE public.bank_reconciliation_matches
@@ -399,14 +457,14 @@ export async function reverseCanonicalSettlementForCorrection(
           posted_by = NULL,
           posted_at = NULL,
           updated_at = NOW()
-      WHERE id = ${bankMutationId}
+      WHERE id = ${correctionBankMutationId}
         AND status IN ('approved', 'matched', 'auto_matched')
         AND journal_entry_id IS NULL
     `);
     await tx.execute(sql`
       INSERT INTO public.bank_reconciliation_audit (mutation_id, action, actor, meta)
       VALUES (
-        ${bankMutationId},
+        ${correctionBankMutationId},
         'CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED',
         ${actor},
         jsonb_build_object(
@@ -428,7 +486,7 @@ export async function reverseCanonicalSettlementForCorrection(
       settlementId,
       reversedSettlementJournalId: reversalJournalId,
       replacementPaymentIds,
-      bankMutationId,
+      bankMutationId: correctionBankMutationId,
       settlementStatus: "reversed",
       bankMutationStatus: "unmatched",
     };
