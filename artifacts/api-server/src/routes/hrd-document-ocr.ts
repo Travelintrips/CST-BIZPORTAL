@@ -1,5 +1,6 @@
 import {createHash} from "node:crypto";
 import {extractLocalOcrText,parseLocalDocumentFields,localDocumentFieldsComplete,localDocumentFieldCoverage} from "./hrd-document-ocr-local";
+import {getRuntimeConfig} from "../lib/gmail-invoice-runtime";
 
 export const HRD_BUCKET="bizportal-hrd-documents-prod";
 export const HRD_DOC_TYPES=["ktp","kk","foto","sim","npwp","ijazah","skck","kontrak"] as const;
@@ -150,7 +151,8 @@ function outputText(response:any):string{
   .map((x:any)=>String(x.text??"")).join("");
 }
 export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdDocumentType,
- localReader:typeof extractLocalOcrText=extractLocalOcrText,providerFetch:typeof fetch=fetch){
+ localReader:typeof extractLocalOcrText=extractLocalOcrText,providerFetch:typeof fetch=fetch,
+ sharedKeyReader:typeof getRuntimeConfig=getRuntimeConfig){
  if(process.env.APP_ENV!=="production")throw Error("HRD_PROD_ONLY");
  if(!validMime(mime)||bytes.length===0||bytes.length>MAX_DOCUMENT_BYTES)
   throw Error("INVALID_OCR_ATTACHMENT");
@@ -175,7 +177,12 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
   return {...localResult,engine:"local" as const,
    warnings:[...localResult.warnings,"Sumber: OCR lokal; tidak menggunakan kuota OpenAI."]};
  }
- if(!openAiFallbackEnabled()){
+ // The existing managed OpenAI key is shared only with explicit HRD approval.
+ // Dedicated HRD credentials take priority. Respect the hard-OFF switch.
+ const apiKey=process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED==="false"
+  ?"":(process.env.HRD_PROD_OPENAI_API_KEY?.trim()||
+    (await sharedKeyReader("OPENAI_API_KEY").catch(()=>"")).trim());
+ if(!apiKey){
   // Distinguish a failed OCR engine from a completed scan that simply
   // found no trustworthy fields. Never fabricate a personal identifier.
   if(!hasLocalFields){
@@ -189,7 +196,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
    warnings:[...localResult.warnings,
     "AI cadangan tidak aktif. Periksa dan lengkapi field kosong secara manual."]};
  }
- const apiKey=process.env.HRD_PROD_OPENAI_API_KEY!.trim();
+
  const instruction=[
   "Ekstraksi dokumen HRD Indonesia tipe "+docType.toUpperCase()+".",
   "Hanya ekstrak nilai yang terlihat jelas. Jangan menebak informasi hilang.",
