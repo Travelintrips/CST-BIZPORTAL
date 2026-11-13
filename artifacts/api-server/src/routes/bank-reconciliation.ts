@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
+import { inspectPostedUnlinkedBankCohorts } from "../lib/reconciliation/postedUnlinkedSettlementPreflight";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
 import { isReconRuleAutoApprovalAllowed, canRunLegacyKasScRuleBackfill } from "../lib/reconciliation/autoApprovalPolicy";
 import {
@@ -1976,6 +1977,46 @@ export async function runKasScApprovedRuleBackfill(): Promise<KasScRuleBackfillR
     client.release();
   }
 }
+
+// Read-only correction evidence for an existing POSTED/unlinked canonical batch.
+// This endpoint NEVER reverses or posts finance, even for super admins.
+router.get("/bank-reconciliation/qris-posted-correction-preflight", async (req, res): Promise<void> => {
+  const actor = await getApprovalActor(req).catch(() => null);
+  if (!actor) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const batchId = safeInteger(req.query.settlement_id);
+  const mutationIds = String(req.query.bank_mutation_ids ?? "")
+    .split(",").map((id) => safeInteger(id.trim()));
+  if (batchId == null || mutationIds.length !== 2 || mutationIds.some(id => id == null)) {
+    res.status(400).json({ error: "settlement_id dan dua bank_mutation_ids diperlukan." });
+    return;
+  }
+  const client = await pool.connect().catch(() => null);
+  if (!client) {
+    res.status(503).json({ error: "Database sementara tidak tersedia." });
+    return;
+  }
+  try {
+    await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const proof = await inspectPostedUnlinkedBankCohorts(
+      client, batchId, mutationIds as number[], actor.companyId,
+    );
+    await client.query("ROLLBACK");
+    res.json(proof);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    req.log.warn({ err, settlementId: batchId }, "Posted QRIS correction preflight blocked");
+    res.status(409).json({
+      ok: false, readOnly: true, postingPermitted: false,
+      code: "QRIS_POSTED_CORRECTION_NOT_ELIGIBLE",
+      error: err instanceof Error ? err.message : "Preflight tidak memenuhi pengaman.",
+    });
+  } finally {
+    client.release();
+  }
+});
 
 router.get("/bank-reconciliation/qris-reset-history", async (req, res): Promise<void> => {
   const actor = await getApprovalActor(req).catch(() => null);
