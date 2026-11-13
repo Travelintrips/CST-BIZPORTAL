@@ -45,6 +45,11 @@ describe("Issue 292 draft compensation safety boundary", () => {
     expect(pendingCorrection).toContain("SET status = 'unmatched'");
     expect(pendingCorrection).toContain("SET status = 'superseded'");
   });
+  it("requires a genuine wrong-H+1 historical member before any posted/unlinked compensation", () => {
+    expect(pendingCorrection).toContain("Posted settlement must contain a real H+1-invalid member before correction.");
+    expect(pendingCorrection).toContain("wrong_date_count");
+    expect(pendingCorrection).toContain("Replacement cohort must preserve member count and gross settlement value.");
+  });
   it("keeps pending upstream financial writer out of active reconciliation route", () => {
     const liveRoute = readFileSync(
       new URL("../routes/bank-reconciliation.ts", import.meta.url),
