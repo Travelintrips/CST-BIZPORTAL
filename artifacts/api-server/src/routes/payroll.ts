@@ -6,6 +6,7 @@ import { registerPayrollKasbonAutoRoutes } from "./payroll-kasbon-automatic-rout
 import { registerPayrollSuperAdminApprovalRoutes } from "./payroll-super-admin-approval";
 import { registerEffectiveSetupPreviewRoutes } from "./payroll-setup-effective-routes";
 import { registerProdPayrollDraftRoutes } from "./payroll-prod-draft-routes";
+import { registerPayrollProdConnectionPreflightRoutes } from "./payroll-prod-connection-preflight";
 import { payrollProdDedicatedRequired } from "./payroll-prod-db";
 import { readPayrollSuperAdminApprovalReceipt } from "./payroll-super-admin-approval-receipt";
 import { getDevSession, getProductionSession, getProductionUser, isDevelopmentEnvironment, type DevAuthUser } from "./dev-auth";
@@ -168,6 +169,7 @@ router.get("/payroll/capabilities", (req: PayrollRequest, res) => {
 // Dedicated-PROD route is mounted first; the existing DEV-only fallback
 // below continues unchanged for legacy DEV and is never called from PROD.
 registerProdPayrollDraftRoutes(router);
+registerPayrollProdConnectionPreflightRoutes(router);
 router.post("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
   if (!isDevelopmentEnvironment() || process.env.PAYROLL_DEV_DRAFT_ENABLED !== "true") {
     res.status(501).json({ message: "Pembuatan draft payroll belum diaktifkan untuk lingkungan ini." });
