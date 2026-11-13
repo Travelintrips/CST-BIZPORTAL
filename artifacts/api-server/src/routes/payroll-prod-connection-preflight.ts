@@ -27,11 +27,12 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
     const actor = req.payrollActor;
     const isSuperAdmin = actor?.role.trim().toLowerCase() === "super_admin";
     // CST's already-designated owner may inspect connection readiness only.
+    // Resolve the signed account through its email; Supabase session.id may differ
+    // from public.users.id. The database row ID itself remains strictly pinned.
     // This is NOT a general Owner privilege and does not alter any write/approval routes.
     const designatedOwner =
       companyId === 1 &&
-      actor?.id === "google_103728868378401731050" &&
-      actor.email.trim().toLowerCase() === "admcst001@gmail.com" &&
+      actor?.email.trim().toLowerCase() === "admcst001@gmail.com" &&
       actor.role.trim().toLowerCase() === "owner" &&
       actor.companyId === 1;
     let ownerVerified = false;
@@ -42,7 +43,7 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
           `SELECT 1 FROM public.users WHERE id=$1 AND lower(btrim(email))=$2
              AND company_id=1 AND lower(btrim(role))='owner'
              AND is_active IS TRUE AND lower(btrim(status))='active' LIMIT 1`,
-          [actor.id, "admcst001@gmail.com"],
+          ["google_103728868378401731050", "admcst001@gmail.com"],
         );
         ownerVerified = active.rowCount === 1;
       } catch {
