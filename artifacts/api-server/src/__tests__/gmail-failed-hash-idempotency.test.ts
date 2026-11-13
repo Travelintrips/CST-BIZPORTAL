@@ -49,6 +49,14 @@ vi.mock("@workspace/db", () => ({
         return { rows: [] };
       }
       if (q.includes("status='rejected'") && q.includes("select id")) return { rows: [] };
+      if (q.includes("from public.gmail_invoice_candidates") &&
+          q.includes("gmail_message_id=$2") &&
+          q.includes("extraction_status='complete'")) {
+        const found = rows.find((r) => r.company_id === params[0] &&
+          r.gmail_message_id === params[1] && r.attachment_sha256 === params[2] &&
+          r.id !== params[3] && r.extraction_status === "complete");
+        return { rows: found ? [found] : [] };
+      }
       if (q.includes("from public.gmail_invoice_candidates") && q.includes("extraction_status='complete'")) {
         const found = rows.find((r) => r.company_id === params[0] &&
           r.attachment_sha256 === params[1] && r.id !== params[2] &&
