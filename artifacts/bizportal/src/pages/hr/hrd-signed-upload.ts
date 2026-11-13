@@ -64,6 +64,24 @@ export function buildHrdSignedUploadUrl(
   return url.toString();
 }
 
+/**
+ * Only the digest is used for the authenticated, employee-scoped duplicate
+ * preflight. The upload still sends the exact original File unchanged.
+ * Degrade to the existing upload behavior if WebCrypto is unavailable.
+ */
+export async function hashHrdOriginalFile(file: File): Promise<string | null> {
+  if (!file || file.size <= 0 || file.size > MAX_BYTES) return null;
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return null;
+    const digest = await subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), byte =>
+      byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
+}
+
 export async function uploadHrdSignedDocument(
   signed: HrdSignedUpload,
   file: File,

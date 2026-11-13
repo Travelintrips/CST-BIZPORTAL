@@ -56,7 +56,9 @@ export function registerHrdOcrRoutes(router:IRouter):void{
     if(!hrdOcrReady()){unavailable(res);return;}
     const employeeId=idValue(req.params.id),b=req.body??{};
     if(!employeeId||!validDocType(b.docType)||b.docType==="foto"||
-       !validMime(b.mimeType)||b.processingAuthorizationConfirmed!==true){
+       !validMime(b.mimeType)||b.processingAuthorizationConfirmed!==true||
+       (b.originalSha256!==undefined&&
+         (typeof b.originalSha256!=="string"||!/^[a-f0-9]{64}$/.test(b.originalSha256)))){
       res.status(400).json({message:"Jenis, format, ID, atau persetujuan OCR tidak valid."});return;
     }
     const companyId=req.hrdCompanyId!,documentId=randomUUID(),actor=req.hrdActor!.email;
@@ -64,6 +66,20 @@ export function registerHrdOcrRoutes(router:IRouter):void{
     try{
       const signed=await withHrdCompanyScope(companyId,async(client)=>{
         if(!await employeeExists(client,companyId,employeeId))return null;
+        if(b.originalSha256){
+          // This is an early hint, not an authoritative uploaded-file hash.
+          // Only compare with hashes computed from already scanned private files.
+          // Tenant/employee/doc-type are strictly scoped. No object URL is exposed.
+          const duplicate=await client.query(
+            `SELECT id FROM hrd_private.employee_documents
+              WHERE company_id=$1 AND employee_id=$2 AND doc_type=$3
+                AND original_sha256=$4
+                AND status IN ('pending_review','verified')
+              LIMIT 1`,
+            [companyId,employeeId,b.docType,b.originalSha256],
+          );
+          if(duplicate.rowCount)return {kind:"duplicate" as const};
+        }
         const authorization=await createPrivateUpload(path);
         await client.query(
           `INSERT INTO hrd_private.employee_documents
@@ -76,11 +92,17 @@ export function registerHrdOcrRoutes(router:IRouter):void{
            (company_id,employee_id,document_id,action,actor)
            VALUES ($1,$2,$3,'prepared',$4)`,[companyId,employeeId,documentId,actor],
         );
-        return authorization;
+        return {kind:"prepared" as const,authorization};
       });
       if(!signed){res.status(404).json({message:"Karyawan tidak ditemukan."});return;}
       res.setHeader("Cache-Control","no-store");
-      res.status(201).json({companyId,employeeId,documentId,path,...signed,maxBytes:5242880});
+      if(signed.kind==="duplicate"){
+        res.status(409).json({
+          code:"HRD_DOCUMENT_DUPLICATE",
+          message:"File identik sudah tersimpan untuk karyawan dan jenis dokumen ini. Gunakan dokumen yang ada atau Ulang OCR File Ini jika hasilnya masih kosong.",
+        });return;
+      }
+      res.status(201).json({companyId,employeeId,documentId,path,...signed.authorization,maxBytes:5242880});
     }catch(error){fail(req,res,error,"prepare");}
   });
 

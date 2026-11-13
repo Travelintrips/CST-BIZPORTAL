@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildHrdSignedUploadUrl, uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
+import { buildHrdSignedUploadUrl, hashHrdOriginalFile, uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
 
 const base:HrdSignedUpload={
   companyId:1,
@@ -17,6 +17,24 @@ const image=()=>new File([new Uint8Array([255,216,255,1,2,3])],"fixture.jpg",{ty
 afterEach(()=>vi.unstubAllGlobals());
 
 describe("HRD signed Storage upload browser contract",()=>{
+  it("computes a normalized SHA-256 digest from the exact original file in memory",async()=>{
+    const bytes=new Uint8Array([255,216,255,1,2,3]);
+    const imageFile=image();
+    Object.defineProperty(imageFile,"arrayBuffer",{value:async()=>bytes.buffer});
+    const seen:{algorithm?:string}={};
+    vi.stubGlobal("crypto",{subtle:{digest:async(algorithm:string,buffer:ArrayBuffer)=>{
+      seen.algorithm=algorithm;
+      expect(Array.from(new Uint8Array(buffer))).toEqual(Array.from(bytes));
+      return new Uint8Array(32).fill(0xab).buffer;
+    }}});
+    expect(await hashHrdOriginalFile(imageFile)).toBe("ab".repeat(32));
+    expect(seen.algorithm).toBe("SHA-256");
+    expect(imageFile.size).toBe(bytes.length);
+  });
+  it("preserves existing upload behavior if browser crypto hashing is unsupported",async()=>{
+    vi.stubGlobal("crypto",{});
+    expect(await hashHrdOriginalFile(image())).toBeNull();
+  });
   it("sends exact Supabase-compatible PUT multipart without a service credential",async()=>{
     const fn=vi.fn().mockResolvedValue({ok:true,status:200});
     vi.stubGlobal("fetch",fn);
