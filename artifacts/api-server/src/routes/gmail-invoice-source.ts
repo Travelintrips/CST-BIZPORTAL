@@ -831,21 +831,6 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
-      scopedCompanyId = companyId;
-      // Persisted quota gate prevents other API workers / restarts from
-      // repeating calls before Google's Retry after window elapses.
-      const previousRetryAt = Date.parse((await getConfig(companyId, "RATE_LIMIT_UNTIL")) ?? "");
-      if (Number.isFinite(previousRetryAt) && previousRetryAt > Date.now()) {
-        res.setHeader("Retry-After", String(Math.max(1, Math.ceil((previousRetryAt - Date.now()) / 1000))));
-        res.status(429).json({
-          ok: false,
-          code: "GMAIL_RATE_LIMIT_DEFERRED",
-          error: "Gmail sedang membatasi permintaan. Coba lagi setelah waktu pemulihan.",
-          retryAt: new Date(previousRetryAt).toISOString(),
-        });
-        return;
-      }
-
       const encryptedToken = await getConfig(
         companyId,
         "REFRESH_TOKEN",
@@ -1209,6 +1194,20 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+      scopedCompanyId = companyId;
+      // Persisted quota gate prevents other API workers / restarts from
+      // repeating calls before Google's Retry after window elapses.
+      const previousRetryAt = Date.parse((await getConfig(companyId, "RATE_LIMIT_UNTIL")) ?? "");
+      if (Number.isFinite(previousRetryAt) && previousRetryAt > Date.now()) {
+        res.setHeader("Retry-After", String(Math.max(1, Math.ceil((previousRetryAt - Date.now()) / 1000))));
+        res.status(429).json({
+          ok: false,
+          code: "GMAIL_RATE_LIMIT_DEFERRED",
+          error: "Gmail sedang membatasi permintaan. Coba lagi setelah waktu pemulihan.",
+          retryAt: new Date(previousRetryAt).toISOString(),
+        });
+        return;
+      }
 
       const encryptedToken = await getConfig(
         companyId,
