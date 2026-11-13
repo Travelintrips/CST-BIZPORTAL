@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import { buildPayrollDedicatedSslOptions } from "./payroll-ssl";
 import * as schema from "./schema";
 import { resolveDatabaseUrl } from "./connection";
 
@@ -77,8 +78,10 @@ export const pool = lazyPool;
 export type PayrollDbClient = import("pg").PoolClient;
 export type PayrollDbQueryResult = import("pg").QueryResult;
 export function createDedicatedPayrollPool(connectionString: string): InstanceType<typeof Pool> {
+  // The dedicated role stays isolated; this only corrects TLS CA verification.
+  const verified = buildPayrollDedicatedSslOptions(connectionString);
   return new Pool({
-    connectionString, application_name: "cst-payroll-prod-isolated",
+    ...verified, application_name: "cst-payroll-prod-isolated",
     max: 2, idleTimeoutMillis: 5_000, connectionTimeoutMillis: 8_000,
     query_timeout: 15_000,
   });
@@ -98,3 +101,5 @@ export async function getRuntimeDatabaseUrl(): Promise<string> {
 export * from "./schema";
 export { getDatabaseUrl, resolveDatabaseUrl } from "./connection";
 export { getDatabaseSecretName, readSecret } from "./gcp-database-secret";
+
+export { buildPayrollDedicatedSslOptions, SUPABASE_ROOT_2021_CA_SHA256 } from "./payroll-ssl";
