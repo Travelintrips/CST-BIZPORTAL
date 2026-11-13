@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: false
   excludeLinksFromLockfile: false
 
-overrides:
-  wasm-feature-detect: 1.9.0
-
 catalogs:
   default:
     '@replit/vite-plugin-cartographer':
@@ -74,6 +71,7 @@ catalogs:
       version: 3.25.76
 
 overrides:
+  wasm-feature-detect: 1.9.0
   esbuild>@esbuild/darwin-arm64: '-'
   esbuild>@esbuild/darwin-x64: '-'
   esbuild>@esbuild/freebsd-arm64: '-'
