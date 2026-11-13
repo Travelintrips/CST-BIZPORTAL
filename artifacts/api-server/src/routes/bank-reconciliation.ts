@@ -3599,7 +3599,7 @@ async function approveCanonicalSettlementLink(
     throw new ApprovalError(
       "Anggota settlement QRIS tidak memenuhi tanggal pembayaran H+1, provider, rekening, atau status confirmed.",
       409,
-      "CANONICAL_SETTLEMENT_PAYMENT_H1_INVALID",
+      "CANONICAL_SETTLEMENT_PAYMENT_INVALID",
     );
   }
 
