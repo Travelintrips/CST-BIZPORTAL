@@ -16,17 +16,24 @@ function prodUrl(): string | null {
       process.env.PAYROLL_PROD_REQUIRE_DEDICATED_DB !== "true") return null;
   const raw=process.env.PAYROLL_DATABASE_URL_PROD?.trim();
   if (!raw) return null;
-  const parsed=new URL(raw);
+  // Produce fixed, non-sensitive diagnostics only. Never reveal URL, user or password.
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { throw Error("PAYROLL_PROD_URL_MALFORMED"); }
   if (!["postgres:", "postgresql:"].includes(parsed.protocol))
     throw Error("PAYROLL_PROD_URL_SCHEME_INVALID");
-  const user=decodeURIComponent(parsed.username);
+  let user: string;
+  try { user=decodeURIComponent(parsed.username); } catch { throw Error("PAYROLL_PROD_URL_MALFORMED"); }
   const host=parsed.hostname.toLowerCase();
   const directHost=host==="db."+PROD_REF+".supabase.co";
   const poolerHost=/^aws-[0-9]+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(host);
-  if (!([PROD_LOGIN,PROD_LOGIN+"."+PROD_REF].includes(user)) ||
-      !(directHost || (poolerHost && user===PROD_LOGIN+"."+PROD_REF)) ||
-      host.includes(DEV_REF) || user.includes(DEV_REF))
-    throw Error("PAYROLL_PROD_DATABASE_PROJECT_OR_ROLE_MISMATCH");
+  if (host.includes(DEV_REF) || user.includes(DEV_REF))
+    throw Error("PAYROLL_PROD_PROJECT_MISMATCH");
+  if (![PROD_LOGIN,PROD_LOGIN+"."+PROD_REF].includes(user))
+    throw Error("PAYROLL_PROD_USERNAME_MISMATCH");
+  if (!(directHost || poolerHost))
+    throw Error("PAYROLL_PROD_HOST_MISMATCH");
+  if (poolerHost && user !== PROD_LOGIN+"."+PROD_REF)
+    throw Error("PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED");
   if (!parsed.pathname || parsed.pathname==="/")
     throw Error("PAYROLL_PROD_DATABASE_NAME_MISSING");
   return raw;

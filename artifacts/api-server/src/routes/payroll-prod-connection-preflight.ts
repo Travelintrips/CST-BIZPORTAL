@@ -62,10 +62,22 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
     let configured: boolean;
     try {
       configured = payrollProdDedicatedRequired();
-    } catch {
+    } catch (error) {
+      // Explicit allowlist: never return the URL, password, username, host or raw DB error.
+      const safeReasons = new Set([
+        "PAYROLL_PROD_URL_MALFORMED",
+        "PAYROLL_PROD_URL_SCHEME_INVALID",
+        "PAYROLL_PROD_PROJECT_MISMATCH",
+        "PAYROLL_PROD_USERNAME_MISMATCH",
+        "PAYROLL_PROD_HOST_MISMATCH",
+        "PAYROLL_PROD_POOLER_USERNAME_SUFFIX_REQUIRED",
+        "PAYROLL_PROD_DATABASE_NAME_MISSING",
+      ]);
+      const rawReason=error instanceof Error ? error.message : "";
       res.status(503).json({
         ready: false, readOnly: true, dedicatedConnectionVerified: false,
         code: "PAYROLL_PROD_DEDICATED_CONFIG_INVALID",
+        reasonCode: safeReasons.has(rawReason) ? rawReason : "PAYROLL_PROD_URL_MALFORMED",
       });
       return;
     }
