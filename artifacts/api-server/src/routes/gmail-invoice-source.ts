@@ -16,6 +16,7 @@ import {
 } from "../lib/gmail-invoice-candidates";
 import { getRuntimeConfig } from "../lib/gmail-invoice-runtime";
 import { GmailProviderRateLimitError } from "../lib/gmail-invoice-rate-limit";
+import { getGmailRateLimitUntil } from "../lib/gmail-invoice-ocr";
 import {
   listGmailOrganizationRules,
   provisionGmailOrganizationRules,
@@ -830,6 +831,20 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+      scopedCompanyId = companyId;
+      // Persisted quota gate prevents other API workers / restarts from
+      // repeating calls before Google's Retry after window elapses.
+      const previousRetryAt = Date.parse((await getConfig(companyId, "RATE_LIMIT_UNTIL")) ?? "");
+      if (Number.isFinite(previousRetryAt) && previousRetryAt > Date.now()) {
+        res.setHeader("Retry-After", String(Math.max(1, Math.ceil((previousRetryAt - Date.now()) / 1000))));
+        res.status(429).json({
+          ok: false,
+          code: "GMAIL_RATE_LIMIT_DEFERRED",
+          error: "Gmail sedang membatasi permintaan. Coba lagi setelah waktu pemulihan.",
+          retryAt: new Date(previousRetryAt).toISOString(),
+        });
+        return;
+      }
 
       const encryptedToken = await getConfig(
         companyId,
@@ -1180,6 +1195,7 @@ router.get(
 router.post(
   "/recon-classification/invoice-sources/gmail/sync",
   async (req, res) => {
+    let scopedCompanyId: number | null = null;
     try {
       const actor = await requireFinanceAdmin(req);
       if (!actor) {
@@ -1274,6 +1290,14 @@ router.post(
       ]);
 
       if (result.deferred > 0) {
+        const retryAt = getGmailRateLimitUntil();
+        if (retryAt > Date.now()) {
+          await setConfig(companyId, "RATE_LIMIT_UNTIL", new Date(retryAt).toISOString(), {
+            description: "Google Gmail quota cooldown (never a financial approval)",
+            actor: actor.email,
+          });
+          res.setHeader("Retry-After", String(Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))));
+        }
         res.status(429).json({
           ok: false,
           code: "GMAIL_RATE_LIMIT_DEFERRED",
@@ -1292,6 +1316,15 @@ router.post(
       });
     } catch (error) {
       if (error instanceof GmailProviderRateLimitError) {
+        if (scopedCompanyId !== null) {
+          try {
+            await setConfig(scopedCompanyId, "RATE_LIMIT_UNTIL", new Date(error.retryAt).toISOString(), {
+              description: "Google Gmail quota cooldown (never a financial approval)",
+            });
+          } catch (writeError) {
+            req.log.error({ error: writeError }, "Cannot persist Gmail quota cooldown");
+          }
+        }
         res.setHeader("Retry-After", String(Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000))));
         res.status(429).json({
           ok: false,
