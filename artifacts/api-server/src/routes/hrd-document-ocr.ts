@@ -181,7 +181,7 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
  // Dedicated HRD credentials take priority. Respect the hard-OFF switch.
  const apiKey=process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED==="false"
   ?"":(process.env.HRD_PROD_OPENAI_API_KEY?.trim()||
-    (await sharedKeyReader("OPENAI_API_KEY")).trim());
+    (await sharedKeyReader("OPENAI_API_KEY").catch(()=>"")).trim());
  if(!apiKey){
   // Distinguish a failed OCR engine from a completed scan that simply
   // found no trustworthy fields. Never fabricate a personal identifier.
