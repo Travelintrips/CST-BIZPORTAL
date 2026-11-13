@@ -1,6 +1,6 @@
 import type { IRouter, Request, Response } from "express";
 import { pool } from "@workspace/db";
-import { payrollProdDedicatedRequired, payrollScopedQuery } from "./payroll-prod-db";
+import { payrollReadOnlyReady, payrollProdSharedReadOnlyEnabled, payrollScopedQuery } from "./payroll-prod-db";
 import { payrollReadinessSafeReason } from "./payroll-prod-readiness-error";
 
 type ScopedPayrollRequest = Request & {
@@ -62,7 +62,7 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
 
     let configured: boolean;
     try {
-      configured = payrollProdDedicatedRequired();
+      configured = payrollReadOnlyReady();
     } catch (error) {
       // Explicit allowlist: never return the URL, password, username, host or raw DB error.
       const safeReasons = new Set([
@@ -111,14 +111,19 @@ export function registerPayrollProdConnectionPreflightRoutes(router: IRouter): v
         });
         return;
       }
+      const shared=payrollProdSharedReadOnlyEnabled();
       res.status(200).json({
         ready: true,
         readOnly: true,
-        dedicatedConnectionVerified: true,
+        connectionMode: shared ? "BIZPORTAL_SHARED_ROLE_SCOPED_READ_ONLY" : "DEDICATED_ROLE_SCOPED_READ_ONLY",
+        dedicatedConnectionVerified: !shared,
+        sharedRoleScopedVerified: shared,
         companyScopeVerified: true,
         roleVerified: true,
         canPay: false,
         canPostJournal: false,
+        canApprove: false,
+        canWriteKasbon: false,
       });
     } catch (error) {
       // Deliberately do not serialize DB errors, URLs, credentials, query text or

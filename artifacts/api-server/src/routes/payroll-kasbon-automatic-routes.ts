@@ -1,5 +1,5 @@
 import { type IRouter, type Request, type Response } from "express";
-import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
+import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollReadOnlyReady, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
 import { isDevelopmentEnvironment } from "./dev-auth";
 import {
   calculateKasbonAutoDeduction, payrollMonth, moneyToCents,
@@ -50,7 +50,7 @@ const plansSql=`SELECT advance_id AS "advanceId",choice,
  FROM public.payroll_kasbon_auto_plans
  WHERE company_id=$1 AND employee_id=$2 ORDER BY advance_id`;
 function automaticReadReady():boolean {
-  return isDevelopmentEnvironment()?payrollDedicatedEnabled():payrollProdDedicatedRequired();
+  return isDevelopmentEnvironment()?payrollDedicatedEnabled():payrollReadOnlyReady();
 }
 function automaticReadAllowed(req:ScopedRequest):boolean {
   return isDevelopmentEnvironment()?privileged(req):req.payrollActor?.role?.toLowerCase()==="super_admin";
