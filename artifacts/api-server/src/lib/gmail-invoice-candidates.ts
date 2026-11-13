@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { requiresInvoiceExtractionReview } from "./gmail-invoice-rate-limit";
+import { GmailProviderRateLimitError, requiresInvoiceExtractionReview } from "./gmail-invoice-rate-limit";
 import { pool } from "@workspace/db";
 import {
   downloadAttachment,
@@ -154,7 +154,7 @@ async function processAttachment(args: {
   actorEmail: string;
   message: GmailInvoiceMessage;
   attachment: GmailAttachment;
-}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing"> {
+}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing" | "deferred"> {
   const candidate = await upsertShell(args);
 
   if (candidate.extraction_status === "complete" && candidate.status === "ready" && candidate.attachment_sha256) {
@@ -402,6 +402,9 @@ async function processAttachment(args: {
 
     return status;
   } catch (error) {
+    // Gmail throttling is transient: do not turn a pending source into
+    // a failed/manual-review document or hammer the provider repeatedly.
+    if (error instanceof GmailProviderRateLimitError) return "deferred";
     await markFailed(candidate.id, error);
     return "failed";
   }
@@ -422,6 +425,7 @@ export async function syncGmailInvoiceCandidates(args: {
     duplicates: 0,
     failed: 0,
     existing: 0,
+    deferred: 0,
   };
 
   let newWork = 0;
@@ -436,6 +440,10 @@ export async function syncGmailInvoiceCandidates(args: {
         attachment,
       });
 
+      if (status === "deferred") {
+        counts.deferred += 1;
+        break scan;
+      }
       if (status === "ready") counts.ready += 1;
       else if (status === "manual_review") counts.manualReview += 1;
       else if (status === "duplicate") counts.duplicates += 1;
