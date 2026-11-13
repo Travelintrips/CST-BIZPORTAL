@@ -1196,7 +1196,30 @@ async function loadLocalMatchCandidates(
            left join public.tenants t on t.id = coalesce(tp.tenant_id, tb.tenant_id)
            left join public.tenant_invoices ti on ti.id = tp.invoice_id and ti.company_id = tp.company_id
           where tp.company_id = $1
-            and lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+            and (
+              lower(coalesce(tp.status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+              or (
+                lower(coalesce(tp.status::text, '')) = 'pending'
+                and lower(coalesce(tp.approval_status::text, '')) = 'approved'
+                and exists (
+                  select 1 from public.tenant_invoices ti_paid
+                  where ti_paid.id = tp.invoice_id
+                    and ti_paid.company_id = tp.company_id
+                    and ti_paid.status::text = 'paid'
+                    and ti_paid.outstanding_amount = 0
+                )
+                and exists (
+                  select 1 from public.accounting_entries source_entry
+                  where source_entry.company_id = tp.company_id
+                    and source_entry.source::text = 'tenant_rent_payment'
+                    and source_entry.source_id = tp.id
+                    and source_entry.status = 'posted'
+                    and abs(source_entry.total_debit::numeric - tp.amount::numeric) < 0.01
+                    and abs(source_entry.total_credit::numeric - tp.amount::numeric) < 0.01
+                )
+              )
+            )
+            and coalesce(tp.is_voided, false) = false
             and nullif(to_jsonb(tp)->>'duplicate_of_payment_id', '') is null
             and lower(coalesce(tp.method::text, '')) not like '%qris%'
             and abs(tp.amount::numeric - $2::numeric) < 0.01
@@ -3225,7 +3248,31 @@ async function assertApprovalCandidateExists(
          from public.tenant_payments
         where id = $1
           and company_id = $2
-          and lower(coalesce(status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+          and coalesce(is_voided, false) = false
+          and nullif(to_jsonb(tenant_payments)->>'duplicate_of_payment_id', '') is null
+          and (
+            lower(coalesce(status::text, '')) in ('confirmed', 'paid', 'approved', 'completed', 'success', 'settled')
+            or (
+              lower(coalesce(status::text, '')) = 'pending'
+              and lower(coalesce(approval_status::text, '')) = 'approved'
+              and exists (
+                select 1 from public.tenant_invoices ti_paid
+                where ti_paid.id = tenant_payments.invoice_id
+                  and ti_paid.company_id = tenant_payments.company_id
+                  and ti_paid.status::text = 'paid'
+                  and ti_paid.outstanding_amount = 0
+              )
+              and exists (
+                select 1 from public.accounting_entries source_entry
+                where source_entry.company_id = tenant_payments.company_id
+                  and source_entry.source::text = 'tenant_rent_payment'
+                  and source_entry.source_id = tenant_payments.id
+                  and source_entry.status = 'posted'
+                  and abs(source_entry.total_debit::numeric - tenant_payments.amount::numeric) < 0.01
+                  and abs(source_entry.total_credit::numeric - tenant_payments.amount::numeric) < 0.01
+              )
+            )
+          )
         limit 1
         for update`,
       [candidateId, companyId],
