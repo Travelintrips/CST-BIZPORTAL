@@ -10,6 +10,7 @@ import localProductionAuthRouter from "./local-production-auth";
 import salesCoreRouter from "./sales-core";
 import adminRealtimeRouter from "./admin-realtime";
 import driverGeofenceRouter from "./driver-geofence";
+import gmailInvoiceSourceRouter from "./gmail-invoice-source";
 import {
   createDevAuthRouter,
   getDevSession,
@@ -40,6 +41,7 @@ router.post("/auth/email-login", (_request, response) => {
 router.use(companiesRouter);
 router.use(bankReconciliationRouter);
 router.use(reconClassificationRouter);
+router.use(gmailInvoiceSourceRouter);
 router.use(accountingRouter);
 router.use(purchaseWorkflowRouter);
 router.use(businessDashboardRouter);
