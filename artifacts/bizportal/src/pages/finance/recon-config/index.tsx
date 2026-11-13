@@ -28,12 +28,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { CreatableCombobox, type ComboboxOption } from "@/components/ui/creatable-combobox";
 import { useCompany } from "@/contexts/CompanyContext";
+import InvoiceSourcesTab from "./InvoiceSourcesTab";
 import { editableRuleAiFieldsFromRow } from "@/lib/ruleAiMetadata";
 import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Shield, ArrowLeft,
   BarChart2, TrendingUp, TrendingDown, Clock, AlertCircle, CheckCircle2,
-  Search, Loader2,
+  Search, Loader2, Mail,
 } from "lucide-react";
 
 const API = "/api";
@@ -2436,6 +2437,7 @@ export default function ReconClassificationConfigPage() {
     "ai-rules",
     "keywords",
     "upload",
+    "invoice-sources",
     "approval",
     "stats",
   ]);
@@ -2451,6 +2453,7 @@ export default function ReconClassificationConfigPage() {
     { value: "ai-rules",  label: "Rule AI",               icon: Brain },
     { value: "keywords",  label: "Kamus Keyword",         icon: Tag },
     { value: "upload",    label: "Syarat Upload",         icon: Upload },
+    { value: "invoice-sources", label: "Sumber Invoice", icon: Mail },
     { value: "approval",  label: "Rule Approval",         icon: Shield },
     { value: "stats",     label: "Statistik Penggunaan",  icon: BarChart2 },
   ];
@@ -2507,6 +2510,9 @@ export default function ReconClassificationConfigPage() {
               </TabsContent>
               <TabsContent value="upload" className="mt-0">
                 <UploadRequirementsTab />
+              </TabsContent>
+              <TabsContent value="invoice-sources" className="mt-0">
+                <InvoiceSourcesTab />
               </TabsContent>
               <TabsContent value="approval" className="mt-0">
                 <ApprovalRulesTab />
