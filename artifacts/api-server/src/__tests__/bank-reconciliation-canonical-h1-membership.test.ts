@@ -25,7 +25,7 @@ describe("QRIS canonical historical membership H+1 protection", () => {
   it("rejects an old candidate already persisted before approval", () => {
     expect(approval).toContain("payment.paid_at at time zone 'Asia/Jakarta'");
     expect(approval).toContain("payment.expected_settlement_date::date is distinct from $5::date");
-    expect(approval).toContain("CANONICAL_SETTLEMENT_PAYMENT_H1_INVALID");
+    expect(approval).toContain("CANONICAL_SETTLEMENT_PAYMENT_INVALID");
     expect(approval).toContain("payment.company_id is distinct from $2::integer");
     expect(approval).toContain("payment.bank_account_id is distinct from $4::text");
   });
