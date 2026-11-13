@@ -136,9 +136,9 @@ export async function reverseCanonicalSettlementForCorrection(
         settlementId,
         reversedSettlementJournalId: asPositiveInt(existingReversal.id),
         replacementPaymentIds,
-        bankMutationId: correctionBankMutationId,
+        bankMutationId: expectedBankMutationId,
         settlementStatus: "reversed",
-        bankMutationStatus: bankMutationId == null ? "unchanged" : "unmatched",
+        bankMutationStatus: "unmatched",
       };
     }
 
