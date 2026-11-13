@@ -83,7 +83,7 @@ describe("local production email OTP authentication", () => {
     sendEmailMock.mockReset();
     sendEmailMock.mockResolvedValue(undefined);
     queryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes("create table") || sql.includes("create index")) return { rows: [] };
+      if (sql.includes("to_regclass('public.bizportal_email_otp_codes')")) return { rows: [{ ready: true }] };
       if (sql.includes("count(*)::text")) return { rows: [{ count: String(recentRequestCount) }] };
       if (sql.includes("code_hash, attempts")) {
         return {
@@ -151,6 +151,13 @@ describe("local production email OTP authentication", () => {
     expect(recipient).toBe("admin@example.com");
     expect(code).toMatch(/^\d{6}$/);
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("code_hash"))).toBe(true);
+  });
+
+  it("uses existing OTP tables without DDL at login time", async () => {
+    const response = await request(server, "/auth/email-otp/send", { email: "admin@example.com" });
+    expect(response.status).toBe(202);
+    expect(queryMock.mock.calls.some(([sql]) => /create (table|index)/i.test(String(sql)))).toBe(false);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates the secure local session after one correct verification", async () => {
