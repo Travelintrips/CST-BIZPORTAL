@@ -94,4 +94,53 @@ router.get("/mkt/admin/purchase-orders", async (req, res): Promise<void> => {
     res.status(503).json({error:"DEV Marketplace data unavailable"});
   }
 });
+
+// DEV-only, read-only finance readiness of the existing Marketplace PO lifecycle.
+// Never create a vendor invoice, AP, payment or journal from this diagnostic route.
+router.get("/mkt/admin/purchase-orders/:id/finance-readiness", async (req, res): Promise<void> => {
+  if (!(await authorize(req, res))) return;
+  const rawId = String(req.params.id ?? "");
+  const poId = Number(rawId);
+  if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(poId)) {
+    res.status(400).json({ error: "Invalid PO ID" });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `select p.id, p.po_number as "poNumber", p.company_id as "companyId",
+              p.status::text as status, p.payment_status as "paymentStatus",
+              (select count(*)::int from public.mkt_po_goods_receipts gr
+                join public.mkt_po_shipments sh on sh.id=gr.shipment_id
+                where sh.po_id=p.id) as "receiptCount",
+              (select count(*)::int from public.vendor_invoices vi
+                where vi.mkt_purchase_order_id=p.id) as "vendorInvoiceCount",
+              (select count(*)::int from public.vendor_invoices vi
+                where vi.mkt_purchase_order_id=p.id
+                and vi.status='ready_for_ap' and vi.three_way_match_status='passed') as "matchedVendorInvoiceCount",
+              (select count(*)::int from public.mkt_ap_preparations ap
+                where ap.mkt_purchase_order_id=p.id) as "apPreparationCount",
+              (select count(*)::int from public.mkt_accounting_handoffs ah
+                where ah.mkt_purchase_order_id=p.id) as "accountingHandoffCount"
+         from public.mkt_purchase_orders p where p.id=$1 limit 1`,
+      [poId],
+    );
+    const po = result.rows[0];
+    if (!po) {
+      res.status(404).json({ error: "Marketplace PO not found" });
+      return;
+    }
+    const blockers: string[] = [];
+    if (po.companyId == null) blockers.push("COMPANY_UNASSIGNED");
+    if (Number(po.receiptCount) === 0) blockers.push("GOODS_RECEIPT_MISSING");
+    if (Number(po.vendorInvoiceCount) === 0) blockers.push("VENDOR_INVOICE_MISSING");
+    else if (Number(po.matchedVendorInvoiceCount) === 0) blockers.push("THREE_WAY_MATCH_NOT_PASSED");
+    if (Number(po.apPreparationCount) === 0) blockers.push("AP_PREPARATION_MISSING");
+    if (Number(po.accountingHandoffCount) === 0) blockers.push("ACCOUNTING_HANDOFF_MISSING");
+    res.json({ ok: true, readOnly: true, environment: "development", data: po, blockers });
+  } catch (error) {
+    req.log?.error({ error }, "DEV Marketplace finance readiness failed");
+    res.status(503).json({ error: "Marketplace finance readiness unavailable" });
+  }
+});
+
 export default router;

@@ -139,4 +139,45 @@ describe("DEV-only Marketplace read parity security", () => {
     expect(res.status).toBe(404);
     expect(mocked.query).not.toHaveBeenCalled();
   });
+  it("keeps finance readiness unavailable in PROD and to anonymous users", async () => {
+    mocked.isDev.mockReturnValue(false);
+    expect((await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness")).status).toBe(404);
+    mocked.isDev.mockReturnValue(true);
+    mocked.session.mockReturnValue(null);
+    expect((await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness")).status).toBe(401);
+    mocked.session.mockReturnValue({role:"vendor",email:"vendor@dev.test"});
+    expect((await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness")).status).toBe(403);
+    expect(mocked.query).not.toHaveBeenCalled();
+  });
+  it("validates PO IDs before any database access", async () => {
+    for(const id of ["bad", "0", "999999999999999999999999"]) {
+      expect((await fetch(base+`/api/mkt/admin/purchase-orders/${id}/finance-readiness`)).status).toBe(400);
+    }
+    expect(mocked.query).not.toHaveBeenCalled();
+  });
+  it("reports missing finance prerequisites without writing or auto-posting", async () => {
+    mocked.query.mockResolvedValue({rows:[{
+      id:2,poNumber:"DEV-PO-2",companyId:null,status:"completed",paymentStatus:"unpaid",
+      receiptCount:1,vendorInvoiceCount:0,matchedVendorInvoiceCount:0,
+      apPreparationCount:0,accountingHandoffCount:0,
+    }]});
+    const res=await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness");
+    expect(res.status).toBe(200);
+    const body=await res.json() as {readOnly:boolean; blockers:string[]};
+    expect(body.readOnly).toBe(true);
+    expect(body.blockers).toEqual([
+      "COMPANY_UNASSIGNED", "VENDOR_INVOICE_MISSING", "AP_PREPARATION_MISSING", "ACCOUNTING_HANDOFF_MISSING",
+    ]);
+    expect(mocked.query).toHaveBeenCalledOnce();
+    const [sql,params]=mocked.query.mock.calls[0];
+    expect(sql.toLowerCase()).toMatch(/^select /);
+    expect(sql.toLowerCase()).not.toMatch(/\b(insert|update|delete|truncate)\b/);
+    expect(params).toEqual([2]);
+    expect((await fetch(base+"/api/mkt/admin/purchase-orders/2/finance-readiness",{method:"POST"})).status).toBe(404);
+  });
+  it("reports a missing PO without any write", async () => {
+    mocked.query.mockResolvedValue({rows:[]});
+    expect((await fetch(base+"/api/mkt/admin/purchase-orders/999/finance-readiness")).status).toBe(404);
+    expect(mocked.query).toHaveBeenCalledOnce();
+  });
 });
