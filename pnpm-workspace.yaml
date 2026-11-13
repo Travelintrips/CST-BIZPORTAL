@@ -75,6 +75,8 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
+  # Tesseract.js worker: v1.10.0 uses import.source syntax unsupported by Hostinger Node 22.
+  wasm-feature-detect: 1.9.0
   # replit uses linux-x64 only, we can exclude all other platforms
   "esbuild>@esbuild/darwin-arm64": "-"
   "esbuild>@esbuild/darwin-x64": "-"
