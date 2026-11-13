@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { requiresInvoiceExtractionReview } from "./gmail-invoice-rate-limit";
 import { pool } from "@workspace/db";
 import {
   downloadAttachment,
@@ -345,7 +346,7 @@ async function processAttachment(args: {
       ? "supporting"
       : existingInvoice.rows[0]
       ? "duplicate"
-      : hasCoreFields && extraction.confidence >= 0.65
+      : hasCoreFields && !requiresInvoiceExtractionReview(extraction.flags) && extraction.confidence >= 0.65
         ? "ready"
         : "manual_review";
 
@@ -370,7 +371,9 @@ async function processAttachment(args: {
               vendor_invoice_id=$14,
               error_message=$15,
               updated_at=now()
-        where id=$16 and status='new' and vendor_invoice_id is null`,
+        where id=$16 and status in ('new','manual_review')
+          and extraction_status in ('pending','failed')
+          and vendor_invoice_id is null`,
       [
         hash,
         bytes.length,
@@ -387,7 +390,9 @@ async function processAttachment(args: {
         status,
         existingInvoice.rows[0]?.id ?? null,
         status === "manual_review"
-          ? "Data inti invoice belum lengkap atau confidence di bawah 65%"
+          ? requiresInvoiceExtractionReview(extraction.flags)
+            ? "Ekstraksi PDF lokal / OCR AI tidak tersedia: wajib review Finance sebelum impor"
+            : "Data inti invoice belum lengkap atau confidence di bawah 65%"
           : status === "duplicate"
             ? "Nomor invoice vendor sudah tersimpan"
             : null,
