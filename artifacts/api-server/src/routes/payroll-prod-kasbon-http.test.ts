@@ -46,6 +46,7 @@ async function query(sql:string,args:unknown[]=[]):Promise<any>{
  return {rowCount:0,rows:[]};
 }
 vi.mock("./payroll-prod-db",()=>({
+ payrollReadOnlyReady:()=>state.canConnect,
  payrollDedicatedEnabled:()=>state.canConnect,
  payrollProdDedicatedRequired:()=>state.canConnect,
  payrollScopedQuery:async(companyId:number,sql:string,args:unknown[])=>{
