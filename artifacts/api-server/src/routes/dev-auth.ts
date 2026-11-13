@@ -140,14 +140,14 @@ export function setProductionSessionCookie(response: Response, session: Producti
 }
 
 function clearSessionCookie(response: Response): void {
-  response.setHeader(
+  response.append(
     "Set-Cookie",
     `${DEV_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
   );
 }
 
 function clearProductionSessionCookie(response: Response): void {
-  response.setHeader(
+  response.append(
     "Set-Cookie",
     `${PRODUCTION_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`,
   );
