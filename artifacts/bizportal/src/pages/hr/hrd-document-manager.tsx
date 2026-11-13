@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FileText, Upload, ShieldCheck } from "lucide-react";
-import { uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
+import { hashHrdOriginalFile, uploadHrdSignedDocument, type HrdSignedUpload } from "./hrd-signed-upload";
 
 type DocumentType = "ktp"|"kk"|"sim"|"npwp"|"ijazah"|"skck"|"kontrak";
 type Document = {
@@ -70,8 +70,13 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
     const scope=generation.current;
     setBusy(true);setError("");setNotice("");setReviewDoc(null);setPreview(null);
     try{
+      // Cheap preflight using SHA-256 before creating a new private Storage object.
+      // The same original File is uploaded unchanged if the preflight permits it.
+      const originalSha256=await hashHrdOriginalFile(file);
+      if(scope!==generation.current)return;
       const prep=await post<HrdSignedUpload>(
-        "prepare",{docType,mimeType:file.type,processingAuthorizationConfirmed:true},
+        "prepare",{docType,mimeType:file.type,processingAuthorizationConfirmed:true,
+          ...(originalSha256?{originalSha256}:{})},
       );
       if(scope!==generation.current)return;
       await uploadHrdSignedDocument(prep,file,companyId,employeeId);
