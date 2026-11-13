@@ -195,7 +195,10 @@ describe("HRD OCR synthetic HTTP lifecycle (no production writes)",()=>{
   it("records scan_failed and leaves profile unchanged when MIME magic mismatches",async()=>{
     const id=await preparedKtp();
     state.validBytes=false;
-    expect((await post(id+"/scan",{processingAuthorizationConfirmed:true})).status).toBe(503);
+    const failed=await post(id+"/scan",{processingAuthorizationConfirmed:true});
+    expect(failed.status).toBe(503);
+    expect(failed.body.code).toBe("HRD_OCR_MIME_MISMATCH");
+    expect(failed.body).not.toHaveProperty("storage_path");
     expect(state.docs.get(id)?.status).toBe("scan_failed");
     expect(state.profile).toBeNull();
   });

@@ -76,14 +76,16 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
       if(scope!==generation.current)return;
       await uploadHrdSignedDocument(prep,file,companyId,employeeId);
       if(scope!==generation.current)return;
-      const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>}>(
+      const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>;warnings:string[]}>(
         `${prep.documentId}/scan`,{processingAuthorizationConfirmed:true},
       );
       if(scan.status!=="pending_review")throw Error("Status scan OCR tidak sesuai.");
       if(scope!==generation.current)return;
       setNotice(scan.engine==="local"?"OCR lokal selesai. Periksa dan koreksi hasil.":
         scan.engine==="openai_fallback"?"AI cadangan digunakan; periksa semua hasil OCR.":
-        "Hasil scan perlu diperiksa dan dilengkapi HRD.");
+        scan.engine==="manual_review_required"?
+          "OCR selesai tetapi tidak mengenali informasi. Hasil kosong; periksa dokumen asli dan jangan menebak.":
+          "Hasil scan perlu diperiksa dan dilengkapi HRD.");
       setFile(null);if(uploadRef.current)uploadRef.current.value="";
       await refresh();
       if(scope!==generation.current)return;
@@ -99,12 +101,14 @@ export function HrdDocumentManager({companyId,employeeId,enabled,documents,refre
     const scope=generation.current;
     setBusy(true);setError("");setNotice("");
     try{
-      const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>}>(
+      const scan=await post<{status:string;engine:string;extracted:Record<string,string|null>;warnings:string[]}>(
         `${doc.id}/scan`,{processingAuthorizationConfirmed:true},
       );
       if(scan.status!=="pending_review")throw Error("Status scan OCR tidak sesuai.");
       if(scope!==generation.current)return;
-      setNotice("OCR diproses ulang dari file yang sudah tersimpan. Periksa hasilnya.");
+      setNotice(scan.engine==="manual_review_required"?
+        "Mesin OCR selesai tetapi tidak mengenali informasi dokumen. Hasil kosong; buka Lihat Dokumen, periksa aslinya, lalu isi hanya data yang benar-benar terbaca.":
+        "OCR diproses ulang dari file yang sudah tersimpan. Periksa hasilnya.");
       await refresh();
       if(scope!==generation.current)return;
       setReviewDoc({id:doc.id,doc_type:doc.doc_type,status:"pending_review",extracted_data:scan.extracted});

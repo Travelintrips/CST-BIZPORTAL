@@ -302,16 +302,34 @@ describe("HRD local-first hybrid OCR",()=>{
    for(const [k,v] of Object.entries(snapshot)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
   }
  });
- it("fails retryably when local OCR has no fields and OpenAI fallback is disabled",async()=>{
-  const snapshot={APP_ENV:process.env.APP_ENV,HRD_PROD_OCR_LOCAL_ENABLED:process.env.HRD_PROD_OCR_LOCAL_ENABLED,
-   HRD_PROD_OPENAI_API_KEY:process.env.HRD_PROD_OPENAI_API_KEY,HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED:process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED};
+ it("returns zero-confidence manual review only after OCR actually runs but recognizes no document fields",async()=>{
+  const keys=["APP_ENV","HRD_PROD_OCR_LOCAL_ENABLED","HRD_PROD_OPENAI_API_KEY","HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED"];
+  const snapshot=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
+  try{
+   process.env.APP_ENV="production";process.env.HRD_PROD_OCR_LOCAL_ENABLED="true";
+   process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED="false";delete process.env.HRD_PROD_OPENAI_API_KEY;
+   const result=await scanEmployeeDocument(Buffer.from("synthetic"),"image/png","sim",
+    async()=>({text:"SCREENSHOT WITHOUT READABLE SIM FIELDS",confidence:0.95,source:"tesseract",warnings:[]}),
+    async()=>{throw Error("OPENAI_MUST_NOT_BE_CALLED")}
+   );
+   expect(result.engine).toBe("manual_review_required");
+   expect(result.confidence).toBe(0);
+   expect(Object.values(result.fields).every(value=>value===null)).toBe(true);
+   expect(result.warnings.join(" ")).toContain("tidak ada field dokumen yang dikenali");
+  }finally{
+   for(const [k,v] of Object.entries(snapshot)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
+  }
+ });
+ it("does not mask an unavailable OCR engine as a successful scan",async()=>{
+  const keys=["APP_ENV","HRD_PROD_OCR_LOCAL_ENABLED","HRD_PROD_OPENAI_API_KEY","HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED"];
+  const snapshot=Object.fromEntries(keys.map(k=>[k,process.env[k]]));
   try{
    process.env.APP_ENV="production";process.env.HRD_PROD_OCR_LOCAL_ENABLED="true";
    process.env.HRD_PROD_OCR_OPENAI_FALLBACK_ENABLED="false";delete process.env.HRD_PROD_OPENAI_API_KEY;
    await expect(scanEmployeeDocument(Buffer.from("synthetic"),"image/png","skck",
     async()=>({text:"",confidence:0,source:"unavailable",warnings:[]}),
     async()=>{throw Error("OPENAI_MUST_NOT_BE_CALLED")}
-   )).rejects.toThrow("HRD_OCR_NO_LOCAL_FIELDS");
+   )).rejects.toThrow("HRD_OCR_LOCAL_UNAVAILABLE");
   }finally{
    for(const [k,v] of Object.entries(snapshot)){if(v===undefined)delete process.env[k];else process.env[k]=v;}
   }
