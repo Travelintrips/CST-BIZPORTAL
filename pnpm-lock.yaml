@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: false
   excludeLinksFromLockfile: false
 
+overrides:
+  wasm-feature-detect: 1.9.0
+
 catalogs:
   default:
     '@replit/vite-plugin-cartographer':
@@ -4399,8 +4402,8 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
-  wasm-feature-detect@1.10.0:
-    resolution: {integrity: sha512-u0tkTCCo8s7xa9UoE2rtZGRYXTSqYx3kRPJ2XkbyYl2AbnMggSFmYNiJIispzzCPz7SIFTBTPTk0nI8yXwJgvA==}
+  wasm-feature-detect@1.9.0:
+    resolution: {integrity: sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA==}
 
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
@@ -8191,7 +8194,7 @@ snapshots:
       opencollective-postinstall: 2.0.3
       regenerator-runtime: 0.13.11
       tesseract.js-core: 6.1.2
-      wasm-feature-detect: 1.10.0
+      wasm-feature-detect: 1.9.0
       zlibjs: 0.3.1
     transitivePeerDependencies:
       - encoding
@@ -8207,6 +8210,6 @@ snapshots:
   opencollective-postinstall@2.0.3: {}
   tesseract.js-core@6.1.2: {}
   tr46@0.0.3: {}
-  wasm-feature-detect@1.10.0: {}
+  wasm-feature-detect@1.9.0: {}
   webidl-conversions@3.0.1: {}
   zlibjs@0.3.1: {}
