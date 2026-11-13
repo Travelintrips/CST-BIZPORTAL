@@ -471,6 +471,9 @@ export async function reverseCanonicalSettlementForCorrection(
     await tx.execute(sql`
       UPDATE public.bank_mutations
       SET status = 'unmatched',
+          reconciliation_status = 'unmatched',
+          review_code = 'QRIS_MEMBERSHIP_CORRECTION_PENDING',
+          review_reason = 'Kandidat historical dibatalkan karena koreksi keanggotaan settlement. Perlu matching ulang dari sumber pembayaran yang sah.',
           approved_by = NULL,
           approved_at = NULL,
           posted_by = NULL,
