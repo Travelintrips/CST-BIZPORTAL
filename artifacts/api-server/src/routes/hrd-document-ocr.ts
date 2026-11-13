@@ -176,7 +176,15 @@ export async function scanEmployeeDocument(bytes:Buffer,mime:string,docType:HrdD
    warnings:[...localResult.warnings,"Sumber: OCR lokal; tidak menggunakan kuota OpenAI."]};
  }
  if(!openAiFallbackEnabled()){
-  if(!hasLocalFields)throw Error("HRD_OCR_NO_LOCAL_FIELDS");
+  // Distinguish a failed OCR engine from a completed scan that simply
+  // found no trustworthy fields. Never fabricate a personal identifier.
+  if(!hasLocalFields){
+   if(local.source==="unavailable")throw Error("HRD_OCR_LOCAL_UNAVAILABLE");
+   return {...localResult,engine:"manual_review_required" as const,
+    warnings:[...localResult.warnings,
+     "OCR selesai, tetapi tidak ada field dokumen yang dikenali. Hasil ekstraksi kosong dan confidence 0.",
+     "Periksa gambar dokumen asli melalui preview. Isi field hanya bila jelas terbaca; jangan menebak."]};
+  }
   return {...localResult,engine:"local_manual_review" as const,
    warnings:[...localResult.warnings,
     "AI cadangan tidak aktif. Periksa dan lengkapi field kosong secara manual."]};
