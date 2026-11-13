@@ -111,6 +111,25 @@ export async function reverseCanonicalSettlementForCorrection(
       if (batchStatus !== "reversed") {
         throw new Error("Posted reversal exists but original settlement is not reversed.");
       }
+      // Never report a repeated correction as idempotent when the caller has
+      // changed the requested bank identity or replacement payment set.
+      const correctionAudit = await tx.execute(sql`
+        SELECT mutation_id,meta
+        FROM public.bank_reconciliation_audit
+        WHERE action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED'
+          AND (meta->>'settlement_id')::bigint=${settlementId}
+          AND (meta->>'reversal_settlement_journal_id')::integer=${asPositiveInt(existingReversal.id)}
+        ORDER BY id DESC LIMIT 1
+      `);
+      const recorded = correctionAudit.rows[0] as Record<string, unknown> | undefined;
+      const meta = recorded?.meta as Record<string, unknown> | undefined;
+      const originalReplacementIds = Array.isArray(meta?.replacement_payment_ids)
+        ? meta.replacement_payment_ids.map(Number).sort((a,b)=>a-b)
+        : [];
+      if (!recorded || Number(recorded.mutation_id) !== expectedBankMutationId
+        || originalReplacementIds.join(",") !== [...replacementPaymentIds].sort((a,b)=>a-b).join(",")) {
+        throw new Error("Idempotent reversal request does not match the audited original correction.");
+      }
       return {
         ok: true,
         idempotent: true,
