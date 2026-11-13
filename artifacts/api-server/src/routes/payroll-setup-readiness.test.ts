@@ -77,7 +77,7 @@ describe("Payroll setup readiness via authenticated and company-scoped read-only
   });
   it("isolates a different company with a distinct employee count",async()=>{
     state.companyId=3;
-    const data=await (await get("2026","12")).json();
+    const data=await (await get("2026","12")).json() as Record<string,unknown>;
     expect(data.companyId).toBe(3);
     expect(data.employeeCount).toBe(1);
     expect(data.effectiveThrough).toBe("2026-12-31");
@@ -85,7 +85,7 @@ describe("Payroll setup readiness via authenticated and company-scoped read-only
   });
   it("reports no readiness for a company with zero active employees",async()=>{
     state.companyId=2;
-    const data=await (await get()).json();
+    const data=await (await get()).json() as Record<string,unknown>;
     expect(data.employeeCount).toBe(0);
     expect(data.dataComplete).toBe(false);
   });
