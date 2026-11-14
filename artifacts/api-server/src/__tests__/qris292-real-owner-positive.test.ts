@@ -202,6 +202,42 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
         ["1-1024-CST","credit",930000],
         ["5-3050-CST","debit",6300],
       ]);
+      // Finalize with the UNMODIFIED owner functions: approval, journal
+      // posting, settlement status and payment metadata in the same tx.
+      // No COMMIT is permitted in this CI test.
+      for (const batchId of [day4.rows[0].id,day5.rows[0].id]) {
+        const finished=await client.query<{id:string}>(`
+          SELECT sport_center.finalize_payment_settlement(
+            $1::bigint,'isolated-ci-only') AS id
+        `,[batchId]);
+        expect(Number(finished.rows[0].id)).toBe(Number(batchId));
+      }
+      const status=await client.query<{
+        settlement_id:string;batch_status:string;journal_status:string;
+        payment_ids:number[];settled_count:number;
+      }>(`
+        SELECT b.id::text AS settlement_id,b.status AS batch_status,
+          j.status AS journal_status,
+          ARRAY(SELECT i.payment_id FROM sport_center.payment_settlement_items i
+            WHERE i.settlement_id=b.id AND i.item_status='active'
+            ORDER BY i.payment_id) AS payment_ids,
+          (SELECT count(*)::int
+             FROM sport_center.sport_payments p
+             JOIN sport_center.payment_settlement_items i ON i.payment_id=p.id
+            WHERE i.settlement_id=b.id AND i.item_status='active'
+              AND p.settlement_status='settled') AS settled_count
+        FROM sport_center.payment_settlement_batches b
+        JOIN sport_center.accounting_journals j ON j.id=b.settlement_journal_id
+        WHERE b.id=ANY($1::bigint[])
+        ORDER BY b.settlement_date
+      `,[[day4.rows[0].id,day5.rows[0].id]]);
+      expect(status.rows.map(x=>({
+        batch:x.batch_status,journal:x.journal_status,
+        members:x.payment_ids,settled:x.settled_count,
+      }))).toEqual([
+        {batch:"posted",journal:"posted",members:nov4Ids,settled:5},
+        {batch:"posted",journal:"posted",members:nov5Ids,settled:4},
+      ]);
     }finally{
       await client.query("ROLLBACK").catch(()=>undefined);
       await client.end();
