@@ -1,5 +1,10 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
+import { PgDialect } from "drizzle-orm/pg-core";
+import {
+  runAtomicCanonicalSettlementCorrection,
+  rebuildIssue292WithOwnerFunctions,
+} from "../lib/reconciliation/canonicalSettlementCorrectionCoordinator";
 import { inspectPostedUnlinkedBankCohorts } from "../lib/reconciliation/postedUnlinkedSettlementPreflight";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
 import { isReconRuleAutoApprovalAllowed, canRunLegacyKasScRuleBackfill } from "../lib/reconciliation/autoApprovalPolicy";
@@ -3691,6 +3696,71 @@ async function approveCanonicalSettlementLink(
     [mutationId, actor.email, JSON.stringify({ settlement_id: settlementId, candidate_source: "sport_center.payment_settlement_batches", link_only: true, idempotency_key: idempotencyKey })],
   );
   return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: false };
+}
+
+/**
+ * Issue #292 internal-only integration. DO NOT expose this as an HTTP route.
+ * A caller must already have authenticated the CST actor and verified the
+ * company scope. This bridge uses one physical PostgreSQL connection for
+ * the existing Drizzle reversal/owner functions and existing canonical bank
+ * approval. No duplicate generic bank journal is created.
+ *
+ * The callback is deliberately unreachable from an API endpoint until the
+ * actual DEV end-to-end finance gate and deployment-source parity have passed.
+ */
+async function runIssue292CorrectionWithCanonicalApproval(
+  client: ApprovalClient,
+  actor: ApprovalActor,
+) {
+  if (!actor.email || actor.companyId !== 1) {
+    throw new ApprovalError("Issue #292 requires an authenticated CST actor.", 403, "COMPANY_SCOPE_FORBIDDEN");
+  }
+  const dialect = new PgDialect();
+  const tx = {
+    execute: async (statement: Parameters<PgDialect["sqlToQuery"]>[0]) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return client.query(compiled.sql, compiled.params);
+    },
+  };
+  const transactionalClient = {
+    transaction: async <T>(callback: (scope: typeof tx) => Promise<T>): Promise<T> => {
+      await client.query("BEGIN");
+      try {
+        const value = await callback(tx);
+        await client.query("COMMIT");
+        return value;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    },
+  } as unknown as Parameters<typeof runAtomicCanonicalSettlementCorrection>[0];
+  return runAtomicCanonicalSettlementCorrection(
+    transactionalClient,
+    {
+      settlementId: 5738,
+      expectedBankMutationId: 434464,
+      replacementPaymentIds: [859, 860, 861, 862],
+      actor: actor.email,
+      reason: "Audited Issue 292 historical QRIS membership correction for November 2026",
+    },
+    {
+      rebuildBothDatedBatches: (scope, reversal) =>
+        rebuildIssue292WithOwnerFunctions(scope, reversal, actor.email),
+      approveBothCanonicalBankMatches: async (_scope, batches) => {
+        const nov4 = await approveCanonicalSettlementLink(
+          client, 434462, batches.nov4BatchId, null, actor, "issue292:434462",
+        );
+        const nov5 = await approveCanonicalSettlementLink(
+          client, 434464, batches.nov5BatchId, null, actor, "issue292:434464",
+        );
+        if (nov4.status !== "approved" || nov5.status !== "approved") {
+          throw new Error("Issue #292 canonical bank approval did not complete.");
+        }
+        return {nov4,nov5};
+      },
+    },
+  );
 }
 
 async function approveBankMutation(
