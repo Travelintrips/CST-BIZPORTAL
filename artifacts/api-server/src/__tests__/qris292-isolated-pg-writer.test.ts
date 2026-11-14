@@ -312,6 +312,45 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
     } finally {await check.end();}
   });
 
+  it("refuses to commit a reversal if replacement and approval callbacks return without real bank links", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = {execute: async (statement:any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql,compiled.params);
+    }};
+    const db = {transaction: async (callback:any) => {
+      try {
+        const result = await callback(tx);
+        await conn.query("COMMIT");
+        return result;
+      } catch (e) {
+        await conn.query("ROLLBACK");
+        throw e;
+      }
+    }} as any;
+    try {
+      await expect(runAtomicCanonicalSettlementCorrection(db,input,{
+        rebuildBothDatedBatches: async () => ({pretendedComplete:true}),
+        approveBothCanonicalBankMatches: async () => ({pretendedApproved:true}),
+      })).rejects.toThrow("missing or duplicate canonical bank batch");
+    } finally {await conn.end();}
+    const check = new pg.Client({connectionString:local});
+    await check.connect();
+    try {
+      const state = await check.query(`
+        SELECT b.status,
+          (SELECT count(*)::int FROM sport_center.accounting_journals
+           WHERE reversal_of_id=7207) AS reversal_journals,
+          (SELECT count(*)::int FROM public.bank_reconciliation_audit
+           WHERE action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED') AS audit_count
+        FROM sport_center.payment_settlement_batches b WHERE b.id=5738
+      `);
+      expect(state.rows[0]).toMatchObject({status:"posted",reversal_journals:0,audit_count:0});
+    } finally {await check.end();}
+  });
+
   it("rejects wrong replacement MDR before writing any compensating journal", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
