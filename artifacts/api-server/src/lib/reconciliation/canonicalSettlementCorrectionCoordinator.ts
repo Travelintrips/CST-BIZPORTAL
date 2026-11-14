@@ -191,6 +191,32 @@ export async function rebuildIssue292WithOwnerFunctions(
     throw new Error("Issue #292 requires exactly one verified owner bank COA mapping.");
   }
 
+  // Fail closed if either historical bank source is no longer eligible.
+  const bankEvidence=await tx.execute(sql`
+    SELECT m.id,m.amount,m.transaction_date::text AS date,m.status::text AS status,
+      m.company_id,m.source_classification,m.direction,m.journal_entry_id,
+      m.approved_at,m.posted_at,a.company_id AS bank_company,
+      a.account_number,a.is_active
+    FROM public.bank_mutations m
+    JOIN public.company_bank_accounts a ON a.id::text=m.bank_account_id
+    WHERE m.id IN (434462,434464)
+    ORDER BY m.id FOR UPDATE OF m,a
+  `);
+  if (bankEvidence.rows.length!==2) {
+    throw new Error("Issue #292 requires two authentic bank rows.");
+  }
+  for (const row of bankEvidence.rows as Array<Record<string,unknown>>) {
+    const id=Number(row.id),date=id===434462?"2026-11-04":"2026-11-05";
+    const net=id===434462?685800:923700;
+    if (![434462,434464].includes(id) || Number(row.company_id)!==1
+      || Number(row.bank_company)!==1 || row.is_active!==true
+      || row.account_number!==account || row.source_classification!=="actual_bank_mutation"
+      || row.direction!=="IN" || row.status!=="unmatched" || row.date!==date
+      || Number(row.amount)!==net || row.journal_entry_id!=null
+      || row.approved_at!=null || row.posted_at!=null) {
+      throw new Error("Issue #292 bank evidence mismatch.");
+    }
+  }
   const expected=[
     {date:"2026-11-04",ids:[834,843,853,856,858],gross:690000,mdr:4200,net:685800},
     {date:"2026-11-05",ids:[859,860,861,862],gross:930000,mdr:6300,net:923700},
