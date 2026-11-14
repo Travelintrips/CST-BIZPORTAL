@@ -18,6 +18,7 @@ export default function HrdEmployeeDirectory() {
   const companyId = !isConsolidated && Number.isSafeInteger(Number(activeCompanyId)) && Number(activeCompanyId) > 0
     ? Number(activeCompanyId) : null;
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [statusChangeEnabled, setStatusChangeEnabled] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter,setStatusFilter] = useState<"all"|"active"|"inactive">("all");
   const [loading, setLoading] = useState(false);
@@ -25,7 +26,7 @@ export default function HrdEmployeeDirectory() {
   const requestSeq = useRef(0);
   const load = async () => {
     const seq = ++requestSeq.current;
-    if (companyId === null) { setEmployees([]); setError("Pilih satu perusahaan untuk membuka data HRD."); return; }
+    if (companyId === null) { setEmployees([]); setStatusChangeEnabled(false); setError("Pilih satu perusahaan untuk membuka data HRD."); return; }
     setLoading(true); setError("");
     try {
       const response = await fetch(`/api/hrd/employees?companyId=${companyId}`, {
@@ -34,15 +35,18 @@ export default function HrdEmployeeDirectory() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message || `HTTP ${response.status}`);
       if (body.companyId !== companyId || !Array.isArray(body.employees)) throw new Error("Scope perusahaan tidak cocok.");
-      if (requestSeq.current === seq) setEmployees(body.employees.filter((employee: Employee) => employee.company_id === companyId));
+      if (requestSeq.current === seq) {
+        setEmployees(body.employees.filter((employee: Employee) => employee.company_id === companyId));
+        setStatusChangeEnabled(body.statusChangeEnabled === true);
+      }
     } catch (cause) {
       if (requestSeq.current === seq) {
-        setEmployees([]); setError(cause instanceof Error ? cause.message : "Data karyawan tidak dapat dimuat.");
+        setEmployees([]); setStatusChangeEnabled(false); setError(cause instanceof Error ? cause.message : "Data karyawan tidak dapat dimuat.");
       }
     } finally { if (requestSeq.current === seq) setLoading(false); }
   };
   useEffect(() => {
-    setEmployees([]); setError("");
+    setEmployees([]); setStatusChangeEnabled(false); setError("");
     void load();
     return () => { requestSeq.current++; };
   }, [companyId]);
@@ -76,6 +80,11 @@ export default function HrdEmployeeDirectory() {
           <Button type="button" key={value} size="sm" variant={statusFilter===value?"default":"outline"}
             onClick={()=>setStatusFilter(value)}>{label}</Button>)}
       </div>
+      {!loading && !error && companyId !== null && !statusChangeEnabled &&
+        <p role="status" className="rounded-lg border border-amber-500/30 p-3 text-sm text-muted-foreground">
+          Tombol Nonaktifkan (Resign) tersedia pada karyawan aktif, tetapi perubahan status belum
+          diaktifkan di server. Periksa pengaturan HRD sebelum menggunakannya.
+        </p>}
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</div>}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>{loading ? "Memuat data..." : `${filtered.length} karyawan`}</span><span>Perusahaan ID: {companyId ?? "Belum dipilih"}</span>
@@ -89,7 +98,18 @@ export default function HrdEmployeeDirectory() {
               <p className="text-xs text-muted-foreground">{employee.email || employee.phone || "Kontak belum tersedia"}</p>
               <p className="text-xs text-muted-foreground">Status: {employee.status==="active"?"Aktif":employee.status==="inactive"?"Nonaktif":employee.status||"Tidak diketahui"}</p>
             </div>
-            <Button type="button" size="sm" variant="outline" onClick={() => navigate(`/hr/employees/${employee.id}`)}>Detail</Button>
+            <div className="flex shrink-0 flex-col items-stretch gap-2">
+              <Button type="button" size="sm" variant="outline"
+                onClick={() => navigate(`/hr/employees/${employee.id}`)}>Detail</Button>
+              {employee.status==="active" && <Button type="button" size="sm" variant="outline"
+                disabled={!statusChangeEnabled}
+                title={!statusChangeEnabled?"Pengelolaan resign belum diaktifkan pada server":undefined}
+                onClick={() => navigate(`/hr/employees/${employee.id}`)}>
+                Nonaktifkan (Resign)
+              </Button>}
+              {employee.status==="inactive" &&
+                <span className="text-center text-xs text-muted-foreground">Sudah nonaktif</span>}
+            </div>
           </CardContent>
         </Card>)}
       </div>
