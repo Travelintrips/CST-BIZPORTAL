@@ -3489,7 +3489,14 @@ export async function approveCanonicalSettlementLink(
   }
 
   const settlementStatus = String(batch.status ?? "").toLowerCase();
-  const linkedMutationId = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  const linkedMutationRaw = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  // node-postgres returns int8/bigint as strings; comparing directly to the
+  // numeric request falsely rejects safe idempotent canonical link retries.
+  const linkedMutationId = linkedMutationRaw == null ? null : Number(linkedMutationRaw);
+  if (linkedMutationRaw != null
+    && (!Number.isSafeInteger(linkedMutationId) || linkedMutationId <= 0)) {
+    throw new ApprovalError("Canonical settlement bank mutation ID is invalid.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
+  }
   const mutationAmount = Number(mutation.amount);
   const settlementAmount = Number(batch.net_amount);
   const amountMatches =
