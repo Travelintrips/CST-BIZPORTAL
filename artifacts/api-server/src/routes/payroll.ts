@@ -6,6 +6,7 @@ import { registerPayrollKasbonAutoRoutes } from "./payroll-kasbon-automatic-rout
 import { registerPayrollSuperAdminApprovalRoutes } from "./payroll-super-admin-approval";
 import { registerEffectiveSetupPreviewRoutes } from "./payroll-setup-effective-routes";
 import { registerPayrollSetupReadinessRoutes } from "./payroll-setup-readiness";
+import { registerPayrollHistoricalSalaryReviewRoutes } from "./payroll-historical-salary-review";
 import { registerProdPayrollDraftRoutes } from "./payroll-prod-draft-routes";
 import { registerPayrollProdConnectionPreflightRoutes } from "./payroll-prod-connection-preflight";
 import { payrollProdDedicatedRequired } from "./payroll-prod-db";
@@ -77,6 +78,7 @@ registerPayrollKasbonAutoRoutes(router);
 registerPayrollSuperAdminApprovalRoutes(router);
 registerEffectiveSetupPreviewRoutes(router);
 registerPayrollSetupReadinessRoutes(router);
+registerPayrollHistoricalSalaryReviewRoutes(router);
 
 router.get("/payroll/runs", async (req: PayrollRequest, res): Promise<void> => {
   const companyId = req.payrollCompanyId!;

@@ -26,6 +26,16 @@ beforeEach(()=>{
  vi.stubGlobal("fetch",vi.fn(async (url:string,init?:RequestInit)=>{
   const u=new URL(String(url),"http://localhost");const method=init?.method??"GET";
   payloads.push({method,path:u.pathname,body:init?.body?JSON.parse(String(init.body)):null});
+  if(u.pathname==="/api/payroll/historical-salary-review")return response({
+    companyId:1,year:Number(u.searchParams.get("year")),month:Number(u.searchParams.get("month")),
+    effectiveThrough:"2026-11-30",readOnly:true,reviewRequired:true,canBulkImport:false,canApply:false,
+    canPay:false,canPostJournal:false,
+    summary:{employeeCount:1,candidatesNeedingHrConfirmation:1,noHistoricalSource:0,
+      invalidHistoricalSource:0,alreadyConfigured:0,historicalKasbonNeedsReview:1},
+    rows:[{employeeId:61,employeeName:"QA TEST",sourceRunId:31,sourceYear:2026,sourceMonth:6,
+      proposedBaseSalary:"3000000.00",historicalKasbonNeedsReview:true,alreadyConfigured:false,
+      status:"NEEDS_HR_CONFIRMATION"}],
+  });
   if(u.pathname==="/api/payroll/components/employees")return response({companyId:1,canEdit:true,employees:[{id:61,firstName:"QA",lastName:"TEST"}]});
   if(u.pathname==="/api/payroll/components/61"&&method==="GET")return response({
    companyId:1,employeeId:61,effectiveFrom:stored?"2026-11-01":null,
@@ -48,6 +58,18 @@ describe("Standalone Payroll PROD compensation UI",()=>{
   render(<PayrollStandaloneComponents/>);
   expect(screen.getByText(/Pilih satu perusahaan/)).toBeTruthy();
   expect(payloads).toHaveLength(0);
+ });
+ it("pre-fills only historical base salary for HR review, never auto-saves or copies kasbon",async()=>{
+   render(<PayrollStandaloneComponents/>);
+   const btn=await screen.findByRole("button",{name:"Isi ke formulir"});
+   await waitFor(()=>expect((btn as HTMLButtonElement).disabled).toBe(false));
+   fireEvent.click(btn);
+   await waitFor(()=>expect((screen.getByLabelText("Gaji Pokok") as HTMLInputElement).value).toBe("3000000.00"));
+   expect((screen.getByLabelText("Potongan Kasbon / Cicilan Gaji") as HTMLInputElement).value).toBe("");
+   expect((screen.getByLabelText("Tunjangan (termasuk uang makan)") as HTMLInputElement).value).toBe("");
+   expect(screen.getByText(/Gaji Pokok historis hanya terisi di formulir/)).toBeTruthy();
+   expect((screen.getByRole("button",{name:"Simpan Gaji & Seluruh Potongan"}) as HTMLButtonElement).disabled).toBe(true);
+   expect(payloads.filter(x=>x.method!=="GET")).toHaveLength(0);
  });
  it("requires seven verified values and a kasbon source before enabling Save",async()=>{
   render(<PayrollStandaloneComponents/>);

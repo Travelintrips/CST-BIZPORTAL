@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useCompany } from "@/contexts/CompanyContext";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { PayrollKasbonAutoPlanPanel } from "./payroll-kasbon-auto-plan";
+import { PayrollHistoricalSalaryReview, type HistoricalCandidate } from "./PayrollHistoricalSalaryReview";
 
 const fields = [
   {key:"baseSalary", label:"Gaji Pokok"},
@@ -53,6 +54,7 @@ export default function PayrollStandaloneComponents(){
   const validCompany=companyId!==null&&Number.isSafeInteger(companyId)&&companyId>0?companyId:null;
   const [employees,setEmployees]=useState<Employee[]>([]);
   const [selected,setSelected]=useState("");
+  const pendingHistorical=useRef<{companyId:number;employeeId:number;baseSalary:string}|null>(null);
   const [values,setValues]=useState<Values>(blank);
   const [effectiveFrom,setEffectiveFrom]=useState(initialDate);
   const [notes,setNotes]=useState("");
@@ -66,6 +68,7 @@ export default function PayrollStandaloneComponents(){
   const [lastReadback,setLastReadback]=useState<null|{gross:string;deductions:string;net:string}>(null);
   useEffect(()=>{
     let alive=true;
+    pendingHistorical.current=null;
     setEmployees([]);setSelected("");setValues(blank());setCanEdit(false);
     setCanConfigureAutoKasbon(false);setAutoKasbonPreview(null);
     setNotes("");setError("");setNotice("");setLastReadback(null);
@@ -92,9 +95,20 @@ export default function PayrollStandaloneComponents(){
         if(d.companyId!==validCompany||d.employeeId!==Number(selected))throw Error("Data karyawan tidak sesuai.");
         setEffectiveFrom(d.effectiveFrom??initialDate());
         setNotes(d.notes??"");
-        setValues(Object.fromEntries(fields.map(f=>[f.key,d.values[f.key]??""])) as Values);
+        const next=Object.fromEntries(fields.map(f=>[f.key,d.values[f.key]??""])) as Values;
+        const proposal=pendingHistorical.current;
+        if(proposal?.companyId===validCompany && proposal.employeeId===Number(selected)){
+          if(!d.effectiveFrom && d.values.baseSalary===null){
+            next.baseSalary=proposal.baseSalary;
+            setNotice("Usulan Gaji Pokok historis hanya terisi di formulir. Verifikasi HRD dan lengkapi semua potongan sebelum menyimpan.");
+          }else{
+            setNotice("Gaji telah dikonfigurasi. Nilai tersimpan tidak ditimpa oleh referensi historis.");
+          }
+          pendingHistorical.current=null;
+        }
+        setValues(next);
       })
-      .catch(e=>{if(alive)setError(e instanceof Error?e.message:"Komponen gaji tidak dapat dibaca.")})
+      .catch(e=>{if(alive){pendingHistorical.current=null;setError(e instanceof Error?e.message:"Komponen gaji tidak dapat dibaca.");}})
       .finally(()=>{if(alive)setLoading(false)});
     return()=>{alive=false};
   },[selected,validCompany]);
@@ -111,6 +125,23 @@ export default function PayrollStandaloneComponents(){
     (!canConfigureAutoKasbon || kasbon===0n)&&
     calc.gross>0n&&cents(values.baseSalary)!>0n&&calc.net>=0n&&
     (kasbon===0n||((notes.trim().length>=5)&&notes.length<=500));
+  function useHistoricalCandidate(candidate:HistoricalCandidate,_year:number,_month:number){
+    if(validCompany===null||!canEdit||!employees.some(e=>e.id===candidate.employeeId)||
+       candidate.status!=="NEEDS_HR_CONFIRMATION"||!candidate.proposedBaseSalary)return;
+    const target=String(candidate.employeeId);
+    if(selected===target){
+      if(values.baseSalary.trim()){
+        setNotice("Gaji Pokok sudah terisi di formulir; tidak ditimpa otomatis.");
+      }else{
+        setValues(old=>({...old,baseSalary:candidate.proposedBaseSalary!}));
+        setNotice("Gaji Pokok historis hanya diusulkan di formulir; belum tersimpan. Wajib verifikasi HRD.");
+      }
+      return;
+    }
+    pendingHistorical.current={companyId:validCompany,employeeId:candidate.employeeId,
+      baseSalary:candidate.proposedBaseSalary};
+    setSelected(target);
+  }
   async function save(){
     if(!ready||validCompany===null||!selected||!calc)return;
     if(!window.confirm(
@@ -149,10 +180,13 @@ export default function PayrollStandaloneComponents(){
       {validCompany!==null?" (ID "+validCompany+")":""}</p>
     {error&&<div role="alert" className="rounded-md border border-red-500 p-3 text-sm text-red-500">{error}</div>}
     {notice&&<div role="status" className="rounded-md border p-3 text-sm">{notice}</div>}
-    {validCompany!==null&&<section className="space-y-4 rounded-lg border p-4">
+    {validCompany!==null&&<PayrollHistoricalSalaryReview key={validCompany}
+      companyId={validCompany} canPrefill={canEdit&&!loading&&!busy}
+      onPrefill={useHistoricalCandidate}/>}
+    {validCompany!==null&&<section id="payroll-employee-form" className="space-y-4 rounded-lg border p-4">
       <label className="block text-sm">Karyawan aktif
         <select aria-label="Karyawan Payroll" className="mt-1 w-full rounded border bg-background p-2" value={selected}
-          disabled={busy||loading} onChange={e=>setSelected(e.target.value)}>
+          disabled={busy||loading} onChange={e=>{pendingHistorical.current=null;setSelected(e.target.value)}}>
           <option value="">Pilih karyawan...</option>
           {employees.map(e=><option key={e.id} value={e.id}>{e.firstName} {e.lastName} (#{e.id})</option>)}
         </select>
