@@ -36,6 +36,28 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
           (SELECT count(*)::int FROM public.bank_reconciliation_audit a WHERE a.action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED') AS audit_count
         FROM sport_center.payment_settlement_batches b WHERE b.id=5738`);
       expect(inspect.rows[0]).toMatchObject({status:"reversed",reversal_count:1,old_reversed:4,audit_count:1});
+      // Verify actual debit/credit directions and immutable source journal,
+      // not merely the existence of a posted compensation record.
+      const lines = await conn.query(`
+        SELECT j.id, j.reversal_of_id, j.status, l.line_type, l.account_code, l.amount::numeric AS amount
+        FROM sport_center.accounting_journals j
+        JOIN sport_center.accounting_journal_lines l ON l.journal_id=j.id
+        WHERE j.id=7207 OR j.reversal_of_id=7207
+        ORDER BY j.id, l.account_code
+      `);
+      const original = lines.rows.filter((r:any) => r.id===7207);
+      const reversal = lines.rows.filter((r:any) => r.reversal_of_id===7207);
+      expect(original).toHaveLength(2);
+      expect(reversal).toHaveLength(2);
+      expect(original.map((r:any) => [r.account_code,r.line_type,Number(r.amount)]))
+        .toEqual([["1001","debit",923700],["4001","credit",923700]]);
+      expect(reversal.map((r:any) => [r.account_code,r.line_type,Number(r.amount)]))
+        .toEqual([["1001","credit",923700],["4001","debit",923700]]);
+      expect(reversal.every((r:any) => r.status==="posted")).toBe(true);
+      const bankAfter = await conn.query("SELECT status, reconciliation_status, review_code FROM public.bank_mutations WHERE id=434464");
+      expect(bankAfter.rows[0]).toMatchObject({
+        status:"unmatched",reconciliation_status:"unmatched",review_code:"QRIS_MEMBERSHIP_CORRECTION_PENDING",
+      });
     } finally {await conn.query("ROLLBACK"); await conn.end();}
     const check = new pg.Client({connectionString:local});
     await check.connect();
