@@ -12,6 +12,7 @@ on:
       - "artifacts/api-server/src/__tests__/qris292-existing-approval-bridge.test.ts"
       - "artifacts/api-server/src/routes/bank-reconciliation.ts"
       - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-group-identity.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql"
       - ".github/workflows/qris292-isolated-postgres.yml"
@@ -56,6 +57,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Load isolated synthetic fixture
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-isolated-postgres.sql
+      - name: Load unchanged CST-DEV owner group-identity function
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-group-identity.sql
       - name: Mirror CST-DEV journal column types in isolated fixture
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql
       - name: Install CST-DEV lifecycle guards in isolated fixture
