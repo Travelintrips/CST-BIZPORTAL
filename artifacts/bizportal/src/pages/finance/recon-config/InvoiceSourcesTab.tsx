@@ -87,6 +87,16 @@ type GmailCandidate = {
   updatedAt: string;
 };
 
+type GmailVerificationResult = {
+  ok: boolean;
+  companyId: number;
+  email: string;
+  verifiedAt: string;
+  verifiedScope: "gmail_profile_only";
+  inboxScanned: false;
+  invoiceImported: false;
+};
+
 type SyncResult = {
   ok: boolean;
   email: string;
@@ -385,6 +395,11 @@ export default function InvoiceSourcesTab() {
     void loadData();
   }, [loadData]);
 
+  // A verification notice must not survive a switch to another company.
+  useEffect(() => {
+    setNotice(null);
+  }, [companyId]);
+
   const connect = async () => {
     if (!companyId) return;
 
@@ -424,6 +439,42 @@ export default function InvoiceSourcesTab() {
           ? err.message
           : "Gagal memulai koneksi Gmail.",
       );
+      setAction(null);
+    }
+  };
+
+  const verifyConnection = async () => {
+    if (!companyId) return;
+
+    setAction("verify");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const response = await fetch(
+        "/api/recon-classification/invoice-sources/gmail/verify-connection",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ company_id: companyId }),
+        },
+      );
+      const verified = await readJson<GmailVerificationResult>(response);
+      if (!verified.ok || verified.companyId !== companyId
+          || verified.verifiedScope !== "gmail_profile_only"
+          || verified.inboxScanned !== false
+          || verified.invoiceImported !== false) {
+        throw new Error("Identitas perusahaan atau hasil pemeriksaan Gmail tidak sesuai.");
+      }
+      setNotice(
+        `Gmail ${verified.email} terverifikasi untuk perusahaan ID ${companyId}. Hanya profil Gmail diperiksa; inbox dan invoice belum diproses.`,
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Koneksi Gmail belum dapat diverifikasi.",
+      );
+    } finally {
       setAction(null);
     }
   };
@@ -877,6 +928,20 @@ export default function InvoiceSourcesTab() {
                   </Button>
                 ) : (
                   <>
+                    <Button
+                      variant="outline"
+                      onClick={() => void verifyConnection()}
+                      disabled={action !== null || !status.oauthConfigured}
+                      className="gap-2 border-slate-600"
+                    >
+                      {action === "verify" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      Verifikasi koneksi (tanpa impor)
+                    </Button>
+
                     <Button
                       onClick={() => void sync()}
                       disabled={
