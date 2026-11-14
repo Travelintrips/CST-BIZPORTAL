@@ -35,6 +35,14 @@ VALUES(1,'1-1023-CST','Bank Mandiri Ciputat','ASSET',true,false,true),
       (1,'1-1024-CST','Payment Clearing Sport Center / QRIS','ASSET',true,false,true),
       (1,'5-3050-CST','Beban MDR QRIS','EXPENSE',true,false,true);
 
+-- Bind disposable bank-account row to its matching verified COA.
+-- This mirrors the existing owner bank mapping; no PROD schema changes.
+ALTER TABLE public.company_bank_accounts ADD COLUMN coa_id integer;
+UPDATE public.company_bank_accounts SET coa_id=(
+  SELECT id FROM public.chart_of_accounts
+  WHERE company_id=1 AND code='1-1023-CST'
+) WHERE id=17;
+
 -- Empty period lock master: this synthetic November 2026 period is not locked.
 -- Production locks are NEVER exported or modified by this CI fixture.
 CREATE TABLE sport_center.accounting_period_locks (
