@@ -1,0 +1,88 @@
+name: QRIS #292 Isolated PostgreSQL Writer Gate
+on:
+  pull_request:
+    paths:
+      - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrection.ts"
+      - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrectionCoordinator.ts"
+      - "artifacts/api-server/src/lib/reconciliation/issue292OwnerRuleGate.ts"
+      - "artifacts/api-server/src/lib/reconciliation/issue292FinancePrincipalGate.ts"
+      - "artifacts/api-server/src/__tests__/qris292-owner-rule-gate.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-real-owner-stack.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-owner-builder-contract.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-existing-approval-bridge.test.ts"
+      - "artifacts/api-server/src/routes/bank-reconciliation.ts"
+      - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-group-identity.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-builder-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-support-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-posting-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-posting-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-positive-schema.sql"
+      - "artifacts/api-server/src/__tests__/qris292-real-owner-positive.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-atomic-owner-e2e.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-real-owner-function-canary.test.ts"
+      - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
+      - "scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql"
+      - ".github/workflows/qris292-isolated-postgres.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: qris292_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolated_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qris292_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QRIS292_ISOLATED_PG_URL: postgresql://postgres:isolated_ci_only@127.0.0.1:5432/qris292_test
+      PGPASSWORD: isolated_ci_only
+      NODE_ENV: test
+      APP_ENV: development
+      SUPABASE_DATABASE_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Load isolated synthetic fixture
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-isolated-postgres.sql
+      - name: Load unchanged CST-DEV owner group-identity function
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-group-identity.sql
+      - name: Load unchanged CST-DEV owner batch builder functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-builder-functions.sql
+      - name: Mirror CST-DEV journal column types in isolated fixture
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql
+      - name: Install CST-DEV lifecycle guards in isolated fixture
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql
+      - name: Exercise real SQL writer and rollback
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-isolated-pg-writer.test.ts src/__tests__/qris-correction-writer-preconditions.test.ts src/__tests__/qris292-owner-builder-contract.test.ts src/__tests__/qris292-existing-approval-bridge.test.ts src/__tests__/qris292-owner-rule-gate.test.ts src/__tests__/qris292-real-owner-function-canary.test.ts
+      - name: Load unchanged CST-DEV dependent owner SQL functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-support-functions.sql
+      - name: Verify genuine owner SQL stack and MDR arithmetic
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-real-owner-stack.test.ts
+      - name: Extend only disposable PG fixture to real owner schema
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-positive-schema.sql
+      - name: Install genuine CST-DEV journal approval, posting and period lock functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-posting-functions.sql
+      - name: Execute genuine normal and supplemental owner writers then rollback
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-real-owner-positive.test.ts src/__tests__/qris292-atomic-owner-e2e.test.ts

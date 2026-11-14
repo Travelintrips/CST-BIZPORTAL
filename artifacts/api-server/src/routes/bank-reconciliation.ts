@@ -1,5 +1,12 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { assertIssue292OwnerRuleParity } from "../lib/reconciliation/issue292OwnerRuleGate";
+import { isIssue292ScopedFinanceSession } from "../lib/reconciliation/issue292FinancePrincipalGate";
+import {
+  runAtomicCanonicalSettlementCorrection,
+  rebuildIssue292WithOwnerFunctions,
+} from "../lib/reconciliation/canonicalSettlementCorrectionCoordinator";
 import { inspectPostedUnlinkedBankCohorts } from "../lib/reconciliation/postedUnlinkedSettlementPreflight";
 import { evaluateReconRules, type ReconRule } from "../lib/reconciliation/reconRuleEngine";
 import { isReconRuleAutoApprovalAllowed, canRunLegacyKasScRuleBackfill } from "../lib/reconciliation/autoApprovalPolicy";
@@ -3426,7 +3433,8 @@ async function assertApprovalCandidateExists(
   }
 }
 
-async function approveCanonicalSettlementLink(
+/** @internal Existing canonical link-only approval. Exported for isolated finance E2E regression; no HTTP route added. */
+export async function approveCanonicalSettlementLink(
   client: ApprovalClient,
   mutationId: number,
   settlementId: number,
@@ -3481,7 +3489,14 @@ async function approveCanonicalSettlementLink(
   }
 
   const settlementStatus = String(batch.status ?? "").toLowerCase();
-  const linkedMutationId = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  const linkedMutationRaw = batch.bank_mutation_id ?? batch.canonical_bank_mutation_id;
+  // node-postgres returns int8/bigint as strings; comparing directly to the
+  // numeric request falsely rejects safe idempotent canonical link retries.
+  const linkedMutationId = linkedMutationRaw == null ? null : Number(linkedMutationRaw);
+  if (linkedMutationId !== null
+    && (!Number.isSafeInteger(linkedMutationId) || linkedMutationId <= 0)) {
+    throw new ApprovalError("Canonical settlement bank mutation ID is invalid.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
+  }
   const mutationAmount = Number(mutation.amount);
   const settlementAmount = Number(batch.net_amount);
   const amountMatches =
@@ -3691,6 +3706,82 @@ async function approveCanonicalSettlementLink(
     [mutationId, actor.email, JSON.stringify({ settlement_id: settlementId, candidate_source: "sport_center.payment_settlement_batches", link_only: true, idempotency_key: idempotencyKey })],
   );
   return { ok: true, status: "approved", settlement_id: settlementId, journal_entry_id: null, idempotent: false };
+}
+
+/**
+ * Issue #292 internal-only integration. DO NOT expose this as an HTTP route.
+ * A caller must already have authenticated the CST actor and verified the
+ * company scope. This bridge uses one physical PostgreSQL connection for
+ * the existing Drizzle reversal/owner functions and existing canonical bank
+ * approval. No duplicate generic bank journal is created.
+ *
+ * The callback is deliberately unreachable from an API endpoint until the
+ * actual DEV end-to-end finance gate and deployment-source parity have passed.
+ */
+async function runIssue292CorrectionWithCanonicalApproval(
+  client: ApprovalClient,
+  actor: ApprovalActor,
+) {
+  if (!actor.email || actor.companyId !== 1) {
+    throw new ApprovalError("Issue #292 requires an authenticated CST actor.", 403, "COMPANY_SCOPE_FORBIDDEN");
+  }
+  const dialect = new PgDialect();
+  const tx = {
+    execute: async (statement: Parameters<PgDialect["sqlToQuery"]>[0]) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return client.query(compiled.sql, compiled.params);
+    },
+  };
+  const transactionalClient = {
+    transaction: async <T>(callback: (scope: typeof tx) => Promise<T>): Promise<T> => {
+      await client.query("BEGIN");
+      try {
+        // Same connection and transaction, before the first finance write.
+        // DEV must provide matching historical owner-rule evidence, not a
+        // generic 0.3% Mandiri rule which would calculate wrong journals.
+        if (!(await isIssue292ScopedFinanceSession(client))) {
+          throw new ApprovalError(
+            "Issue #292 finance executor must use a verified scoped application principal.",
+            403,
+            "ISSUE292_FINANCE_PRINCIPAL_UNVERIFIED",
+          );
+        }
+        await assertIssue292OwnerRuleParity(client);
+        const value = await callback(tx);
+        await client.query("COMMIT");
+        return value;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
+    },
+  } as unknown as Parameters<typeof runAtomicCanonicalSettlementCorrection>[0];
+  return runAtomicCanonicalSettlementCorrection(
+    transactionalClient,
+    {
+      settlementId: 5738,
+      expectedBankMutationId: 434464,
+      replacementPaymentIds: [859, 860, 861, 862],
+      actor: actor.email,
+      reason: "Audited Issue 292 historical QRIS membership correction for November 2026",
+    },
+    {
+      rebuildBothDatedBatches: (scope, reversal) =>
+        rebuildIssue292WithOwnerFunctions(scope, reversal, actor.email),
+      approveBothCanonicalBankMatches: async (_scope, batches) => {
+        const nov4 = await approveCanonicalSettlementLink(
+          client, 434462, batches.nov4BatchId, null, actor, "issue292:434462",
+        );
+        const nov5 = await approveCanonicalSettlementLink(
+          client, 434464, batches.nov5BatchId, null, actor, "issue292:434464",
+        );
+        if (nov4.status !== "approved" || nov5.status !== "approved") {
+          throw new Error("Issue #292 canonical bank approval did not complete.");
+        }
+        return {nov4,nov5};
+      },
+    },
+  );
 }
 
 async function approveBankMutation(
@@ -6453,6 +6544,7 @@ async function ensureCanonicalQrisSettlement(
     provider_code: string | null;
     bank_account_id: string | null;
     expected_settlement_date: string | null;
+    actual_h_plus_one_date: string | null;
     settlement_rule_version: string | null;
     settlement_status: string | null;
     payment_status: string | null;
@@ -6465,6 +6557,7 @@ async function ensureCanonicalQrisSettlement(
             lower(btrim(p.payment_provider::text)) as provider_code,
             p.bank_account_id::text as bank_account_id,
             p.expected_settlement_date::text as expected_settlement_date,
+            ((p.paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date,
             p.settlement_rule_version,
             p.settlement_status::text as settlement_status,
             p.status::text as payment_status
@@ -6500,6 +6593,7 @@ async function ensureCanonicalQrisSettlement(
       || String(payment.provider_code ?? "").trim().toLowerCase() !== providerCode
       || String(payment.bank_account_id ?? "").trim() !== bankAccountId
       || calendarDateValue(payment.expected_settlement_date) !== groupDate
+      || payment.actual_h_plus_one_date !== groupDate
       || String(payment.settlement_rule_version ?? "").trim() !== ruleVersion
       || String(payment.payment_status ?? "").toLowerCase() !== "confirmed"
       || String(payment.settlement_status ?? "unsettled").toLowerCase() !== "unsettled",
@@ -7149,13 +7243,15 @@ async function prepareCanonicalQrisSettlement(
     company_id: number | null;
     bank_account_id: string | null;
     expected_settlement_date: string | null;
+    actual_h_plus_one_date: string | null;
     settlement_rule_version: string | null;
     settlement_status: string | null;
   }>(
     `select id, amount::text, status::text, payment_method,
             payment_provider::text, company_id, bank_account_id::text,
-            expected_settlement_date::text, settlement_rule_version,
-            settlement_status::text
+            expected_settlement_date::text,
+            ((paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date,
+            settlement_rule_version, settlement_status::text
        from sport_center.sport_payments
       where id = any($1::int[])
       order by id
@@ -7191,6 +7287,7 @@ async function prepareCanonicalQrisSettlement(
       || String(payment.payment_provider ?? "").trim().toLowerCase() !== providerCode
       || String(payment.bank_account_id ?? "").trim() !== externalBankAccountId
       || String(payment.expected_settlement_date ?? "").slice(0, 10) !== mutationDate
+      || payment.actual_h_plus_one_date !== mutationDate
       || String(payment.settlement_rule_version ?? "").trim() !== settlementRuleVersion
       || String(payment.settlement_status ?? "unsettled").toLowerCase() !== "unsettled"
     ) {

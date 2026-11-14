@@ -1,0 +1,38 @@
+-- Synthetic isolated fixture: mirrors column names and SQL data types from CST-DEV journal catalog as of 2026-11-14.
+-- NOT a full production schema dump; does not reproduce all constraints/triggers.
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "booking_id" integer;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "order_number" text DEFAULT 'TEST';
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "debit_account" text DEFAULT 'TEST';
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "credit_revenue_account" text DEFAULT 'TEST';
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "credit_ppn_account" text DEFAULT 'TEST';
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "journal_date" text DEFAULT 'TEST';
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "created_at" timestamptz;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "payment_id" integer;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "payment_method" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "payment_provider" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "payment_type" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "bank_account_id" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "provider_reference" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "provider_order_id" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "merchant_trade_no" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "provider_trade_no" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "company_id" integer;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "voided_by" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "voided_at" timestamptz;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "reversed_by" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "reversed_at" timestamptz;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "updated_at" timestamptz;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "source_schema" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "source_table" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "source_id" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "settlement_id" bigint;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "settlement_date" date;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "provider_name" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "provider_id" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "expected_settlement_date" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "settlement_status" text;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "mdr_rate" numeric;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "mdr_amount" numeric;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "pph_rate" numeric;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "pph_amount" numeric;
+ALTER TABLE sport_center.accounting_journals ADD COLUMN "net_amount" numeric;
