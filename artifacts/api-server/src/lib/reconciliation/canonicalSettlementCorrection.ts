@@ -332,7 +332,7 @@ export async function reverseCanonicalSettlementForCorrection(
     }
     if (postedUnlinked) {
       const bankIdentity = await tx.execute(sql`
-        SELECT m.id,m.company_id,m.amount,m.transaction_date,
+        SELECT m.id,m.company_id,m.amount,m.transaction_date::text AS transaction_date,
                m.source_classification,m.direction,m.approved_at,m.posted_at,
                a.account_number,a.company_id AS account_company_id,a.is_active
         FROM public.bank_mutations m
@@ -530,11 +530,11 @@ export async function reverseCanonicalSettlementForCorrection(
         'CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED',
         ${actor},
         jsonb_build_object(
-          'settlement_id', ${settlementId},
-          'original_settlement_journal_id', ${journalId},
-          'reversal_settlement_journal_id', ${reversalJournalId},
+          'settlement_id', ${settlementId}::bigint,
+          'original_settlement_journal_id', ${journalId}::integer,
+          'reversal_settlement_journal_id', ${reversalJournalId}::integer,
           'replacement_payment_ids', ${JSON.stringify(replacementPaymentIds)}::jsonb,
-          'reason', ${reason},
+          'reason', ${reason}::text,
           'old_payment_ids', ${JSON.stringify(
             activeItemsResult.rows.map((row) => Number((row as Record<string, unknown>).payment_id)),
           )}::jsonb
