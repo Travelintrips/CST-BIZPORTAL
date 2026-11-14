@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +86,16 @@ type GmailCandidate = {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type GmailVerificationResult = {
+  ok: boolean;
+  companyId: number;
+  email: string;
+  verifiedAt: string;
+  verifiedScope: "gmail_profile_only";
+  inboxScanned: false;
+  invoiceImported: false;
 };
 
 type SyncResult = {
@@ -249,6 +260,7 @@ export default function InvoiceSourcesTab() {
     useState<string | null>(null);
   const [notice, setNotice] =
     useState<string | null>(null);
+  const verifyRequestSerial = useRef(0);
 
   const companyId = useMemo(() => {
     if (isConsolidated) return null;
@@ -385,6 +397,14 @@ export default function InvoiceSourcesTab() {
     void loadData();
   }, [loadData]);
 
+  // Invalidate in-flight profile checks when the active company changes:
+  // a result from tenant A must never be shown while tenant B is selected.
+  useEffect(() => {
+    verifyRequestSerial.current += 1;
+    setNotice(null);
+    setAction((current) => current === "verify" ? null : current);
+  }, [companyId]);
+
   const connect = async () => {
     if (!companyId) return;
 
@@ -425,6 +445,46 @@ export default function InvoiceSourcesTab() {
           : "Gagal memulai koneksi Gmail.",
       );
       setAction(null);
+    }
+  };
+
+  const verifyConnection = async () => {
+    if (!companyId) return;
+    const requestSerial = ++verifyRequestSerial.current;
+
+    setAction("verify");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const response = await fetch(
+        "/api/recon-classification/invoice-sources/gmail/verify-connection",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ company_id: companyId }),
+        },
+      );
+      const verified = await readJson<GmailVerificationResult>(response);
+      if (requestSerial !== verifyRequestSerial.current) return;
+      if (!verified.ok || verified.companyId !== companyId
+          || verified.verifiedScope !== "gmail_profile_only"
+          || verified.inboxScanned !== false
+          || verified.invoiceImported !== false) {
+        throw new Error("Identitas perusahaan atau hasil pemeriksaan Gmail tidak sesuai.");
+      }
+      setNotice(
+        `Gmail ${verified.email} terverifikasi untuk perusahaan ID ${companyId}. Hanya profil Gmail diperiksa; inbox dan invoice belum diproses.`,
+      );
+    } catch (err) {
+      if (requestSerial === verifyRequestSerial.current) {
+        setError(
+          err instanceof Error ? err.message : "Koneksi Gmail belum dapat diverifikasi.",
+        );
+      }
+    } finally {
+      if (requestSerial === verifyRequestSerial.current) setAction(null);
     }
   };
 
@@ -877,6 +937,20 @@ export default function InvoiceSourcesTab() {
                   </Button>
                 ) : (
                   <>
+                    <Button
+                      variant="outline"
+                      onClick={() => void verifyConnection()}
+                      disabled={action !== null || !status.oauthConfigured}
+                      className="gap-2 border-slate-600"
+                    >
+                      {action === "verify" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      Verifikasi koneksi (tanpa impor)
+                    </Button>
+
                     <Button
                       onClick={() => void sync()}
                       disabled={
