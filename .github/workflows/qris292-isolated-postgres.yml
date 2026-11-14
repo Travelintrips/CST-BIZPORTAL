@@ -6,13 +6,15 @@ on:
       - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrectionCoordinator.ts"
       - "artifacts/api-server/src/lib/reconciliation/issue292OwnerRuleGate.ts"
       - "artifacts/api-server/src/lib/reconciliation/issue292FinancePrincipalGate.ts"
-      - "artifacts/api-server/src/__tests__/qris292-owner-rule-gate.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-owner-rule-gate.test.ts src/__tests__/qris292-real-owner-function-canary.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-owner-builder-contract.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-existing-approval-bridge.test.ts"
       - "artifacts/api-server/src/routes/bank-reconciliation.ts"
       - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
       - "scripts/tests/fixtures/qris292-real-owner-group-identity.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-builder-functions.sql"
+      - "artifacts/api-server/src/__tests__/qris292-real-owner-function-canary.test.ts"
       - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql"
       - ".github/workflows/qris292-isolated-postgres.yml"
@@ -59,6 +61,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-isolated-postgres.sql
       - name: Load unchanged CST-DEV owner group-identity function
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-group-identity.sql
+      - name: Load unchanged CST-DEV owner batch builder functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-builder-functions.sql
       - name: Mirror CST-DEV journal column types in isolated fixture
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql
       - name: Install CST-DEV lifecycle guards in isolated fixture
