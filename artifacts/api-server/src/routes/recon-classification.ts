@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
+import { evaluateReconRules, validateReconRule, type ReconRule } from "../lib/reconciliation/reconRuleEngine.js";
 
 const router = Router();
 
@@ -336,11 +337,92 @@ router.delete("/recon-classification/ai-rules/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+// Read-only preview of the *unsaved editor draft*. Reuse the operational
+// evaluator; never create candidates, modify rules, or approve/post journals.
 router.post("/recon-classification/ai-rules/preview", async (req, res) => {
+  const cid = companyId(req);
+  const bankAccountId = reconciliationAccountId(req);
+  if (!cid || !bankAccountId) {
+    res.status(400).json({ error: "company_id dan bank_account_id wajib" });
+    return;
+  }
+  if (!(await validateReconciliationAccount(cid, bankAccountId))) {
+    res.status(400).json({ error: "Akun Rekonsiliasi tidak valid atau tidak aktif" });
+    return;
+  }
+
+  const b = req.body ?? {};
+  const description = String(b.description ?? "").trim();
+  const conditions = b.conditions;
+  if (!description || !Array.isArray(conditions) || conditions.length === 0 ||
+      conditions.length > 30 || conditions.some((c: any) =>
+        !c || typeof c.field !== "string" || typeof c.operator !== "string" ||
+        typeof c.value !== "string" || !c.value.trim())) {
+    res.status(400).json({ error: "Deskripsi dan kondisi rule yang valid wajib diisi" });
+    return;
+  }
+  const amount = b.amount == null || b.amount === "" ? 0 : Number(b.amount);
+  const referenceAmount = b.reference_amount == null || b.reference_amount === ""
+    ? null : Number(b.reference_amount);
+  const tolerance = Number(b.amount_tolerance ?? 0);
+  const confidence = Number(b.confidence ?? 0.8);
+  if (!Number.isFinite(amount) || amount < 0 ||
+      (referenceAmount !== null && (!Number.isFinite(referenceAmount) || referenceAmount < 0)) ||
+      !Number.isFinite(tolerance) || tolerance < 0 ||
+      (tolerance > 0 && referenceAmount === null) ||
+      !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    res.status(400).json({ error: "Nominal, toleransi, atau confidence tidak valid" });
+    return;
+  }
+
+  const flow = String(b.action_flow ?? "").toUpperCase();
+  // The UI must supply an explicit direction where available. For the current
+  // editor (which has no direction field), infer the preview direction from flow.
+  const direction = b.direction === "IN" || b.direction === "OUT"
+    ? b.direction : flow === "INCOME_ALLOCATION" ? "IN" : "OUT";
+  const targetType = targetTypeForInput(b) as ReconRule["targetType"];
+  const draft: ReconRule = {
+    id: -1, companyId: cid, name: String(b.rule_name ?? "Draft rule"),
+    description: null, priority: Number(b.priority ?? 50), isActive: true,
+    direction, bankAccountId, conditionType: "COMPOUND",
+    conditionField: conditions[0].field,
+    conditionOperator: conditions[0].operator,
+    conditionValue: conditions[0].value,
+    conditionsJson: conditions, logic: b.logic === "OR" ? "OR" : "AND",
+    specificity: Number(b.specificity ?? conditions.length),
+    amountTolerance: tolerance, referenceAmount,
+    candidateRequirement: b.candidate_requirement === "required" ? "required" : "not_required",
+    requiresDocumentUpload: Boolean(b.requires_document_upload),
+    taxType: b.tax_type === "ppn_input" || b.tax_type === "ppn_output" ? b.tax_type : "none",
+    targetType, targetId: null,
+    targetCoaCode: b.action_coa_code ?? null,
+    confidenceScore: Math.round(confidence * 100),
+    stopProcessing: true, matchCount: 0, lastMatchedAt: null,
+    createdBy: null, createdAt: "", updatedAt: "",
+  };
+  const errors = validateReconRule(draft);
+  if (errors.length) {
+    res.status(400).json({ error: errors.join("; ") });
+    return;
+  }
+  const result = evaluateReconRules([draft], {
+    description, amount, direction, bankAccountId, companyId: cid,
+    reference: b.reference ? String(b.reference) : null,
+    hasDocumentUpload: Boolean(b.has_document_upload),
+  });
   res.json({
-    matched: false,
-    preview: true,
-    message: "Preview tersimpan di UI; evaluasi produksi menggunakan engine Rule AI saat run matching.",
+    preview: true, previewScope: "draft_only",
+    matched: result.matched,
+    ambiguityCode: result.ambiguityCode ?? null,
+    ambiguityReason: result.ambiguityReason ?? null,
+    documentRequired: result.documentRequired ?? null,
+    evaluated: result.evaluated,
+    matchedConditions: result.reasons ?? [],
+    rule: result.matched ? {
+      id: draft.id, name: draft.name, targetType: result.targetType,
+      targetCoaCode: result.targetCoaCode, confidence: result.confidence,
+      candidateRequirement: draft.candidateRequirement,
+    } : null,
   });
 });
 

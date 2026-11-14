@@ -1225,6 +1225,8 @@ function AiRulesTab() {
       const r = await fetch(`${API}/recon-classification/ai-rules/preview`, { method: "POST",
         credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: previewText, company_id: activeCompanyId ?? null,
+           rule_name: form.name ?? "Draft rule", priority: form.priority ?? 50,
+           direction: form.direction ?? (form.action_flow === "INCOME_ALLOCATION" ? "IN" : "OUT"),
            bank_account_id: reconAccountFilter ? Number(reconAccountFilter) : null,
            amount: previewAmount === "" ? 0 : Number(previewAmount),
           conditions: form.conditions, logic: form.logic, specificity: form.specificity,
@@ -1234,7 +1236,7 @@ function AiRulesTab() {
             candidate_requirement: form.candidate_requirement ?? "not_required",
             requires_document_upload: Boolean(form.requires_document_upload),
             tax_type: form.tax_type ?? "none",
-            has_document_upload: true,
+            has_document_upload: false,
            confidence: form.confidence }) });
       setPreview(await r.json());
     } finally { setPreviewing(false); }
