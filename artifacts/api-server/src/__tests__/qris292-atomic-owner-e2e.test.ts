@@ -101,6 +101,74 @@ describe.skipIf(!url)("Issue #292 entire historical reversal + actual owner rebu
       expect(Number(check.rows[0].old_members)).toBe(4);
       expect(Number(check.rows[0].approved_matches)).toBe(2);
       expect(Number(check.rows[0].net)).toBe(1609500);
+      // Verify manual ledger trace: original journal stays posted and unchanged;
+      // one compensating journal must swap debit and credit on identical COAs.
+      const journalTrace = await client.query(`
+        SELECT j.id,j.reversal_of_id,j.status,l.account_code,l.line_type,
+               l.amount::numeric AS amount
+        FROM sport_center.accounting_journals j
+        JOIN sport_center.accounting_journal_lines l ON l.journal_id=j.id
+        WHERE j.id=7207 OR j.reversal_of_id=7207
+        ORDER BY j.id,l.account_code
+      `);
+      const originalLines=journalTrace.rows.filter(r=>Number(r.id)===7207)
+        .map(r=>[r.account_code,r.line_type,Number(r.amount)]);
+      const compensationLines=journalTrace.rows.filter(r=>Number(r.reversal_of_id)===7207)
+        .map(r=>[r.account_code,r.line_type,Number(r.amount)]);
+      expect(originalLines).toEqual([
+        ["1-1023-CST","debit",923700],
+        ["1-1024-CST","credit",930000],
+        ["5-3050-CST","debit",6300],
+      ]);
+      expect(compensationLines).toEqual([
+        ["1-1023-CST","credit",923700],
+        ["1-1024-CST","debit",930000],
+        ["5-3050-CST","credit",6300],
+      ]);
+      expect(journalTrace.rows.every(r=>r.status==="posted")).toBe(true);
+
+      // No generic bank journal and exactly one approved candidate per bank.
+      const approvals=await client.query(`
+        SELECT m.id,m.status,m.journal_entry_id,
+          (SELECT count(*)::int FROM public.bank_reconciliation_matches x
+            WHERE x.mutation_id=m.id AND x.status='approved') AS approved_count
+        FROM public.bank_mutations m WHERE id IN (434462,434464) ORDER BY id
+      `);
+      expect(approvals.rows.map(r=>[Number(r.id),r.status,r.journal_entry_id,Number(r.approved_count)]))
+        .toEqual([[434462,"approved",null,1],[434464,"approved",null,1]]);
+
+      // Preserve original payment dates and each posted confirmed receipt journal.
+      const sourceIntegrity=await client.query(`
+        SELECT p.id,
+          ((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)::text AS h_plus_one,
+          p.status, p.settlement_status,
+          (SELECT count(*)::int FROM sport_center.accounting_journals j
+             WHERE j.payment_id=p.id AND j.journal_type='payment_confirmed'
+               AND j.status='posted' AND j.is_reversal=false) AS receipts
+        FROM sport_center.sport_payments p
+        WHERE p.id IN (834,843,853,856,858,859,860,861,862)
+        ORDER BY p.id
+      `);
+      expect(sourceIntegrity.rows).toHaveLength(9);
+      expect(sourceIntegrity.rows.map(r=>Number(r.id))).toEqual(
+        [834,843,853,856,858,859,860,861,862],
+      );
+      for(const row of sourceIntegrity.rows){
+        expect(row.h_plus_one).toBe(Number(row.id)<=858?"2026-11-04":"2026-11-05");
+        expect(row.status).toBe("confirmed");
+        expect(row.settlement_status).toBe("settled");
+        expect(Number(row.receipts)).toBe(1);
+      }
+      const history=await client.query(`
+        SELECT status FROM public.bank_reconciliation_matches WHERE id=14449
+      `);
+      expect(history.rows[0]?.status).toBe("superseded");
+      const audit=await client.query(`
+        SELECT count(*)::int AS n FROM public.bank_reconciliation_audit
+        WHERE action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED'
+          AND mutation_id=434464
+      `);
+      expect(audit.rows[0].n).toBe(1);
     } finally {
       await client.query("ROLLBACK").catch(()=>undefined);
       await client.end();
