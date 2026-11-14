@@ -182,9 +182,16 @@ export default function HrdEmployeeDetailPage() {
     } finally { if (epoch === photoEpoch.current) setPhotoBusy(false); }
   };
   async function deactivateEmployee(){
-    if(!scopedDetail?.statusChangeEnabled || scopedDetail.employee.status!=="active" ||
-       !companyId || statusBusy || resignReason.trim().length<10 || resignReason.trim().length>500)
+    if(!scopedDetail || scopedDetail.employee.status!=="active" || !companyId || statusBusy)
       return;
+    if(!scopedDetail.statusChangeEnabled){
+      setStatusError("Pengelolaan resign sedang nonaktif di server. Tidak ada status yang diubah.");
+      return;
+    }
+    if(resignReason.trim().length<10 || resignReason.trim().length>500){
+      setStatusError("Isi alasan atau referensi resign HRD minimal 10 karakter sebelum konfirmasi.");
+      return;
+    }
     if(!window.confirm(
       "Nonaktifkan karyawan ini karena resign?\\n"+
       "Karyawan tidak akan masuk perhitungan Payroll berikutnya. Riwayat gaji dan dokumen tidak akan dihapus."
@@ -248,7 +255,7 @@ export default function HrdEmployeeDetailPage() {
                   placeholder="Contoh: Surat pengunduran diri diterima HRD tanggal ..."/>
               </label>
               <Button variant="outline" size="sm"
-                disabled={!scopedDetail.statusChangeEnabled || statusBusy || resignReason.trim().length<10}
+                disabled={statusBusy}
                 onClick={()=>void deactivateEmployee()}>
                 {statusBusy?"Memproses perubahan...":"Nonaktifkan (Resign)"}
               </Button>

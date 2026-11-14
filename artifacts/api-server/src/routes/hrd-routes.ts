@@ -1,3 +1,4 @@
+import { hrdEmployeeStatusChangeEnabled } from "./hrd-employee-status-gate";
 import { Router, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { getProductionSession, getProductionUser } from "./dev-auth";
@@ -160,8 +161,7 @@ router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {
     res.json({
       companyId, employees,
       // One read-only capability sourced from server settings, never client config.
-      statusChangeEnabled: process.env.APP_ENV?.trim().toLowerCase() === "production" &&
-        process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED === "true",
+      statusChangeEnabled: hrdEmployeeStatusChangeEnabled(),
     });
   } catch (error) {
     req.log.error({ error, companyId }, "HRD employee directory read failed");
@@ -213,7 +213,7 @@ router.get("/hrd/employees/:id", async (req: HrdRequest, res: Response) => {
     });
     if (!data) { res.status(404).json({ message: "Karyawan tidak ditemukan di perusahaan aktif." }); return; }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ companyId, employeeId, ...data, canPay: false, statusChangeEnabled: process.env.APP_ENV?.trim().toLowerCase() === "production" && process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED === "true", photoUploadEnabled: hrdPrivateStorageReady(), ocrEnabled: hrdOcrReady() });
+    res.json({ companyId, employeeId, ...data, canPay: false, statusChangeEnabled: hrdEmployeeStatusChangeEnabled(), photoUploadEnabled: hrdPrivateStorageReady(), ocrEnabled: hrdOcrReady() });
   } catch (error) {
     req.log.error({ error, companyId, employeeId }, "HRD employee detail read failed");
     res.status(503).json({ message: "Rincian HRD belum tersedia." });

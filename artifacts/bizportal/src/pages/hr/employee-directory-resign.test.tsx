@@ -56,14 +56,15 @@ describe("Existing HRD directory resignation action",()=>{
     expect(requests[0][0]).toBe("/api/hrd/employees?companyId=1");
     expect(requests.every(call=>!call[1]||call[1].method===undefined||call[1].method==="GET")).toBe(true);
   });
-  it("shows action but keeps it disabled when status management flag is off",async()=>{
+  it("shortcut remains clickable and explains disabled backend even if server capability is false",async()=>{
     ctx.enabled=false;
     render(<HrdEmployeeDirectory/>);
     const action=await screen.findByRole("button",{name:"Nonaktifkan (Resign)"});
-    expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/perubahan status belum diaktifkan di server/i)).toBeTruthy();
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/Pengelolaan status HRD sedang nonaktif di server/i)).toBeTruthy();
     fireEvent.click(action);
-    expect(ctx.navigations).toHaveLength(0);
+    expect(ctx.navigations).toEqual(["/hr/employees/61"]);
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
   it("filters active versus inactive without mutating either status",async()=>{
     render(<HrdEmployeeDirectory/>);
