@@ -251,7 +251,7 @@ export async function rebuildIssue292WithOwnerFunctions(
           WHERE j.payment_id=p.id AND j.journal_type='payment_confirmed'
             AND j.is_reversal=false AND j.status='posted') AS source_journal_count
       FROM sport_center.sport_payments p
-      WHERE p.id=ANY(${[...cohort.ids]}::integer[])
+      WHERE p.id=ANY(ARRAY[${sql.join(cohort.ids.map(id => sql`${id}`), sql`, `)}]::integer[])
       ORDER BY p.id FOR UPDATE
     `);
     const rows=paymentRows.rows as Array<Record<string,unknown>>;
@@ -277,7 +277,7 @@ export async function rebuildIssue292WithOwnerFunctions(
       batchResult=await tx.execute(sql`
         SELECT sport_center.create_payment_settlement_supplemental_batch(
           1,${provider},${account},${cohort.date}::date,${rule},
-          ${[...cohort.ids]}::integer[],${operator}
+          ARRAY[${sql.join(cohort.ids.map(id => sql`${id}`), sql`, `)}]::integer[],${operator}
         ) AS id
       `);
     } else {
@@ -291,7 +291,7 @@ export async function rebuildIssue292WithOwnerFunctions(
       batchResult=await tx.execute(sql`
         SELECT sport_center.create_payment_settlement_batch(
           ${reference},1,${provider},${account},${cohort.date}::date,
-          ${[...cohort.ids]}::integer[],${operator}
+          ARRAY[${sql.join(cohort.ids.map(id => sql`${id}`), sql`, `)}]::integer[],${operator}
         ) AS id
       `);
     }
