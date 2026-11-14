@@ -17,6 +17,40 @@ const input = {
   reason: "Isolated PostgreSQL verification without modifying DEV or PROD financial data",
 };
 suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
+  it("executes the exact owner canonical-group function for both historical days and rejects missing rule",async()=>{
+    const conn=new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN READ ONLY");
+    try {
+      const q=`SELECT settlement_reference, correlation_id
+        FROM sport_center.canonical_settlement_group_identity(
+          1,'mandiri_direct','1640006707220',$1::date,
+          'PROD-MANDIRI-SC-20260831-v1'
+        )`;
+      const nov4=await conn.query(q,["2026-11-04"]);
+      const nov4Again=await conn.query(q,["2026-11-04"]);
+      const nov5=await conn.query(q,["2026-11-05"]);
+      expect(nov4.rows).toEqual(nov4Again.rows);
+      expect(nov4.rows).toHaveLength(1);
+      expect(nov5.rows).toHaveLength(1);
+      expect(nov4.rows[0].settlement_reference).toMatch(/^SCB1-[a-f0-9]{64}$/);
+      expect(nov4.rows[0].correlation_id).toMatch(/^scb:v1:[a-f0-9]{64}$/);
+      expect(nov4.rows[0].settlement_reference.slice(5))
+        .toBe(nov4.rows[0].correlation_id.slice(7));
+      expect(nov4.rows[0].correlation_id).not.toBe(nov5.rows[0].correlation_id);
+      // Failure is expected and must not open a financial write transaction.
+      await conn.query("SAVEPOINT invalid_input");
+      await expect(conn.query(`SELECT * FROM
+        sport_center.canonical_settlement_group_identity(
+          1,'mandiri_direct','1640006707220',
+          '2026-11-05'::date,''::text)`))
+        .rejects.toThrow("CANONICAL_SETTLEMENT_GROUP_INVALID");
+      await conn.query("ROLLBACK TO SAVEPOINT invalid_input");
+      const count=await conn.query("SELECT count(*)::int AS n FROM sport_center.payment_settlement_batches");
+      expect(count.rows[0].n).toBe(1);
+    } finally { await conn.query("ROLLBACK");await conn.end(); }
+  });
+
   it("rejects real PostgreSQL admin and role-switch identity tuple before finance", async () => {
     const conn=new pg.Client({connectionString:local});
     await conn.connect();
