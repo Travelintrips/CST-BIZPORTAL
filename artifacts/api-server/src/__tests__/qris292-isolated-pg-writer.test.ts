@@ -79,4 +79,48 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
     } finally {await check.end();}
   });
 
+  it("is idempotent for the same bank and payment set, and rejects changed retry identity", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = { execute: async (statement: any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql, compiled.params);
+    }};
+    const client = {transaction: async (callback: any) => callback(tx)} as any;
+    try {
+      const first = await reverseCanonicalSettlementForCorrection(client,input);
+      expect(first.idempotent).toBe(false);
+      const repeated = await reverseCanonicalSettlementForCorrection(client,input);
+      expect(repeated.idempotent).toBe(true);
+      expect(repeated.reversedSettlementJournalId).toBe(first.reversedSettlementJournalId);
+      await expect(reverseCanonicalSettlementForCorrection(client,{
+        ...input, replacementPaymentIds: [856,859,860,861],
+      })).rejects.toThrow("Idempotent reversal request does not match");
+      await expect(reverseCanonicalSettlementForCorrection(client,{
+        ...input, expectedBankMutationId:434462,
+      })).rejects.toThrow("Idempotent reversal request does not match");
+      const check = await conn.query("SELECT count(*)::int AS n FROM sport_center.accounting_journals WHERE reversal_of_id=7207");
+      expect(check.rows[0].n).toBe(1);
+    } finally {await conn.query("ROLLBACK");await conn.end();}
+  });
+
+  it("fails closed for wrong bank transaction date before inserting a reversal journal", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = { execute: async (statement: any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql, compiled.params);
+    }};
+    try {
+      await conn.query("UPDATE public.bank_mutations SET transaction_date='2026-11-06' WHERE id=434464");
+      await expect(reverseCanonicalSettlementForCorrection({
+        transaction: async (callback: any) => callback(tx),
+      } as any,input)).rejects.toThrow("unapproved bank mutation with matching owner/date");
+      const check = await conn.query("SELECT count(*)::int AS n FROM sport_center.accounting_journals WHERE reversal_of_id=7207");
+      expect(check.rows[0].n).toBe(0);
+    } finally {await conn.query("ROLLBACK");await conn.end();}
+  });
+
 });
