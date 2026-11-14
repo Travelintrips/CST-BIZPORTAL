@@ -25,6 +25,16 @@ type Detail = {
   ocrEnabled: boolean;
   audit: Array<{ action: string; created_at: string; actor: string }>;
 };
+type ResignKasbonCheck={
+  companyId:number;employeeId:number;employeeStatus:string;
+  unverifiedCount:number;unverifiedAmount:string;
+  verifiedUnsettledCount:number;verifiedUnsettledAmount:string;
+  activeReservations:number;activeReservationAmount:string;
+  hasUnresolved:boolean;canDeactivate:boolean;checkReadOnly:true;
+};
+const rupiah=(n:string)=>new Intl.NumberFormat("id-ID",{
+  style:"currency",currency:"IDR",maximumFractionDigits:2,
+}).format(Number(n));
 const MAX_BYTES = 5 * 1024 * 1024;
 const IMG_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const DOCUMENT_NAMES: Record<string, string> = {
@@ -48,6 +58,9 @@ export default function HrdEmployeeDetailPage() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [statusError, setStatusError] = useState("");
   const [statusNotice, setStatusNotice] = useState("");
+  const [kasbonCheck,setKasbonCheck]=useState<ResignKasbonCheck|null>(null);
+  const [kasbonLoading,setKasbonLoading]=useState(false);
+  const [kasbonError,setKasbonError]=useState("");
   const [photoNotice, setPhotoNotice] = useState("");
   const [privatePreview, setPrivatePreview] = useState<{id:string;url:string}|null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -55,6 +68,33 @@ export default function HrdEmployeeDetailPage() {
   const photoEpoch = useRef(0);
   const scopedDetail = detail?.companyId === companyId && detail?.employeeId === employeeId
     && detail?.employee?.company_id === companyId ? detail : null;
+  async function requestResignKasbonCheck():Promise<ResignKasbonCheck>{
+    if(!companyId || !Number.isSafeInteger(employeeId)||employeeId<=0)
+      throw Error("Identitas karyawan atau perusahaan tidak valid.");
+    const response=await fetch(
+      `/api/hrd/employees/${employeeId}/resign-kasbon-precheck?companyId=${companyId}`,
+      {credentials:"include",cache:"no-store"},
+    );
+    const d=await response.json().catch(()=>({})) as Partial<ResignKasbonCheck>&{message?:string};
+    if(!response.ok)throw Error(d.message??"Pemeriksaan kasbon gagal.");
+    if(d.companyId!==companyId||d.employeeId!==employeeId||d.checkReadOnly!==true ||
+       typeof d.canDeactivate!=="boolean" || typeof d.hasUnresolved!=="boolean")
+      throw Error("Respons pemeriksaan kasbon tidak cocok dengan karyawan dan perusahaan.");
+    return d as ResignKasbonCheck;
+  }
+  useEffect(()=>{
+    let active=true;
+    setKasbonCheck(null);setKasbonError("");
+    if(!scopedDetail || scopedDetail.employee.status!=="active" || !scopedDetail.statusChangeEnabled){
+      setKasbonLoading(false);return()=>{active=false};
+    }
+    setKasbonLoading(true);
+    requestResignKasbonCheck()
+      .then(r=>{if(active)setKasbonCheck(r)})
+      .catch(e=>{if(active)setKasbonError(e instanceof Error?e.message:"Tidak dapat memeriksa kasbon.")})
+      .finally(()=>{if(active)setKasbonLoading(false)});
+    return()=>{active=false};
+  },[companyId,employeeId,scopedDetail?.employee.status,scopedDetail?.statusChangeEnabled]);
   const refresh = async () => {
     const seq = ++sequence.current;
     // Preserve the mounted OCR reviewer while refreshing the SAME employee.
@@ -88,6 +128,7 @@ export default function HrdEmployeeDetailPage() {
     setDetail(null);
     setPrivatePreview(null);
     setResignReason("");setStatusBusy(false);setStatusError("");setStatusNotice("");
+    setKasbonCheck(null);setKasbonError("");setKasbonLoading(false);
     photoEpoch.current++;
     setPhotoBusy(false);
     void refresh();
@@ -192,11 +233,28 @@ export default function HrdEmployeeDetailPage() {
       setStatusError("Isi alasan atau referensi resign HRD minimal 10 karakter sebelum konfirmasi.");
       return;
     }
+    // Re-read immediately before confirmation; backend checks again in the
+    // SAME transaction as the status update. Never trust an old screen snapshot.
+    setStatusBusy(true);setStatusError("");setStatusNotice("");
+    let fresh:ResignKasbonCheck;
+    try{
+      fresh=await requestResignKasbonCheck();
+      setKasbonCheck(fresh);
+    }catch(e){
+      setStatusError(e instanceof Error?e.message:"Kasbon belum berhasil diperiksa.");
+      setStatusBusy(false);return;
+    }
+    if(!fresh.canDeactivate||fresh.hasUnresolved){
+      setStatusError("Resign tertahan: ada catatan kasbon belum terverifikasi, saldo terbuka, atau reservasi potongan. Selesaikan pemeriksaan HRD/Accounting lebih dahulu.");
+      setStatusBusy(false);return;
+    }
     if(!window.confirm(
       "Nonaktifkan karyawan ini karena resign?\\n"+
       "Karyawan tidak akan masuk perhitungan Payroll berikutnya. Riwayat gaji dan dokumen tidak akan dihapus."
-    ))return;
-    setStatusBusy(true);setStatusError("");setStatusNotice("");
+    )){
+      setStatusBusy(false);return;
+    }
+    setStatusError("");setStatusNotice("");
     try{
       const response=await fetch(
         `/api/hrd/employees/${employeeId}/status?companyId=${companyId}`,{
@@ -254,6 +312,29 @@ export default function HrdEmployeeDetailPage() {
                   onChange={e=>setResignReason(e.target.value)}
                   placeholder="Contoh: Surat pengunduran diri diterima HRD tanggal ..."/>
               </label>
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="font-medium">Pemeriksaan kasbon sebelum resign</p>
+                {kasbonLoading&&<p role="status" className="text-muted-foreground">Sedang memeriksa kasbon dan reservasi...</p>}
+                {kasbonError&&<p role="alert" className="text-destructive">
+                  {kasbonError} — proses resign ditahan sampai pemeriksaan berhasil.
+                </p>}
+                {kasbonCheck && <>
+                  <p className="text-xs">Kasbon belum terverifikasi (termasuk Draft/belum ada bukti pencairan):
+                    <strong> {kasbonCheck.unverifiedCount} catatan · {rupiah(kasbonCheck.unverifiedAmount)}</strong>
+                  </p>
+                  <p className="text-xs">Saldo terverifikasi belum selesai:
+                    <strong> {kasbonCheck.verifiedUnsettledCount} catatan · {rupiah(kasbonCheck.verifiedUnsettledAmount)}</strong>
+                  </p>
+                  <p className="text-xs">Reservasi potongan Payroll yang masih aktif:
+                    <strong> {kasbonCheck.activeReservations} · {rupiah(kasbonCheck.activeReservationAmount)}</strong>
+                  </p>
+                  <p role="status" className={kasbonCheck.hasUnresolved?"text-amber-700":"text-emerald-700"}>
+                    {kasbonCheck.hasUnresolved
+                      ? "Resign belum dapat diproses. Periksa status pencairan dan lakukan penyelesaian melalui HRD/Accounting. Data Draft bukan bukti utang telah dicairkan."
+                      : "Tidak ada kewajiban kasbon atau reservasi yang menghalangi perubahan status."}
+                  </p>
+                </>}
+              </div>
               <Button variant="outline" size="sm"
                 disabled={statusBusy}
                 onClick={()=>void deactivateEmployee()}>
