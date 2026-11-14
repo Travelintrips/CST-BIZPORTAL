@@ -233,7 +233,7 @@ export default function HrdEmployeeDetailPage() {
             <p className="text-lg font-semibold">{scopedDetail.employee.first_name} {scopedDetail.employee.last_name}</p>
             <p>Jabatan: {scopedDetail.employee.position || "Belum diisi"}</p>
             <p>Status: <strong>{scopedDetail.employee.status==="active"?"Aktif":
-              scopedDetail.employee.status==="inactive"?"Nonaktif (Resign)":
+              scopedDetail.employee.status==="inactive"?"Nonaktif":
               scopedDetail.employee.status||"Belum diketahui"}</strong></p>
             {scopedDetail.employee.status==="active" && <div className="mt-3 space-y-2 rounded-lg border p-3">
               <h3 className="font-semibold">Pengelolaan status karyawan</h3>
