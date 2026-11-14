@@ -56,4 +56,40 @@ describe("Issue 292 actual writer read-only preconditions", () => {
       .rejects.toThrow("Satu atau lebih replacement payment tidak ditemukan");
     expect(getCalls()).toBe(6);
   });
+
+  it("rejects missing posted original journal before inserting compensating journal", async () => {
+    const { client, getCalls } = scriptedClient([[batch], [], []]);
+    await expect(reverseCanonicalSettlementForCorrection(client as any, input))
+      .rejects.toThrow("Settlement journal tidak eligible");
+    expect(getCalls()).toBe(3);
+  });
+
+  it("refuses inconsistent state when a posted reversal already exists but batch is not reversed", async () => {
+    const { client, getCalls } = scriptedClient([[batch], [{id: 7210}]]);
+    await expect(reverseCanonicalSettlementForCorrection(client as any, input))
+      .rejects.toThrow("Posted reversal exists but original settlement is not reversed");
+    expect(getCalls()).toBe(2);
+  });
+
+  it("rejects idempotent retry when recorded bank differs from the requested bank", async () => {
+    const { client, getCalls } = scriptedClient([
+      [{...batch, status: "reversed"}],
+      [{id: 7210}],
+      [{mutation_id: 434462, meta: {replacement_payment_ids:[859,860,861,862]}}],
+    ]);
+    await expect(reverseCanonicalSettlementForCorrection(client as any, input))
+      .rejects.toThrow("Idempotent reversal request does not match");
+    expect(getCalls()).toBe(3);
+  });
+
+  it("rejects idempotent retry when recorded payment membership differs", async () => {
+    const { client, getCalls } = scriptedClient([
+      [{...batch, status: "reversed"}],
+      [{id: 7210}],
+      [{mutation_id: 434464, meta: {replacement_payment_ids:[856,859,860,861]}}],
+    ]);
+    await expect(reverseCanonicalSettlementForCorrection(client as any, input))
+      .rejects.toThrow("Idempotent reversal request does not match");
+    expect(getCalls()).toBe(3);
+  });
 });
