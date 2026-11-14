@@ -266,13 +266,13 @@ export async function rebuildIssue292WithOwnerFunctions(
       WHERE b.id=${batchId} AND b.company_id=1
       FOR UPDATE OF b
     `);
-    const built=calculated.rows[0] as Record<string,unknown>|undefined;
-    const builtPayments=Array.isArray(built?.payment_ids)
-      ? built.payment_ids.map(Number).sort((a,b)=>a-b) : [];
-    if (!built || built.status!=="calculated" || built.date!==cohort.date
-      || Number(built.gross_amount)!==cohort.gross
-      || Number(built.mdr_amount)!==cohort.mdr
-      || Number(built.net_amount)!==cohort.net
+    const calculatedRow=calculated.rows[0] as Record<string,unknown>|undefined;
+    const builtPayments=Array.isArray(calculatedRow?.payment_ids)
+      ? calculatedRow.payment_ids.map(Number).sort((a,b)=>a-b) : [];
+    if (!calculatedRow || calculatedRow.status!=="calculated" || calculatedRow.date!==cohort.date
+      || Number(calculatedRow.gross_amount)!==cohort.gross
+      || Number(calculatedRow.mdr_amount)!==cohort.mdr
+      || Number(calculatedRow.net_amount)!==cohort.net
       || builtPayments.join(",")!==cohort.ids.join(",")) {
       throw new Error(`Issue #292 owner-calculated batch differs from exact bank gross/MDR/net or membership: ${cohort.date}`);
     }
