@@ -873,7 +873,7 @@ function AdvanceDetailDrawer({ advance, readOnly, loading, onClose, onRefresh, o
                   <p className="text-xs text-slate-400">Jumlah</p>
                   <p className="text-xl font-bold text-slate-900">{IDR(adv.amount)}</p>
                   {adv.remaining_amount > 0 && (
-                    <p className="text-xs text-orange-600 font-medium">Sisa: {IDR(adv.remaining_amount)}</p>
+                    <p className="text-xs text-orange-600 font-medium">{readOnly?"Sisa tercatat":"Sisa"}: {IDR(adv.remaining_amount)}</p>
                   )}
                 </div>
               </div>
@@ -908,8 +908,8 @@ function AdvanceDetailDrawer({ advance, readOnly, loading, onClose, onRefresh, o
                     <InfoRow label="Akun Bank/Kas (CR)"
                       value={adv.cash_bank_account_name ? `${adv.cash_bank_account_code} — ${adv.cash_bank_account_name}` : "-"} />
                     <InfoRow label="Entry Jurnal" value={adv.entry_id ? `#${adv.entry_id}` : "Belum diposting"} />
-                    <InfoRow label="Sudah Dilunasi" value={IDR(adv.settled_amount)} />
-                    <InfoRow label="Sisa Outstanding" value={IDR(adv.remaining_amount)} />
+                    <InfoRow label={readOnly?"Pembayaran tercatat (belum diverifikasi)":"Sudah Dilunasi"} value={IDR(readOnly?adv.paid_amount:adv.settled_amount)} />
+                    <InfoRow label={readOnly?"Sisa tercatat (belum diverifikasi)":"Sisa Outstanding"} value={IDR(adv.remaining_amount)} />
                     {adv.notes && <InfoRow label="Catatan" value={adv.notes} className="col-span-2" />}
                   </div>
 
