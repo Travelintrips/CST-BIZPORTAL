@@ -85,26 +85,21 @@ function requireCompanyScope(
 }
 
 function sourceEmail(): string {
-  return (
-    process.env.GMAIL_INVOICE_SOURCE_EMAIL ||
-    DEFAULT_SOURCE_EMAIL
-  )
-    .trim()
-    .toLowerCase();
+  const configured = process.env.GMAIL_INVOICE_SOURCE_EMAIL?.trim().toLowerCase() ?? "";
+  // DEV must have its own explicitly configured source; never borrow PROD's mailbox.
+  return isDevelopmentEnvironment() ? configured : configured || DEFAULT_SOURCE_EMAIL;
 }
 
 async function googleClientId(): Promise<string> {
-  return (
-    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_ID")) ||
-    (await getRuntimeConfig("GOOGLE_CLIENT_ID"))
-  );
+  const dedicated = await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_ID");
+  if (isDevelopmentEnvironment()) return dedicated;
+  return dedicated || await getRuntimeConfig("GOOGLE_CLIENT_ID");
 }
 
 async function googleClientSecret(): Promise<string> {
-  return (
-    (await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_SECRET")) ||
-    (await getRuntimeConfig("GOOGLE_CLIENT_SECRET"))
-  );
+  const dedicated = await getRuntimeConfig("GMAIL_GOOGLE_CLIENT_SECRET");
+  if (isDevelopmentEnvironment()) return dedicated;
+  return dedicated || await getRuntimeConfig("GOOGLE_CLIENT_SECRET");
 }
 
 function safeReturnPath(value: unknown): string {
@@ -150,7 +145,10 @@ async function getActor(
   request: Request,
 ): Promise<DevAuthUser | null> {
   if (isDevelopmentEnvironment()) {
-    return getDevSession(request);
+    const legacyDevActor = getDevSession(request);
+    if (legacyDevActor) return legacyDevActor;
+    // The existing email OTP flow issues signed sessions; verify the
+    // signature and resolve the real user before checking Finance role.
   }
 
   const session = getProductionSession(request);
@@ -202,11 +200,12 @@ async function setConfig(
     `insert into public.app_config(
        key,value,is_secret,description,environment,updated_at,updated_by
      )
-     values($1,$2,$3,$4,'production',now(),$5)
+     values($1,$2,$3,$4,$6,now(),$5)
      on conflict(key) do update set
        value=excluded.value,
        is_secret=excluded.is_secret,
        description=excluded.description,
+       environment=excluded.environment,
        updated_at=now(),
        updated_by=excluded.updated_by`,
     [
@@ -215,6 +214,7 @@ async function setConfig(
       options.secret ?? false,
       options.description ?? null,
       options.actor ?? null,
+      isDevelopmentEnvironment() ? "development" : "production",
     ],
   );
 }
@@ -611,6 +611,110 @@ router.get(
   },
 );
 
+// Manual, company-scoped credential preflight. This only refreshes the OAuth
+// access token and reads Gmail /users/me/profile. It does NOT scan mail,
+// import invoices, change labels, persist tokens, or touch financial records.
+router.post(
+  "/recon-classification/invoice-sources/gmail/verify-connection",
+  async (req, res) => {
+    // Diagnostic is intentionally unavailable in PROD.
+    if (!isDevelopmentEnvironment()) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    try {
+      const actor = await requireFinanceAdmin(req);
+      if (!actor) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const companyId = requireCompanyScope(
+        res,
+        actor,
+        req.body?.company_id,
+      );
+      if (!companyId) return;
+
+      const expectedEmail = sourceEmail();
+      if (!expectedEmail) {
+        res.status(409).json({
+          code: "GMAIL_DEV_SOURCE_EMAIL_REQUIRED",
+          error: "Alamat Gmail sumber DEV belum ditentukan.",
+        });
+        return;
+      }
+
+      const [encryptedToken, storedEmail] = await Promise.all([
+        getConfig(companyId, "REFRESH_TOKEN"),
+        getConfig(companyId, "EMAIL"),
+      ]);
+      if (!encryptedToken || !storedEmail) {
+        res.status(409).json({
+          code: "GMAIL_NOT_CONNECTED",
+          error: "Gmail belum terhubung untuk perusahaan yang dipilih.",
+        });
+        return;
+      }
+
+      // Reject a stale/misassigned stored identity before any provider call.
+      // A stored token must never be borrowed from another company.
+      if (storedEmail.trim().toLowerCase() !== expectedEmail) {
+        res.status(409).json({
+          code: "GMAIL_ACCOUNT_MISMATCH",
+          error: "Akun tersimpan tidak cocok dengan sumber Gmail DEV.",
+        });
+        return;
+      }
+
+      let accessToken: string;
+      try {
+        accessToken = await refreshAccessToken(
+          await decryptRefreshToken(encryptedToken),
+        );
+      } catch (error) {
+        // OAuth credentials can be revoked or re-encrypted; never expose
+        // provider payloads, refresh tokens or encryption internals.
+        const invalidGrant = error instanceof Error
+          && /invalid_grant|invalid_client|unsupported format|authenticate data/i.test(error.message);
+        res.status(invalidGrant ? 409 : 503).json({
+          code: invalidGrant ? "GMAIL_REAUTH_REQUIRED" : "GMAIL_VERIFY_UNAVAILABLE",
+          error: invalidGrant
+            ? "Koneksi Google perlu diotorisasi kembali."
+            : "Verifikasi Gmail belum dapat diselesaikan.",
+        });
+        return;
+      }
+
+      const profile = await gmailProfile(accessToken);
+      if (profile.emailAddress !== expectedEmail) {
+        res.status(409).json({
+          code: "GMAIL_ACCOUNT_MISMATCH",
+          error: "Akun Google yang terverifikasi bukan sumber Gmail DEV.",
+        });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        companyId,
+        email: profile.emailAddress,
+        verifiedAt: new Date().toISOString(),
+        verifiedScope: "gmail_profile_only",
+        inboxScanned: false,
+        invoiceImported: false,
+      });
+    } catch {
+      // No provider response body or credential is sent to the browser.
+      req.log.warn("Gmail source connection preflight unavailable");
+      res.status(503).json({
+        code: "GMAIL_VERIFY_UNAVAILABLE",
+        error: "Verifikasi koneksi Gmail belum tersedia.",
+      });
+    }
+  },
+);
+
 // Provisional Match INV discovery: read-only evidence, never a payable or an
 // approvable bank-reconciliation match. Actual approval requires a posted VI.
 router.get(
@@ -898,6 +1002,14 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+
+      if (!sourceEmail()) {
+        res.status(409).json({
+          code: "GMAIL_DEV_SOURCE_EMAIL_REQUIRED",
+          error: "Atur GMAIL_INVOICE_SOURCE_EMAIL khusus DEV sebelum menghubungkan atau menyinkronkan Gmail.",
+        });
+        return;
+      }
 
       const [clientId, clientSecret] =
         await Promise.all([
@@ -1192,6 +1304,14 @@ router.post(
         req.body?.company_id,
       );
       if (!companyId) return;
+
+      if (!sourceEmail()) {
+        res.status(409).json({
+          code: "GMAIL_DEV_SOURCE_EMAIL_REQUIRED",
+          error: "Atur GMAIL_INVOICE_SOURCE_EMAIL khusus DEV sebelum menghubungkan atau menyinkronkan Gmail.",
+        });
+        return;
+      }
 
       const encryptedToken = await getConfig(
         companyId,
