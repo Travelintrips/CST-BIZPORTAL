@@ -173,6 +173,34 @@ export async function reverseCanonicalSettlementForCorrection(
       );
     }
 
+    // #292 historical journal must match the exact verified bank, MDR and
+    // clearing structure before any reversal is inserted. Merely being posted
+    // and balanced is insufficient when a wrong COA could also balance.
+    if (postedUnlinked && settlementId === 5738) {
+      const sourceLines = await tx.execute(sql`
+        SELECT COUNT(*)::integer AS lines,
+          COALESCE(SUM(amount) FILTER (WHERE line_type='debit'),0) AS debit_total,
+          COALESCE(SUM(amount) FILTER (WHERE line_type='credit'),0) AS credit_total,
+          COALESCE(SUM(amount) FILTER (
+            WHERE line_type='debit' AND account_code='1-1023-CST'),0) AS bank_debit,
+          COALESCE(SUM(amount) FILTER (
+            WHERE line_type='debit' AND account_code='5-3050-CST'),0) AS mdr_debit,
+          COALESCE(SUM(amount) FILTER (
+            WHERE line_type='credit' AND account_code='1-1024-CST'),0) AS clearing_credit
+        FROM sport_center.accounting_journal_lines
+        WHERE journal_id=${journalId}
+      `);
+      const evidence=sourceLines.rows[0] as Record<string,unknown>|undefined;
+      if (!evidence || Number(evidence.lines)!==3
+        || Number(evidence.debit_total)!==930000
+        || Number(evidence.credit_total)!==930000
+        || Number(evidence.bank_debit)!==923700
+        || Number(evidence.mdr_debit)!==6300
+        || Number(evidence.clearing_credit)!==930000) {
+        throw new Error("Issue #292 source journal #7207 bank/MDR/clearing structure has changed.");
+      }
+    }
+
     const activeItemsResult = await tx.execute(sql`
       SELECT payment_id
       FROM sport_center.payment_settlement_items
