@@ -48,6 +48,22 @@ WITH
        AND b.settlement_journal_id=7207 AND j.status='posted'
        AND j.is_reversal=false
        AND b.net_amount=923700 AND b.gross_amount=930000 AND b.mdr_amount=6300
+       AND ARRAY(
+         SELECT i.payment_id FROM sport_center.payment_settlement_items i
+          WHERE i.settlement_id=b.id AND i.item_status='active'
+          ORDER BY i.payment_id
+       )=ARRAY[856,859,860,861]::integer[]
+       AND (SELECT count(*) FROM sport_center.accounting_journal_lines l
+            WHERE l.journal_id=j.id)=3
+       AND (SELECT coalesce(sum(l.amount),0) FROM sport_center.accounting_journal_lines l
+            WHERE l.journal_id=j.id AND l.line_type='debit'
+              AND l.account_code='1-1023-CST')=923700
+       AND (SELECT coalesce(sum(l.amount),0) FROM sport_center.accounting_journal_lines l
+            WHERE l.journal_id=j.id AND l.line_type='debit'
+              AND l.account_code='5-3050-CST')=6300
+       AND (SELECT coalesce(sum(l.amount),0) FROM sport_center.accounting_journal_lines l
+            WHERE l.journal_id=j.id AND l.line_type='credit'
+              AND l.account_code='1-1024-CST')=930000
   ),
   bank AS (
     SELECT count(*)::int AS n
@@ -63,6 +79,7 @@ WITH
   payments AS (
     SELECT ((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1) AS day,
            count(*)::int AS n,
+           array_agg(p.id ORDER BY p.id) AS ids,
            coalesce(sum(p.amount),0) AS gross,
            coalesce(sum(p.mdr_amount),0) AS mdr,
            bool_and(p.status='confirmed'
@@ -70,7 +87,10 @@ WITH
              AND lower(p.payment_provider::text)='mandiri_direct'
              AND p.company_id=1 AND p.bank_account_id='1640006707220'
              AND p.expected_settlement_date::date=((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)
-             AND p.settlement_rule_version='PROD-MANDIRI-SC-20260831-v1') AS eligible
+             AND p.settlement_rule_version='PROD-MANDIRI-SC-20260831-v1'
+             AND (SELECT count(*) FROM sport_center.accounting_journals j
+                   WHERE j.payment_id=p.id AND j.journal_type='payment_confirmed'
+                     AND j.status='posted' AND j.is_reversal=false)=1) AS eligible
       FROM sport_center.sport_payments p
      WHERE p.id IN (834,843,853,856,858,859,860,861,862)
      GROUP BY 1
@@ -103,8 +123,10 @@ SELECT 'issue292_readiness' AS report,
        (SELECT n=2 FROM bank) AS bank_sources_ready,
        (SELECT count(*)=2
           AND bool_and(
-            (day='2026-11-04' AND n=5 AND gross=690000 AND mdr=4200)
-            OR (day='2026-11-05' AND n=4 AND gross=930000 AND mdr=6300)
+            (day='2026-11-04' AND n=5 AND ids=ARRAY[834,843,853,856,858]::integer[]
+              AND gross=690000 AND mdr=4200)
+            OR (day='2026-11-05' AND n=4 AND ids=ARRAY[859,860,861,862]::integer[]
+              AND gross=930000 AND mdr=6300)
           ) AND bool_and(coalesce(eligible,false))
         FROM payments) AS payment_cohorts_ready,
        (SELECT n=0 FROM approvals) AS no_approved_match,
