@@ -71,7 +71,7 @@ describe("HRD scoped and audited resign / inactive transition",()=>{
   });
   afterAll(async()=>{await new Promise<void>(resolve=>server.close(()=>resolve()));});
   beforeEach(()=>{
-    vi.stubEnv("APP_ENV","production");vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","true");
+    vi.stubEnv("APP_ENV","production");vi.stubEnv("HRD_PROD_ENABLED","true");vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","true");
     state.companyId=1;state.employeeId=61;state.employeeStatus="active";state.auditFail=false;
     state.auditRows=0;state.commits=0;state.rollbacks=0;state.commands.length=0;
   });
@@ -82,10 +82,22 @@ describe("HRD scoped and audited resign / inactive transition",()=>{
       body:JSON.stringify(body)
     });
   const valid={status:"inactive",confirm:true,reason:"Surat pengunduran diri diterima dan diverifikasi oleh HRD."};
-  it("is disabled until explicit server flag, no SQL",async()=>{
-    vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","");
+  it("explicit false kill switch denies writes even while HRD is enabled",async()=>{
+    vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","false");
     expect((await patch(valid)).status).toBe(501);
     expect(state.commands).toHaveLength(0);
+  });
+  it("disabled HRD base service cannot mutate employee",async()=>{
+    vi.stubEnv("HRD_PROD_ENABLED","false");
+    expect((await patch(valid)).status).toBe(501);
+    expect(state.commands).toHaveLength(0);
+  });
+  it("inherits enabled HRD workflow when extra status flag is unset",async()=>{
+    vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","");
+    const r=await patch(valid);
+    expect(r.status).toBe(200);
+    expect(state.employeeStatus).toBe("inactive");
+    expect(state.auditRows).toBe(1);
   });
   it("blocks missing/wrong origin and unconfirmed or short reason",async()=>{
     expect((await patch(valid,"https://invalid.example")).status).toBe(403);
