@@ -1,6 +1,7 @@
 import { type IRouter, type Request, type Response } from "express";
 import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollReadOnlyReady, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
 import { isDevelopmentEnvironment } from "./dev-auth";
+import { isPayrollProdApprover } from "./payroll-prod-approver";
 import {
   calculateKasbonAutoDeduction, payrollMonth, moneyToCents,
   type KasbonAdvance, type KasbonPlan,
@@ -53,7 +54,7 @@ function automaticReadReady():boolean {
   return isDevelopmentEnvironment()?payrollDedicatedEnabled():payrollReadOnlyReady();
 }
 function automaticReadAllowed(req:ScopedRequest):boolean {
-  return isDevelopmentEnvironment()?privileged(req):req.payrollActor?.role?.toLowerCase()==="super_admin";
+  return isDevelopmentEnvironment()?privileged(req):isPayrollProdApprover(req.payrollActor,req.payrollCompanyId);
 }
 function automaticWriteEnabled(req:ScopedRequest):boolean {
   if(isDevelopmentEnvironment()) return payrollDedicatedEnabled() &&
@@ -61,7 +62,7 @@ function automaticWriteEnabled(req:ScopedRequest):boolean {
      process.env.PAYROLL_DEV_SETUP_WRITE_ENABLED==="true") && privileged(req);
   return payrollProdDedicatedRequired() &&
     process.env.PAYROLL_PROD_KASBON_AUTO_WRITE_ENABLED==="true" &&
-    req.payrollActor?.role?.toLowerCase()==="super_admin";
+    isPayrollProdApprover(req.payrollActor,req.payrollCompanyId);
 }
 function unavailable(res:Response,write=false){
   res.status(write?501:503).json({message:"Kasbon otomatis memerlukan koneksi Payroll khusus dan feature flag yang sesuai."});

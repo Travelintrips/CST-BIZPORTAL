@@ -3,6 +3,7 @@ import type { PayrollDbClient } from "@workspace/db";
 import { getPayrollPool, payrollDedicatedEnabled, payrollProdDedicatedRequired, payrollReadOnlyReady, payrollScopedQuery, setPayrollCompanyScope } from "./payroll-prod-db";
 import { isDevelopmentEnvironment } from "./dev-auth";
 import { createHash } from "node:crypto";
+import { isPayrollProdApprover } from "./payroll-prod-approver";
 import {loadAutoKasbonSources} from "./payroll-kasbon-draft-db";
 import {overlayAutomaticKasbon,finalizeAutomaticKasbonPreview} from "./payroll-kasbon-draft-overlay";
 import {
@@ -48,7 +49,7 @@ function canApplyEffectiveSetup(req: ScopedRequest): boolean {
     ["admin","owner","super_admin"].includes(role);
   return payrollProdDedicatedRequired() &&
     process.env.PAYROLL_PROD_SETUP_APPLY_ENABLED === "true" &&
-    role === "super_admin";
+    isPayrollProdApprover(req.payrollActor,req.payrollCompanyId);
 }
 function effectiveSetupReadReady(): boolean {
   return isDevelopmentEnvironment() ? payrollDedicatedEnabled() : payrollReadOnlyReady();
@@ -202,7 +203,7 @@ export function registerEffectiveSetupPreviewRoutes(router: IRouter): void {
   });
 
   router.get("/payroll/runs/:id/setup-preview", async (req: ScopedRequest, res: Response): Promise<void> => {
-    if (!isDevelopmentEnvironment() && req.payrollActor?.role?.toLowerCase() !== "super_admin") {
+    if (!isDevelopmentEnvironment() && !isPayrollProdApprover(req.payrollActor,req.payrollCompanyId)) {
       res.status(403).json({message:"Hanya Super Admin dapat memeriksa struktur gaji Payroll PROD."});return;
     }
     if (!effectiveSetupReadReady()) {

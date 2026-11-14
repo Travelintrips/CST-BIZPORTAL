@@ -1,6 +1,7 @@
 import type {IRouter,Request,Response,NextFunction} from "express";
 import type {PayrollDbClient} from "@workspace/db";
 import {getPayrollPool,payrollProdDedicatedRequired,setPayrollCompanyScope} from "./payroll-prod-db";
+import {isPayrollProdApprover} from "./payroll-prod-approver";
 
 type ScopedRequest=Request&{payrollCompanyId?:number;payrollActor?:{role:string}};
 /** Production-only opt-in Draft creation. Never uses the shared BizPortal pool.
@@ -14,7 +15,7 @@ export function registerProdPayrollDraftRoutes(router:IRouter):void {
       res.status(501).json({message:"Pembuatan Draft Payroll PROD belum diaktifkan secara eksplisit."});
       return;
     }
-    if(req.payrollActor?.role?.toLowerCase()!=="super_admin"){
+    if(!isPayrollProdApprover(req.payrollActor,req.payrollCompanyId)){
       res.status(403).json({message:"Hanya Super Admin boleh membuat Draft Payroll PROD."});
       return;
     }
