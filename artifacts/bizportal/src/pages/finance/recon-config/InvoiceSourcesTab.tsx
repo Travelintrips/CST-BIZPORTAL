@@ -810,7 +810,7 @@ export default function InvoiceSourcesTab() {
                 </div>
               </div>
 
-              {!status?.oauthConfigured && (
+              {status !== null && !status.oauthConfigured && (
                 <div className="rounded-lg border border-amber-700/50 bg-amber-950/20 p-4 text-sm text-amber-200">
                   Google OAuth belum terbaca oleh
                   server BizPortal. Sistem sekarang

@@ -147,7 +147,11 @@ async function getActor(
   request: Request,
 ): Promise<DevAuthUser | null> {
   if (isDevelopmentEnvironment()) {
-    return getDevSession(request);
+    const legacyDevActor = getDevSession(request);
+    if (legacyDevActor) return legacyDevActor;
+    // Email/OTP login in DEV issues the same signed session used by
+    // production auth. Validate it and resolve the actual database user
+    // instead of rejecting a successfully authenticated admin.
   }
 
   const session = getProductionSession(request);
