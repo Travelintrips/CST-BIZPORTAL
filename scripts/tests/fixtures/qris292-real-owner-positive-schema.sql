@@ -55,6 +55,3 @@ ALTER TABLE public.bank_reconciliation_matches
   ADD COLUMN name_match boolean,
   ADD COLUMN order_id_match boolean,
   ADD COLUMN proof_match boolean;
-ALTER TABLE sport_center.payment_settlement_batches
-  ADD COLUMN reconciled_at timestamptz,
-  ADD COLUMN reconciled_by text;
