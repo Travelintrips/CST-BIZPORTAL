@@ -154,8 +154,8 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
             INSERT INTO sport_center.payment_settlement_batches
               (id,company_id,status,settlement_date,provider_code,bank_account_id,
                settlement_rule_version,gross_amount,mdr_amount,net_amount)
-            VALUES(5739,1,'calculated','2026-11-05','mandiri','1640006707220',
-                   'TEST_RULE',930000,6300,923700)
+            VALUES(5739,1,'calculated','2026-11-05','mandiri_direct','1640006707220',
+                   'PROD-MANDIRI-SC-20260831-v1',930000,6300,923700)
           `);
           await conn.query(`
             INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
@@ -226,16 +226,16 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       // No DEV/PROD database, bank API, or real user payment is involved.
       await conn.query(`
         UPDATE sport_center.sport_payments
-        SET amount=232500,mdr_amount=1575 WHERE id=856;
+        SET amount=300000,mdr_amount=2100 WHERE id=856;
         INSERT INTO sport_center.sport_payments
           (id,company_id,amount,status,settlement_status,payment_method,
            payment_provider,bank_account_id,paid_at,expected_settlement_date,
            settlement_rule_version,mdr_amount)
         VALUES
-          (834,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 10:00+07','2026-11-04','TEST_RULE',600),
-          (843,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 11:00+07','2026-11-04','TEST_RULE',600),
-          (853,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 13:00+07','2026-11-04','TEST_RULE',600),
-          (858,1,157500,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 14:00+07','2026-11-04','TEST_RULE',825);
+          (834,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 10:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (843,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 11:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (853,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 13:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (858,1,300000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 14:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',2100);
         INSERT INTO public.bank_mutations
           (id,status,company_id,amount,transaction_date,source_classification,
            direction,bank_account_id,reconciliation_status)
@@ -249,8 +249,8 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
               (id,company_id,status,settlement_date,provider_code,bank_account_id,
                settlement_rule_version,gross_amount,mdr_amount,net_amount)
             VALUES
-              (5739,1,'calculated','2026-11-04','mandiri','1640006707220','TEST_RULE',690000,4200,685800),
-              (5740,1,'calculated','2026-11-05','mandiri','1640006707220','TEST_RULE',930000,6300,923700);
+              (5739,1,'calculated','2026-11-04','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',690000,4200,685800),
+              (5740,1,'calculated','2026-11-05','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',930000,6300,923700);
             INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
             SELECT 5739,id,'active',amount FROM sport_center.sport_payments
             WHERE id IN (834,843,853,856,858);
@@ -369,10 +369,10 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
            payment_provider,bank_account_id,paid_at,expected_settlement_date,
            settlement_rule_version,mdr_amount)
         VALUES
-          (834,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 10:00+07','2026-11-04','TEST_RULE',600),
-          (843,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 11:00+07','2026-11-04','TEST_RULE',600),
-          (853,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 13:00+07','2026-11-04','TEST_RULE',600),
-          (858,1,157500,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 14:00+07','2026-11-04','TEST_RULE',825);
+          (834,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 10:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (843,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 11:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (853,1,30000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 13:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',0),
+          (858,1,300000,'confirmed','unsettled','qris','mandiri_direct','1640006707220','2026-11-03 14:00+07','2026-11-04','PROD-MANDIRI-SC-20260831-v1',2100);
         INSERT INTO public.bank_mutations
           (id,status,company_id,amount,transaction_date,source_classification,
            direction,bank_account_id,reconciliation_status)
@@ -386,8 +386,8 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
               (id,company_id,status,settlement_date,provider_code,bank_account_id,
                settlement_rule_version,gross_amount,mdr_amount,net_amount)
             VALUES
-              (5739,1,'calculated','2026-11-04','mandiri','1640006707220','TEST_RULE',690000,4200,685800),
-              (5740,1,'calculated','2026-11-05','mandiri','1640006707220','TEST_RULE',930000,6300,923700);
+              (5739,1,'calculated','2026-11-04','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',690000,4200,685800),
+              (5740,1,'calculated','2026-11-05','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',930000,6300,923700);
             INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
             SELECT 5739,id,'active',amount FROM sport_center.sport_payments
             WHERE id IN (834,843,853,856,858);
@@ -493,7 +493,7 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       return conn.query(compiled.sql, compiled.params);
     }};
     try {
-      await conn.query("UPDATE sport_center.sport_payments SET mdr_amount=1576 WHERE id=862");
+      await conn.query("UPDATE sport_center.sport_payments SET mdr_amount=2101 WHERE id=862");
       await expect(reverseCanonicalSettlementForCorrection({
         transaction: async (callback: any) => callback(tx),
       } as any,input)).rejects.toThrow("Replacement cohort gross/MDR/net");
