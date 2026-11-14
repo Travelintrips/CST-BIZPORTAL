@@ -16,6 +16,12 @@ describe("Issue 292 canonical rebuild integration contract", () => {
     expect(rebuild).toContain("sport_center.create_payment_settlement_batch(");
     expect(rebuild).toContain("sport_center.create_payment_settlement_supplemental_batch(");
     expect(rebuild).toContain("sport_center.canonical_settlement_group_identity(");
+    // Owner canonical builder accepts settlement_reference, not correlation_id.
+    // The underlying wrapper currently recomputes the value, but never rely
+    // on that implicit behavior in the audited correction path.
+    expect(rebuild).toContain("SELECT settlement_reference FROM sport_center.canonical_settlement_group_identity(");
+    expect(rebuild).toContain("?.settlement_reference??");
+    expect(rebuild).not.toContain("SELECT correlation_id FROM sport_center.canonical_settlement_group_identity(");
     expect(rebuild).toContain("sport_center.create_settlement_journal_draft(");
     expect(rebuild).toContain("sport_center.finalize_payment_settlement(");
     expect(rebuild).not.toMatch(/INSERT INTO sport_center\.(?:payment_settlement_batches|accounting_journals)/i);
