@@ -9,16 +9,17 @@ let managedProductionBundlePromise:
   | Promise<Record<string, string>>
   | null = null;
 
-function isProductionRuntime(): boolean {
-  const environment = (
-    process.env.APP_ENV ??
-    process.env.NODE_ENV ??
-    "development"
-  )
-    .trim()
-    .toLowerCase();
+export function gmailConfigEnvironment(
+  appEnv = process.env.APP_ENV,
+  nodeEnv = process.env.NODE_ENV,
+): "production" | "development" {
+  return (appEnv ?? nodeEnv ?? "development").trim().toLowerCase() === "production"
+    ? "production"
+    : "development";
+}
 
-  return environment === "production";
+function isProductionRuntime(): boolean {
+  return gmailConfigEnvironment() === "production";
 }
 
 async function readManagedProductionConfig(
@@ -113,11 +114,17 @@ export async function getRuntimeConfig(
       await pool.query<{ value: string | null }>(
         `select value from public.app_config
           where key=$1 and (
-            environment in ('all','production')
+            environment in ('all',$2)
             or environment is null
           )
+          order by
+            case
+              when environment = $2 then 0
+              when environment = 'all' then 1
+              else 2
+            end
           limit 1`,
-        [key],
+        [key, gmailConfigEnvironment()],
       );
 
     const value =
