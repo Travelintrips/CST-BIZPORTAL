@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { GmailProviderRateLimitError, requiresInvoiceExtractionReview } from "./gmail-invoice-rate-limit";
 import { pool } from "@workspace/db";
 import {
   downloadAttachment,
@@ -153,8 +154,8 @@ async function processAttachment(args: {
   actorEmail: string;
   message: GmailInvoiceMessage;
   attachment: GmailAttachment;
-}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing"> {
-  const candidate = await upsertShell(args);
+}): Promise<"ready" | "manual_review" | "duplicate" | "supporting" | "failed" | "existing" | "deferred"> {
+  let candidate = await upsertShell(args);
 
   if (candidate.extraction_status === "complete" && candidate.status === "ready" && candidate.attachment_sha256) {
     const importedTwin = await pool.query<{ id: number; vendor_invoice_id: number | null }>(
@@ -198,6 +199,39 @@ async function processAttachment(args: {
     }
 
     const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+
+    // A Gmail attachment ID may change on every scan. Keep failed OCR retries
+    // on the original message + content row, never accumulate new shells.
+    const failedTwin = await pool.query<CandidateRow>(
+      `select * from public.gmail_invoice_candidates
+        where company_id=$1 and gmail_message_id=$2 and attachment_sha256=$3
+          and id<>$4 and status='manual_review' and extraction_status='failed'
+          and vendor_invoice_id is null
+        order by id limit 1`,
+      [args.companyId, args.message.id, hash, candidate.id],
+    );
+    if (failedTwin.rows[0]) {
+      const removedShell = await pool.query<{ id: number }>(
+        `delete from public.gmail_invoice_candidates
+          where id=$1 and company_id=$2 and status='new'
+            and extraction_status='pending' and vendor_invoice_id is null
+          returning id`,
+        [candidate.id, args.companyId],
+      );
+      if (!removedShell.rows[0]) return "existing";
+      candidate = failedTwin.rows[0];
+    }
+
+    // Persist the digest before the OCR provider call. Provider errors and 429
+    // now leave a reusable candidate, without touching imported/posted invoices.
+    await pool.query(
+      `update public.gmail_invoice_candidates
+          set attachment_sha256=$1, updated_at=now()
+        where id=$2 and company_id=$3 and vendor_invoice_id is null
+          and ((status='new' and extraction_status='pending')
+            or (status='manual_review' and extraction_status='failed'))`,
+      [hash, candidate.id, args.companyId],
+    );
     // Honor a rejected PDF even if Gmail assigns a different attachment ID.
     const rejectedTwin = await pool.query<{ id: number }>(
       `select id from public.gmail_invoice_candidates
@@ -345,7 +379,7 @@ async function processAttachment(args: {
       ? "supporting"
       : existingInvoice.rows[0]
       ? "duplicate"
-      : hasCoreFields && extraction.confidence >= 0.65
+      : hasCoreFields && !requiresInvoiceExtractionReview(extraction.flags) && extraction.confidence >= 0.65
         ? "ready"
         : "manual_review";
 
@@ -370,7 +404,9 @@ async function processAttachment(args: {
               vendor_invoice_id=$14,
               error_message=$15,
               updated_at=now()
-        where id=$16 and status='new' and vendor_invoice_id is null`,
+        where id=$16 and status in ('new','manual_review')
+          and extraction_status in ('pending','failed')
+          and vendor_invoice_id is null`,
       [
         hash,
         bytes.length,
@@ -387,7 +423,9 @@ async function processAttachment(args: {
         status,
         existingInvoice.rows[0]?.id ?? null,
         status === "manual_review"
-          ? "Data inti invoice belum lengkap atau confidence di bawah 65%"
+          ? requiresInvoiceExtractionReview(extraction.flags)
+            ? "Ekstraksi PDF lokal / OCR AI tidak tersedia: wajib review Finance sebelum impor"
+            : "Data inti invoice belum lengkap atau confidence di bawah 65%"
           : status === "duplicate"
             ? "Nomor invoice vendor sudah tersimpan"
             : null,
@@ -397,6 +435,9 @@ async function processAttachment(args: {
 
     return status;
   } catch (error) {
+    // Gmail throttling is transient: do not turn a pending source into
+    // a failed/manual-review document or hammer the provider repeatedly.
+    if (error instanceof GmailProviderRateLimitError) return "deferred";
     await markFailed(candidate.id, error);
     return "failed";
   }
@@ -417,6 +458,7 @@ export async function syncGmailInvoiceCandidates(args: {
     duplicates: 0,
     failed: 0,
     existing: 0,
+    deferred: 0,
   };
 
   let newWork = 0;
@@ -431,6 +473,10 @@ export async function syncGmailInvoiceCandidates(args: {
         attachment,
       });
 
+      if (status === "deferred") {
+        counts.deferred += 1;
+        break scan;
+      }
       if (status === "ready") counts.ready += 1;
       else if (status === "manual_review") counts.manualReview += 1;
       else if (status === "duplicate") counts.duplicates += 1;

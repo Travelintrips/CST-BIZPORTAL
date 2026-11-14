@@ -1,5 +1,6 @@
 import { getRuntimeConfig, GMAIL_SEARCH_QUERY, GMAIL_MAX_MESSAGES } from "./gmail-invoice-runtime";
 import { fallbackInvoiceExtraction } from "./gmail-invoice-fallback";
+import { GmailProviderRateLimitError, gmailRateLimitRetryAt, rateLimitRetryAt } from "./gmail-invoice-rate-limit";
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -176,7 +177,17 @@ function collectAttachments(
   return output;
 }
 
+// Google quota applies across message listing and attachment downloads.
+let gmailRateLimitedUntil = 0;
+
+export function getGmailRateLimitUntil(): number {
+  return gmailRateLimitedUntil;
+}
+
 async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
+  if (Date.now() < gmailRateLimitedUntil) {
+    throw new GmailProviderRateLimitError(gmailRateLimitedUntil);
+  }
   const response = await fetch(url, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
@@ -184,6 +195,15 @@ async function gmailJson<T>(url: string, accessToken: string): Promise<T> {
     error?: { message?: string };
   };
   if (!response.ok) {
+    const retryAt = gmailRateLimitRetryAt(
+      response.status,
+      response.headers.get("retry-after"),
+      payload.error?.message ?? null,
+    );
+    if (retryAt !== null) {
+      gmailRateLimitedUntil = Math.max(gmailRateLimitedUntil, retryAt);
+      throw new GmailProviderRateLimitError(gmailRateLimitedUntil);
+    }
     throw new Error(
       payload.error?.message || `Gmail request failed: HTTP ${response.status}`,
     );
@@ -387,6 +407,9 @@ function responseText(payload: unknown): string {
   return chunks.join("\n").trim();
 }
 
+// Per-process provider cooldown; restored API instances fail closed to manual review.
+let ocrRateLimitedUntil = 0;
+
 export async function extractInvoiceDocument(
   bytes: Buffer,
   attachment: GmailAttachment,
@@ -399,6 +422,13 @@ export async function extractInvoiceDocument(
       attachment,
       context,
       new Error("OPENAI_API_KEY belum tersedia di konfigurasi BizPortal."),
+    );
+  }
+
+  if (Date.now() < ocrRateLimitedUntil) {
+    return fallbackInvoiceExtraction(
+      bytes, attachment, context,
+      new Error("OCR_PROVIDER_RATE_LIMIT_COOLDOWN"),
     );
   }
 
@@ -457,6 +487,8 @@ export async function extractInvoiceDocument(
 
   const payload = (await response.json()) as Record<string, unknown>;
   if (!response.ok) {
+    const retryAt = rateLimitRetryAt(response.status, response.headers.get("retry-after"));
+    if (retryAt !== null) ocrRateLimitedUntil = Math.max(ocrRateLimitedUntil, retryAt);
     const error =
       payload.error &&
       typeof payload.error === "object" &&
