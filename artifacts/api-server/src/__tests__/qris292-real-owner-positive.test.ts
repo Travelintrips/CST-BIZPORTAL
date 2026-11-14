@@ -42,6 +42,26 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
       expect(Number(nov4.rows[0].id)).toBeGreaterThan(5738);
       expect(Number(nov5.rows[0].id)).toBeGreaterThan(5738);
       expect(nov4.rows[0].id).not.toBe(nov5.rows[0].id);
+      // Repeated requests must reuse the exact owner-created batches.
+      // This checks genuine owner SQL idempotency rather than synthetic IDs.
+      const nov4Retry=await client.query<{id:string}>(`
+        SELECT sport_center.create_payment_settlement_batch(
+          $1,1,'mandiri_direct','1640006707220','2026-11-04'::date,
+          ARRAY[834]::integer[],'isolated-ci-only') AS id
+      `,[id.rows[0].settlement_reference]);
+      const nov5Retry=await client.query<{id:string}>(`
+        SELECT sport_center.create_payment_settlement_supplemental_batch(
+          1,'mandiri_direct','1640006707220','2026-11-05'::date,
+          'PROD-MANDIRI-SC-20260831-v1',
+          ARRAY[862]::integer[],'isolated-ci-only') AS id
+      `);
+      expect(nov4Retry.rows[0].id).toBe(nov4.rows[0].id);
+      expect(nov5Retry.rows[0].id).toBe(nov5.rows[0].id);
+      const created=await client.query(`
+        SELECT count(*)::int AS n FROM sport_center.payment_settlement_batches
+        WHERE id<>5738
+      `);
+      expect(created.rows[0].n).toBe(2);
       const rows=await client.query<{
         settlement_date:string;gross_amount:string;mdr_amount:string;net_amount:string;
         status:string;payment_ids:number[];
