@@ -1,0 +1,51 @@
+name: QRIS #292 Isolated PostgreSQL Writer Gate
+on:
+  pull_request:
+    paths:
+      - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrection.ts"
+      - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
+      - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
+      - ".github/workflows/qris292-isolated-postgres.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: qris292_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolated_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qris292_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QRIS292_ISOLATED_PG_URL: postgresql://postgres:isolated_ci_only@127.0.0.1:5432/qris292_test
+      PGPASSWORD: isolated_ci_only
+      NODE_ENV: test
+      APP_ENV: development
+      SUPABASE_DATABASE_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Load isolated synthetic fixture
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-isolated-postgres.sql
+      - name: Exercise real SQL writer and rollback
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-isolated-pg-writer.test.ts src/__tests__/qris-correction-writer-preconditions.test.ts
