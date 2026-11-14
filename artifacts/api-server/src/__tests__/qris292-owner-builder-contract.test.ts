@@ -18,7 +18,7 @@ describe("Issue 292 canonical rebuild integration contract", () => {
     expect(rebuild).toContain("sport_center.canonical_settlement_group_identity(");
     expect(rebuild).toContain("sport_center.create_settlement_journal_draft(");
     expect(rebuild).toContain("sport_center.finalize_payment_settlement(");
-    expect(rebuild).not.toMatch(/INSERT INTO sport_center\\.(?:payment_settlement_batches|accounting_journals)/i);
+    expect(rebuild).not.toMatch(/INSERT INTO sport_center\.(?:payment_settlement_batches|accounting_journals)/i);
     expect(rebuild).not.toContain("client.transaction(");
   });
 
