@@ -13,17 +13,25 @@ describe.skipIf(!isolated)("Issue #292 genuine owner SQL canary, read-only", () 
     await client.connect();
     try {
       await client.query("BEGIN READ ONLY");
+      const mode=await client.query("SELECT current_setting('transaction_read_only') AS mode");
+      expect(mode.rows[0].mode).toBe("on");
       const identity = await client.query<{
         normal: boolean; supplemental: boolean;
       }>(`
         SELECT
           EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
            WHERE n.nspname='sport_center' AND p.proname='create_payment_settlement_batch'
-             AND p.prosecdef=true) AS normal,
+             AND p.prosecdef=true
+             AND length(pg_get_functiondef(p.oid))>4000
+             AND position('CANONICAL_SETTLEMENT_GROUP_INVALID'
+                          in pg_get_functiondef(p.oid))>0) AS normal,
           EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
            WHERE n.nspname='sport_center'
              AND p.proname='create_payment_settlement_supplemental_batch'
-             AND p.prosecdef=true) AS supplemental
+             AND p.prosecdef=true
+             AND length(pg_get_functiondef(p.oid))>12000
+             AND position('QRIS_MDR_SOURCE_REQUIRES_REVIEW'
+                          in pg_get_functiondef(p.oid))>0) AS supplemental
       `);
       expect(identity.rows[0]).toEqual({ normal: true, supplemental: true });
       const queries = [
