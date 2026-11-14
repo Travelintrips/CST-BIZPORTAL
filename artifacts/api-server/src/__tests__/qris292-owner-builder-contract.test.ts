@@ -36,8 +36,8 @@ describe("Issue 292 canonical rebuild integration contract", () => {
   it("fails closed on actual owner-calculated gross MDR net and payment membership before journal draft", () => {
     expect(rebuild).toContain("b.gross_amount,b.mdr_amount,b.net_amount");
     expect(rebuild).toContain("ARRAY(SELECT i.payment_id FROM sport_center.payment_settlement_items i");
-    expect(rebuild).toContain("Number(built.mdr_amount)!==cohort.mdr");
-    expect(rebuild).toContain("Number(built.net_amount)!==cohort.net");
+    expect(rebuild).toContain("Number(calculatedRow.mdr_amount)!==cohort.mdr");
+    expect(rebuild).toContain("Number(calculatedRow.net_amount)!==cohort.net");
     expect(rebuild).toContain('builtPayments.join(",")!==cohort.ids.join(",")');
     const mismatch=rebuild.indexOf("owner-calculated batch differs from exact bank gross/MDR/net or membership");
     const draft=rebuild.indexOf("sport_center.create_settlement_journal_draft(");
