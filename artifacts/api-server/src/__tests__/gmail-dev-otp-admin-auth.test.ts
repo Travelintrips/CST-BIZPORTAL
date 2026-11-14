@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const route = readFileSync(new URL("../routes/gmail-invoice-source.ts", import.meta.url), "utf8");
-const tab = readFileSync(new URL("../../../../bizportal/src/pages/finance/recon-config/InvoiceSourcesTab.tsx", import.meta.url), "utf8");
+const tab = readFileSync(new URL("../../../bizportal/src/pages/finance/recon-config/InvoiceSourcesTab.tsx", import.meta.url), "utf8");
 
 describe("Gmail invoice OAuth with OTP-authenticated BizPortal DEV session", () => {
   it("accepts signed OTP sessions while retaining legacy DEV cookie support", () => {
