@@ -259,13 +259,12 @@ export async function rebuildIssue292WithOwnerFunctions(
     const calculated=await tx.execute(sql`
       SELECT b.status::text AS status,
         b.settlement_date::text AS date, b.gross_amount,b.mdr_amount,b.net_amount,
-        COALESCE(array_agg(i.payment_id ORDER BY i.payment_id)
-          FILTER (WHERE i.payment_id IS NOT NULL),ARRAY[]::integer[]) AS payment_ids
+        ARRAY(SELECT i.payment_id FROM sport_center.payment_settlement_items i
+          WHERE i.settlement_id=b.id AND i.item_status='active'
+          ORDER BY i.payment_id) AS payment_ids
       FROM sport_center.payment_settlement_batches b
-      LEFT JOIN sport_center.payment_settlement_items i
-        ON i.settlement_id=b.id AND i.item_status='active'
       WHERE b.id=${batchId} AND b.company_id=1
-      GROUP BY b.id FOR UPDATE OF b
+      FOR UPDATE OF b
     `);
     const built=calculated.rows[0] as Record<string,unknown>|undefined;
     const builtPayments=Array.isArray(built?.payment_ids)
