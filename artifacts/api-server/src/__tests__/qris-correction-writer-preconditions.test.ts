@@ -34,21 +34,25 @@ const journal = {
   is_reversal: false, settlement_batch_id: 5738,
 };
 const activeItems = [856, 859, 860, 861].map(payment_id => ({ payment_id }));
+const sourceJournalLines = [{
+  lines: 3, debit_total: 930000, credit_total: 930000,
+  bank_debit: 923700, mdr_debit: 6300, clearing_credit: 930000,
+}];
 
 describe("Issue 292 actual writer read-only preconditions", () => {
   it("rejects posted batch without an actual H+1-invalid member before any writes", async () => {
     const { client, getCalls } = scriptedClient([
-      [batch], [], [journal], activeItems,
+      [batch], [], [journal], sourceJournalLines, activeItems,
       [{ member_count: 4, wrong_date_count: 0 }],
     ]);
     await expect(reverseCanonicalSettlementForCorrection(client as any, input))
       .rejects.toThrow("Posted settlement must contain a real H+1-invalid member");
-    expect(getCalls()).toBe(5);
+    expect(getCalls()).toBe(6);
   });
 
   it("rejects missing replacement payments before any reversal journal is inserted", async () => {
     const { client, getCalls } = scriptedClient([
-      [batch], [], [journal], activeItems,
+      [batch], [], [journal], sourceJournalLines, activeItems,
       [{ member_count: 4, wrong_date_count: 1 }],
       [{ id: 859 }],
     ]);
