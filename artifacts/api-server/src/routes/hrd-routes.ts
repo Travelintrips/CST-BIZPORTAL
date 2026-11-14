@@ -5,6 +5,7 @@ import { authorizeHrdCompany } from "./hrd-access";
 import { withHrdCompanyScope } from "./hrd-db";
 import { registerHrdPhotoRoutes } from "./hrd-photo-routes";
 import { registerHrdOcrRoutes } from "./hrd-ocr-routes";
+import { registerHrdEmployeeStatusRoutes } from "./hrd-employee-status";
 import { hrdOcrReady } from "./hrd-document-ocr";
 import { hrdPrivateStorageReady, probeHrdPrivateStorage } from "./hrd-photo-storage";
 import { runHrdStorageCanary } from "./hrd-storage-canary";
@@ -81,6 +82,7 @@ router.use("/hrd", (req: HrdRequest, res: Response, next) => {
 router.use("/hrd", authorize);
 registerHrdPhotoRoutes(router);
 registerHrdOcrRoutes(router);
+registerHrdEmployeeStatusRoutes(router);
 
 // Safe authenticated readiness probe: prove the actual API database connection
 // can SET LOCAL ROLE and access ONLY the selected tenant's employee directory.
@@ -206,7 +208,7 @@ router.get("/hrd/employees/:id", async (req: HrdRequest, res: Response) => {
     });
     if (!data) { res.status(404).json({ message: "Karyawan tidak ditemukan di perusahaan aktif." }); return; }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ companyId, employeeId, ...data, canPay: false, photoUploadEnabled: hrdPrivateStorageReady(), ocrEnabled: hrdOcrReady() });
+    res.json({ companyId, employeeId, ...data, canPay: false, statusChangeEnabled: process.env.APP_ENV?.trim().toLowerCase() === "production" && process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED === "true", photoUploadEnabled: hrdPrivateStorageReady(), ocrEnabled: hrdOcrReady() });
   } catch (error) {
     req.log.error({ error, companyId, employeeId }, "HRD employee detail read failed");
     res.status(503).json({ message: "Rincian HRD belum tersedia." });
