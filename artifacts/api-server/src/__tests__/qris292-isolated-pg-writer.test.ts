@@ -462,6 +462,41 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
         SELECT status FROM sport_center.payment_settlement_batches WHERE id=5738
       `);
       expect(original.rows[0].status).toBe("reversed");
+
+      // After the successful two-bank construction, a balanced-looking
+      // journal with the WRONG clearing account must still be rejected.
+      // The second invocation is idempotent for reversal and uses the same
+      // uncommitted fixture: no separate finance write is committed.
+      const finalNov5Journal = await conn.query(`
+        SELECT settlement_journal_id AS id
+        FROM sport_center.payment_settlement_batches WHERE id=5740
+      `);
+      const nov5JournalId = Number(finalNov5Journal.rows[0].id);
+      await conn.query(`
+        UPDATE sport_center.accounting_journal_lines
+        SET account_code='4-9999-CST'
+        WHERE journal_id=$1 AND account_code='1-1024-CST'
+      `,[nov5JournalId]);
+      const reuseStages = {
+        rebuildBothDatedBatches: async () => ({ids:[5739,5740]}),
+        approveBothCanonicalBankMatches: async () => ({approved:[434462,434464]}),
+      };
+      await expect(runAtomicCanonicalSettlementCorrection(db,input,reuseStages))
+        .rejects.toThrow("posted journal bank/MDR/clearing amounts are not canonical");
+      await conn.query(`
+        UPDATE sport_center.accounting_journal_lines
+        SET account_code='1-1024-CST'
+        WHERE journal_id=$1 AND account_code='4-9999-CST'
+      `,[nov5JournalId]);
+
+      // A wrong MDR component also fails even if the batch header and bank
+      // mutation still show the expected amounts.
+      await conn.query(`
+        UPDATE sport_center.accounting_journal_lines SET amount=6301
+        WHERE journal_id=$1 AND account_code='5-3050-CST'
+      `,[nov5JournalId]);
+      await expect(runAtomicCanonicalSettlementCorrection(db,input,reuseStages))
+        .rejects.toThrow("posted journal bank/MDR/clearing amounts are not canonical");
     } finally {
       await conn.query("ROLLBACK");
       await conn.end();
