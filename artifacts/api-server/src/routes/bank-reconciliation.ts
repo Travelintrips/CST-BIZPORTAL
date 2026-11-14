@@ -3493,7 +3493,7 @@ export async function approveCanonicalSettlementLink(
   // node-postgres returns int8/bigint as strings; comparing directly to the
   // numeric request falsely rejects safe idempotent canonical link retries.
   const linkedMutationId = linkedMutationRaw == null ? null : Number(linkedMutationRaw);
-  if (linkedMutationRaw != null
+  if (linkedMutationId !== null
     && (!Number.isSafeInteger(linkedMutationId) || linkedMutationId <= 0)) {
     throw new ApprovalError("Canonical settlement bank mutation ID is invalid.", 409, "CANONICAL_SETTLEMENT_ALREADY_USED");
   }
