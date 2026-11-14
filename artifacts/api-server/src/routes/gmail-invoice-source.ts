@@ -620,6 +620,11 @@ router.get(
 router.post(
   "/recon-classification/invoice-sources/gmail/verify-connection",
   async (req, res) => {
+    // Diagnostic is intentionally unavailable in PROD.
+    if (!isDevelopmentEnvironment()) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
     try {
       const actor = await requireFinanceAdmin(req);
       if (!actor) {
@@ -702,7 +707,7 @@ router.post(
         inboxScanned: false,
         invoiceImported: false,
       });
-    } catch (error) {
+    } catch {
       // No provider response body or credential is sent to the browser.
       req.log.warn("Gmail source connection preflight unavailable");
       res.status(503).json({
