@@ -98,4 +98,104 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
       expect(r.rows[0]).toEqual({extra_batches:0,source_journals:0});
     }finally{await check.end();}
   });
+  it("builds full 5+4 synthetic QRIS cohorts with real owner functions, then leaves no committed rows",async()=>{
+    const client=new pg.Client({connectionString:isolated});
+    await client.connect();
+    const nov4Ids=[9834,9843,9853,9856,9858];
+    const nov5Ids=[9859,9860,9861,9862];
+    const all=[...nov4Ids,...nov5Ids];
+    await client.query("BEGIN");
+    try {
+      // The historical SOURCE composition, but independent synthetic IDs.
+      // Original historical #5738 and its member rows are not modified.
+      await client.query(`
+        INSERT INTO sport_center.sport_payments
+          (id,company_id,amount,status,settlement_status,payment_method,
+           payment_provider,bank_account_id,paid_at,expected_settlement_date,
+           settlement_rule_version,mdr_amount)
+        SELECT source_id,1,CASE WHEN source_id IN (9834,9843,9853,9861)
+                                   THEN 30000 ELSE 300000 END,
+           'confirmed','unsettled','qris','mandiri_direct','1640006707220',
+           CASE WHEN source_id=ANY($1::integer[])
+             THEN '2026-11-03 12:00:00+07'::timestamptz
+             ELSE '2026-11-04 12:00:00+07'::timestamptz END,
+           CASE WHEN source_id=ANY($1::integer[])
+             THEN '2026-11-04' ELSE '2026-11-05' END,
+           'PROD-MANDIRI-SC-20260831-v1',
+           CASE WHEN source_id IN (9834,9843,9853,9861)
+             THEN 0 ELSE 2100 END
+        FROM unnest($2::integer[]) AS source(source_id)
+      `,[nov4Ids,all]);
+      await client.query(`
+        INSERT INTO sport_center.accounting_journals
+          (payment_id,company_id,journal_type,status,is_reversal,
+           gross_amount,debit_amount,credit_revenue_amount,credit_ppn_amount)
+        SELECT p.id,1,'payment_confirmed','posted',false,
+          p.amount,p.amount,p.amount,0
+        FROM sport_center.sport_payments p WHERE p.id=ANY($1::integer[])
+      `,[all]);
+      const reference=await client.query<{settlement_reference:string}>(`
+        SELECT settlement_reference FROM sport_center.canonical_settlement_group_identity(
+          1,'mandiri_direct','1640006707220','2026-11-04'::date,
+          'PROD-MANDIRI-SC-20260831-v1')
+      `);
+      const day4=await client.query<{id:string}>(`
+        SELECT sport_center.create_payment_settlement_batch(
+          $1,1,'mandiri_direct','1640006707220','2026-11-04'::date,
+          $2::integer[],'isolated-ci-only') AS id
+      `,[reference.rows[0].settlement_reference,nov4Ids]);
+      const day5=await client.query<{id:string}>(`
+        SELECT sport_center.create_payment_settlement_supplemental_batch(
+          1,'mandiri_direct','1640006707220','2026-11-05'::date,
+          'PROD-MANDIRI-SC-20260831-v1',
+          $1::integer[],'isolated-ci-only') AS id
+      `,[nov5Ids]);
+      expect(day4.rows[0].id).not.toBe(day5.rows[0].id);
+      const r=await client.query<{
+        settlement_date:string;gross_amount:string;mdr_amount:string;
+        net_amount:string;status:string;payment_ids:number[];
+      }>(`
+        SELECT b.settlement_date::text,b.gross_amount::text,
+          b.mdr_amount::text,b.net_amount::text,b.status,
+          ARRAY(SELECT i.payment_id FROM sport_center.payment_settlement_items i
+            WHERE i.settlement_id=b.id AND i.item_status='active'
+            ORDER BY i.payment_id) AS payment_ids
+        FROM sport_center.payment_settlement_batches b
+        WHERE b.id=ANY($1::bigint[]) ORDER BY b.settlement_date
+      `,[[day4.rows[0].id,day5.rows[0].id]]);
+      expect(r.rows.map(x=>({
+        date:x.settlement_date,gross:Number(x.gross_amount),
+        mdr:Number(x.mdr_amount),net:Number(x.net_amount),
+        status:x.status,ids:x.payment_ids,
+      }))).toEqual([
+        {date:"2026-11-04",gross:690000,mdr:4200,net:685800,
+          status:"calculated",ids:nov4Ids},
+        {date:"2026-11-05",gross:930000,mdr:6300,net:923700,
+          status:"calculated",ids:nov5Ids},
+      ]);
+    }finally{
+      await client.query("ROLLBACK").catch(()=>undefined);
+      await client.end();
+    }
+    const verify=new pg.Client({connectionString:isolated});
+    await verify.connect();
+    try {
+      const r=await verify.query(`
+        SELECT
+          (SELECT count(*)::int FROM sport_center.sport_payments
+           WHERE id=ANY($1::integer[])) AS synthetic_payments,
+          (SELECT count(*)::int FROM sport_center.accounting_journals
+           WHERE payment_id=ANY($1::integer[])) AS synthetic_receipts,
+          (SELECT count(*)::int FROM sport_center.payment_settlement_batches
+           WHERE id<>5738) AS extra_batches,
+          (SELECT status FROM sport_center.payment_settlement_batches
+           WHERE id=5738) AS original_status
+      `,[all]);
+      expect(r.rows[0]).toEqual({
+        synthetic_payments:0,synthetic_receipts:0,extra_batches:0,
+        original_status:"posted",
+      });
+    } finally { await verify.end(); }
+  });
+
 });
