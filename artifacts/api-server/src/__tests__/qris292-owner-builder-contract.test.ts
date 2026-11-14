@@ -45,6 +45,18 @@ describe("Issue 292 canonical rebuild integration contract", () => {
     expect(draft).toBeGreaterThan(mismatch);
   });
 
+  it("requires both authentic unmatched bank mutations before owner batch writers", () => {
+    expect(rebuild).toContain("WHERE m.id IN (434462,434464)");
+    expect(rebuild).toContain("FOR UPDATE OF m,a");
+    expect(rebuild).toContain('row.source_classification!=="actual_bank_mutation"');
+    expect(rebuild).toContain('row.status!=="unmatched"');
+    expect(rebuild).toContain("row.journal_entry_id!=null");
+    expect(rebuild).toContain("row.approved_at!=null");
+    expect(rebuild).toContain("row.posted_at!=null");
+    expect(rebuild.indexOf("Issue #292 bank evidence mismatch"))
+      .toBeLessThan(rebuild.indexOf("sport_center.create_payment_settlement_batch("));
+  });
+
   it("preserves historical #5738 and blocks external bank approval or deployment by itself", () => {
     expect(rebuild).toContain("reversal.settlementId !== 5738");
     expect(rebuild).toContain("reversal.bankMutationId !== 434464");
