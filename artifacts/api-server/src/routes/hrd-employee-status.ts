@@ -1,6 +1,7 @@
 import { hrdEmployeeStatusChangeEnabled } from "./hrd-employee-status-gate";
 import type { IRouter, Request, Response } from "express";
 import { withHrdCompanyScope } from "./hrd-db";
+import { getEmployeeResignKasbonPrecheck } from "./hrd-resign-kasbon-precheck";
 
 type ScopedHrdRequest=Request & {
   hrdCompanyId?:number;
@@ -50,6 +51,10 @@ export function registerHrdEmployeeStatusRoutes(router: IRouter):void {
           [employeeId,companyId]);
         if(current.rowCount!==1)return {state:"not_found" as const};
         if(current.rows[0].status!=="active")return {state:"already_inactive" as const};
+        // Mandatory under the SAME transaction as the status write, *after*
+        // locking the employee. No override or debt write-through on resign.
+        const kasbon=await getEmployeeResignKasbonPrecheck(client,companyId,employeeId);
+        if(!kasbon.canDeactivate) return {state:"blocked_kasbon" as const,kasbon};
 
         const changed=await client.query(
           "UPDATE public.employees SET status='inactive' WHERE id=$1 AND company_id=$2 AND status='active' AND deleted_at IS NULL RETURNING id,status",
@@ -71,6 +76,14 @@ export function registerHrdEmployeeStatusRoutes(router: IRouter):void {
       if(result.state==="already_inactive"){
         res.status(409).json({message:"Karyawan sudah tidak aktif. Tidak ada perubahan."});return;
       }
+      if(result.state==="blocked_kasbon"){
+        res.status(409).json({
+          code:"HRD_RESIGN_KASBON_REQUIRES_REVIEW",
+          message:"Nonaktifkan tertahan: terdapat kasbon atau reservasi potongan belum selesai. Verifikasi Draft/cair dan penyelesaian kasbon dengan Accounting terlebih dahulu.",
+          companyId,employeeId,kasbon:result.kasbon,
+          employeeStatusUnchanged:true,noSettlement:true,noPayrollWrite:true,
+        });return;
+      }
       res.status(200).json({
         companyId,employeeId,previousStatus:"active",status:"inactive",
         auditRecorded:true,removedFromFuturePayroll:true,deleted:false,
@@ -79,6 +92,37 @@ export function registerHrdEmployeeStatusRoutes(router: IRouter):void {
     }catch(error){
       req.log?.error?.({error,companyId,employeeId},"HRD employee resign status failed");
       res.status(503).json({message:"Gagal mengubah status. Perubahan dibatalkan tanpa menghapus data."});
+    }
+  });
+
+  router.get("/hrd/employees/:id/resign-kasbon-precheck",async(req:ScopedHrdRequest,res:Response):Promise<void>=>{
+    res.setHeader("Cache-Control","no-store");
+    const employeeId=idOf(req.params.id);
+    const companyId=req.hrdCompanyId;
+    const role=req.hrdActor?.role?.trim().toLowerCase();
+    if(!employeeId||!Number.isSafeInteger(companyId)||!companyId||companyId<1){
+      res.status(400).json({message:"Karyawan atau perusahaan tidak valid."});return;
+    }
+    if(role!=="owner"&&role!=="super_admin"){
+      res.status(403).json({message:"Pemeriksaan kasbon resign hanya untuk Owner/Super Admin HRD."});return;
+    }
+    try{
+      const data=await withHrdCompanyScope(companyId,async client=>{
+        const employee=await client.query(
+          "SELECT id,status FROM public.employees WHERE id=$1 AND company_id=$2 AND deleted_at IS NULL",
+          [employeeId,companyId]);
+        if(employee.rowCount!==1)return null;
+        const kasbon=await getEmployeeResignKasbonPrecheck(client,companyId,employeeId);
+        return {employeeStatus:String(employee.rows[0].status),kasbon};
+      });
+      if(!data){res.status(404).json({message:"Karyawan tidak ditemukan."});return;}
+      res.json({
+        companyId,employeeId,employeeStatus:data.employeeStatus,...data.kasbon,
+        checkReadOnly:true, kasbonUnchanged:true,canPay:false,canPostJournal:false,
+      });
+    }catch(error){
+      req.log?.error?.({error,companyId,employeeId},"HRD resign kasbon precheck failed");
+      res.status(503).json({message:"Pemeriksaan kasbon belum tersedia. Nonaktifkan ditahan untuk mencegah hilangnya kewajiban."});
     }
   });
 
