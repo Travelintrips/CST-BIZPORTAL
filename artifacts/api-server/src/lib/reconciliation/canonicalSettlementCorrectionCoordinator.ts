@@ -257,11 +257,28 @@ export async function rebuildIssue292WithOwnerFunctions(
     if (!Number.isSafeInteger(batchId) || batchId<=0 || batchId===5738
       || built.includes(batchId)) throw new Error("Issue #292 owner batch returned invalid ID.");
     const calculated=await tx.execute(sql`
-      SELECT status::text AS status FROM sport_center.payment_settlement_batches
-      WHERE id=${batchId} AND company_id=1 FOR UPDATE
+      SELECT b.status::text AS status,
+        b.settlement_date::text AS date, b.gross_amount,b.mdr_amount,b.net_amount,
+        COALESCE(array_agg(i.payment_id ORDER BY i.payment_id)
+          FILTER (WHERE i.payment_id IS NOT NULL),ARRAY[]::integer[]) AS payment_ids
+      FROM sport_center.payment_settlement_batches b
+      LEFT JOIN sport_center.payment_settlement_items i
+        ON i.settlement_id=b.id AND i.item_status='active'
+      WHERE b.id=${batchId} AND b.company_id=1
+      GROUP BY b.id FOR UPDATE OF b
     `);
-    if ((calculated.rows[0] as Record<string,unknown>|undefined)?.status!=="calculated")
-      throw new Error("Issue #292 owner batch is not calculated.");
+    const built=calculated.rows[0] as Record<string,unknown>|undefined;
+    const builtPayments=Array.isArray(built?.payment_ids)
+      ? built.payment_ids.map(Number).sort((a,b)=>a-b) : [];
+    if (!built || built.status!=="calculated" || built.date!==cohort.date
+      || Number(built.gross_amount)!==cohort.gross
+      || Number(built.mdr_amount)!==cohort.mdr
+      || Number(built.net_amount)!==cohort.net
+      || builtPayments.join(",")!==cohort.ids.join(",")) {
+      throw new Error(`Issue #292 owner-calculated batch differs from exact bank gross/MDR/net or membership: ${cohort.date}`);
+    }
+    // A wrong owner rule or 0.3%/0.7% mismatch must fail BEFORE creating
+    // or posting a settlement journal. The outer transaction rolls back.
     await tx.execute(sql`
       SELECT sport_center.create_settlement_journal_draft(
         ${batchId}::bigint,'1-1023-CST',${operator}
