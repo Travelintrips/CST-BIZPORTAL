@@ -102,6 +102,21 @@ export async function runAtomicCanonicalSettlementCorrection<TBatches, TApproval
       if (!valid || used.has(Number(row.batch_id))) {
         throw new Error(`Issue #292 canonical bank or membership postcondition failed: ${cohort.mutationId}.`);
       }
+      // Posted alone is not sufficient: verify a nonzero balanced ledger
+      // for every replacement settlement journal before the outer commit.
+      const ledger = await tx.execute(sql`
+        SELECT COALESCE(SUM(amount) FILTER (WHERE line_type='debit'),0) AS debits,
+               COALESCE(SUM(amount) FILTER (WHERE line_type='credit'),0) AS credits,
+               COUNT(*)::integer AS lines
+        FROM sport_center.accounting_journal_lines
+        WHERE journal_id=${Number(row.settlement_journal_id)}
+      `);
+      const amounts = ledger.rows[0] as Record<string,unknown>|undefined;
+      if (!amounts || Number(amounts.lines)<2 || Number(amounts.debits)<=0
+        || Number(amounts.debits)!==Number(amounts.credits)
+        || Number(amounts.debits)!==cohort.net) {
+        throw new Error(`Issue #292 posted settlement journal is unbalanced or does not equal bank net: ${cohort.mutationId}.`);
+      }
       used.add(Number(row.batch_id));
     }
     const original = await tx.execute(sql`
