@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import { pool } from "@workspace/db";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { assertIssue292OwnerRuleParity } from "../lib/reconciliation/issue292OwnerRuleGate";
 import {
   runAtomicCanonicalSettlementCorrection,
   rebuildIssue292WithOwnerFunctions,
@@ -3726,6 +3727,10 @@ async function runIssue292CorrectionWithCanonicalApproval(
     transaction: async <T>(callback: (scope: typeof tx) => Promise<T>): Promise<T> => {
       await client.query("BEGIN");
       try {
+        // Same connection and transaction, before the first finance write.
+        // DEV must provide matching historical owner-rule evidence, not a
+        // generic 0.3% Mandiri rule which would calculate wrong journals.
+        await assertIssue292OwnerRuleParity(client);
         const value = await callback(tx);
         await client.query("COMMIT");
         return value;
