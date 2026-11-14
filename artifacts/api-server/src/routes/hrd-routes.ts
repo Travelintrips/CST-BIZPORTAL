@@ -157,7 +157,12 @@ router.get("/hrd/employees", async (req: HrdRequest, res: Response) => {
       return result.rows;
     });
     res.setHeader("Cache-Control", "no-store");
-    res.json({ companyId, employees });
+    res.json({
+      companyId, employees,
+      // One read-only capability sourced from server settings, never client config.
+      statusChangeEnabled: process.env.APP_ENV?.trim().toLowerCase() === "production" &&
+        process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED === "true",
+    });
   } catch (error) {
     req.log.error({ error, companyId }, "HRD employee directory read failed");
     res.status(503).json({ message: "Direktori karyawan HRD belum tersedia." });
