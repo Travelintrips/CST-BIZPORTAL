@@ -66,6 +66,11 @@ interface Advance {
   advance_number: string;
   advance_type: AdvanceType;
   lifecycle_status: LifecycleStatus;
+  status?: string;
+  posting_status?: string;
+  verified_disbursement?: boolean;
+  requires_source_review?: boolean;
+  readOnly?: boolean;
   party_name: string;
   amount: number;
   remaining_amount: number;
