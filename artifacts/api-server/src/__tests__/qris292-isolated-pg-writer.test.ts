@@ -127,6 +127,29 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
     } finally {await conn.query("ROLLBACK");await conn.end();}
   });
 
+  it("rejects wrong replacement MDR before writing any compensating journal", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = { execute: async (statement: any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql, compiled.params);
+    }};
+    try {
+      await conn.query("UPDATE sport_center.sport_payments SET mdr_amount=1576 WHERE id=862");
+      await expect(reverseCanonicalSettlementForCorrection({
+        transaction: async (callback: any) => callback(tx),
+      } as any,input)).rejects.toThrow("Replacement cohort gross/MDR/net");
+      const check = await conn.query(`
+        SELECT b.status,
+          (SELECT count(*)::int FROM sport_center.accounting_journals WHERE reversal_of_id=7207) AS reversals,
+          (SELECT count(*)::int FROM sport_center.payment_settlement_items WHERE settlement_id=5738 AND item_status='active') AS active_items
+        FROM sport_center.payment_settlement_batches b WHERE b.id=5738
+      `);
+      expect(check.rows[0]).toMatchObject({status:"posted",reversals:0,active_items:4});
+    } finally {await conn.query("ROLLBACK"); await conn.end();}
+  });
+
   it("fails closed for wrong bank transaction date before inserting a reversal journal", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
