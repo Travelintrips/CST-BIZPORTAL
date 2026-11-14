@@ -48,12 +48,20 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       `);
       const original = lines.rows.filter((r:any) => r.id===7207);
       const reversal = lines.rows.filter((r:any) => r.reversal_of_id===7207);
-      expect(original).toHaveLength(2);
-      expect(reversal).toHaveLength(2);
+      expect(original).toHaveLength(3);
+      expect(reversal).toHaveLength(3);
       expect(original.map((r:any) => [r.account_code,r.line_type,Number(r.amount)]))
-        .toEqual([["1001","debit",923700],["4001","credit",923700]]);
+        .toEqual([
+          ["1-1023-CST","debit",923700],
+          ["1-1024-CST","credit",930000],
+          ["5-3050-CST","debit",6300],
+        ]);
       expect(reversal.map((r:any) => [r.account_code,r.line_type,Number(r.amount)]))
-        .toEqual([["1001","credit",923700],["4001","debit",923700]]);
+        .toEqual([
+          ["1-1023-CST","credit",923700],
+          ["1-1024-CST","debit",930000],
+          ["5-3050-CST","credit",6300],
+        ]);
       expect(reversal.every((r:any) => r.status==="posted")).toBe(true);
       const bankAfter = await conn.query("SELECT status, reconciliation_status, review_code FROM public.bank_mutations WHERE id=434464");
       expect(bankAfter.rows[0]).toMatchObject({
@@ -402,18 +410,22 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
               (journal_type,status,is_reversal,settlement_batch_id,notes,
                debit_amount,credit_revenue_amount,credit_ppn_amount)
             VALUES
-              ('settlement','draft',false,5739,'TEST COHORT NOV4',685800,685800,0),
-              ('settlement','draft',false,5740,'TEST COHORT NOV5',923700,923700,0)
+              ('settlement','draft',false,5739,'TEST COHORT NOV4',690000,690000,0),
+              ('settlement','draft',false,5740,'TEST COHORT NOV5',930000,930000,0)
             RETURNING id,settlement_batch_id
           `);
           for (const j of journals.rows) {
-            const amount = Number(j.settlement_batch_id)===5739 ? 685800 : 923700;
+            const isNov4 = Number(j.settlement_batch_id)===5739;
+            const bankNet = isNov4 ? 685800 : 923700;
+            const mdr = isNov4 ? 4200 : 6300;
+            const gross = isNov4 ? 690000 : 930000;
             await conn.query(`
               INSERT INTO sport_center.accounting_journal_lines
                 (journal_id,line_type,account_code,account_name,amount,description)
-              VALUES($1,'debit','1001','clearing',$2,'synthetic bank'),
-                    ($1,'credit','4001','revenue',$2,'synthetic settlement')
-            `,[j.id,amount]);
+              VALUES($1,'debit','1-1023-CST','Bank Mandiri Ciputat',$2,'synthetic bank net'),
+                    ($1,'debit','5-3050-CST','Beban MDR QRIS',$3,'synthetic mdr'),
+                    ($1,'credit','1-1024-CST','QRIS clearing',$4,'synthetic clearing gross')
+            `,[j.id,bankNet,mdr,gross]);
             await conn.query("SELECT sport_center.validate_accounting_journal($1)",[j.id]);
             await conn.query("UPDATE sport_center.accounting_journals SET status='posted' WHERE id=$1",[j.id]);
             await conn.query(`
