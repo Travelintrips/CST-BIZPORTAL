@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrection.ts"
+      - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrectionCoordinator.ts"
       - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
       - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
