@@ -20,6 +20,7 @@ type Detail = {
     position: string | null; status: string | null; email: string | null };
   verifiedProfile: Record<string, string | null>;
   documents: Document[];
+  statusChangeEnabled?: boolean;
   photoUploadEnabled: boolean;
   ocrEnabled: boolean;
   audit: Array<{ action: string; created_at: string; actor: string }>;
@@ -43,6 +44,10 @@ export default function HrdEmployeeDetailPage() {
   const [photoUrl, setPhotoUrl] = useState("");
   const [photoError, setPhotoError] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [resignReason, setResignReason] = useState("");
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusError, setStatusError] = useState("");
+  const [statusNotice, setStatusNotice] = useState("");
   const [photoNotice, setPhotoNotice] = useState("");
   const [privatePreview, setPrivatePreview] = useState<{id:string;url:string}|null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -82,6 +87,7 @@ export default function HrdEmployeeDetailPage() {
   useEffect(() => {
     setDetail(null);
     setPrivatePreview(null);
+    setResignReason("");setStatusBusy(false);setStatusError("");setStatusNotice("");
     photoEpoch.current++;
     setPhotoBusy(false);
     void refresh();
@@ -175,6 +181,36 @@ export default function HrdEmployeeDetailPage() {
       if (epoch === photoEpoch.current) setPhotoError(cause instanceof Error ? cause.message : "Pratinjau Pas Foto gagal.");
     } finally { if (epoch === photoEpoch.current) setPhotoBusy(false); }
   };
+  async function deactivateEmployee(){
+    if(!scopedDetail?.statusChangeEnabled || scopedDetail.employee.status!=="active" ||
+       !companyId || statusBusy || resignReason.trim().length<10 || resignReason.trim().length>500)
+      return;
+    if(!window.confirm(
+      "Nonaktifkan karyawan ini karena resign?\\n"+
+      "Karyawan tidak akan masuk perhitungan Payroll berikutnya. Riwayat gaji dan dokumen tidak akan dihapus."
+    ))return;
+    setStatusBusy(true);setStatusError("");setStatusNotice("");
+    try{
+      const response=await fetch(
+        `/api/hrd/employees/${employeeId}/status?companyId=${companyId}`,{
+          method:"PATCH",credentials:"include",cache:"no-store",
+          headers:{"content-type":"application/json","x-hrd-status-intent":"deactivate-employee"},
+          body:JSON.stringify({status:"inactive",confirm:true,reason:resignReason.trim()}),
+        });
+      const body=await response.json().catch(()=>({})) as {
+        message?:string;companyId?:number;employeeId?:number;status?:string;
+        auditRecorded?:boolean;deleted?:boolean;
+      };
+      if(!response.ok)throw Error(body.message??`Gagal memperbarui status (HTTP ${response.status}).`);
+      if(body.companyId!==companyId||body.employeeId!==employeeId||body.status!=="inactive"||
+         body.auditRecorded!==true||body.deleted!==false)
+        throw Error("Respons status tidak terverifikasi; periksa ulang sebelum mengulang perubahan.");
+      setStatusNotice("Karyawan sudah nonaktif (resign), audit tersimpan. Data historis tetap ada; tidak masuk Payroll baru.");
+      setResignReason("");
+      await refresh();
+    }catch(e){setStatusError(e instanceof Error?e.message:"Tidak dapat menonaktifkan karyawan.");}
+    finally{setStatusBusy(false);}
+  }
   return <AppShell>
     <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -196,7 +232,35 @@ export default function HrdEmployeeDetailPage() {
           <CardContent className="space-y-2 text-sm">
             <p className="text-lg font-semibold">{scopedDetail.employee.first_name} {scopedDetail.employee.last_name}</p>
             <p>Jabatan: {scopedDetail.employee.position || "Belum diisi"}</p>
-            <p>Status: {scopedDetail.employee.status || "Belum diketahui"}</p>
+            <p>Status: <strong>{scopedDetail.employee.status==="active"?"Aktif":
+              scopedDetail.employee.status==="inactive"?"Nonaktif":
+              scopedDetail.employee.status||"Belum diketahui"}</strong></p>
+            {scopedDetail.employee.status==="active" && <div className="mt-3 space-y-2 rounded-lg border p-3">
+              <h3 className="font-semibold">Pengelolaan status karyawan</h3>
+              <p className="text-xs text-muted-foreground">
+                Nonaktifkan hanya setelah resign dikonfirmasi HRD. Payroll periode baru
+                mengecualikan karyawan nonaktif; Payroll historis tidak dihapus.
+              </p>
+              <label className="block text-xs">Alasan atau referensi resign HRD
+                <textarea aria-label="Alasan nonaktif karyawan" className="mt-1 block w-full rounded border bg-background p-2 text-sm"
+                  rows={2} maxLength={500} value={resignReason}
+                  onChange={e=>setResignReason(e.target.value)}
+                  placeholder="Contoh: Surat pengunduran diri diterima HRD tanggal ..."/>
+              </label>
+              <Button variant="outline" size="sm"
+                disabled={!scopedDetail.statusChangeEnabled || statusBusy || resignReason.trim().length<10}
+                onClick={()=>void deactivateEmployee()}>
+                {statusBusy?"Memproses perubahan...":"Nonaktifkan (Resign)"}
+              </Button>
+              {!scopedDetail.statusChangeEnabled && <p className="text-xs text-muted-foreground">
+                Perubahan status belum diaktifkan pada server. Data karyawan tidak diubah.
+              </p>}
+            </div>}
+            {scopedDetail.employee.status==="inactive" && <p className="text-xs text-muted-foreground">
+              Karyawan sudah tidak aktif; tetap terlihat dalam direktori HRD dan riwayat Payroll lama.
+            </p>}
+            {statusError && <p role="alert" className="text-xs text-destructive">{statusError}</p>}
+            {statusNotice && <p role="status" className="text-xs text-green-700">{statusNotice}</p>}
             <p>Email: {scopedDetail.employee.email || "Belum diisi"}</p>
             <h3 className="pt-3 font-semibold">Hasil identitas terverifikasi</h3>
             {Object.keys(scopedDetail.verifiedProfile).length === 0

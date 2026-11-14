@@ -19,6 +19,7 @@ export default function HrdEmployeeDirectory() {
     ? Number(activeCompanyId) : null;
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [search, setSearch] = useState("");
+  const [statusFilter,setStatusFilter] = useState<"all"|"active"|"inactive">("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
@@ -47,9 +48,10 @@ export default function HrdEmployeeDirectory() {
   }, [companyId]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? employees.filter((e) => [e.first_name,e.last_name,e.email,e.phone,e.position,String(e.id)]
-      .some((v) => String(v ?? "").toLowerCase().includes(q))) : employees;
-  }, [employees, search]);
+    return employees.filter(e=>(statusFilter==="all"||e.status===statusFilter) &&
+      (!q||[e.first_name,e.last_name,e.email,e.phone,e.position,String(e.id)]
+        .some(v=>String(v??"").toLowerCase().includes(q))));
+  }, [employees, search, statusFilter]);
   return <AppShell>
     <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -65,6 +67,15 @@ export default function HrdEmployeeDirectory() {
           <Input className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama, ID, email, telepon, jabatan..." /></div>
         <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Muat ulang</Button>
       </div>
+      <div className="flex flex-wrap items-center gap-2 text-sm" aria-label="Filter status karyawan">
+        {([
+          ["all",`Semua (${employees.length})`],
+          ["active",`Aktif (${employees.filter(e=>e.status==="active").length})`],
+          ["inactive",`Nonaktif (${employees.filter(e=>e.status==="inactive").length})`],
+        ] as const).map(([value,label])=>
+          <Button type="button" key={value} size="sm" variant={statusFilter===value?"default":"outline"}
+            onClick={()=>setStatusFilter(value)}>{label}</Button>)}
+      </div>
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</div>}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>{loading ? "Memuat data..." : `${filtered.length} karyawan`}</span><span>Perusahaan ID: {companyId ?? "Belum dipilih"}</span>
@@ -76,7 +87,7 @@ export default function HrdEmployeeDirectory() {
               <p className="font-semibold">{[employee.first_name,employee.last_name].filter(Boolean).join(" ") || "Tanpa nama"}</p>
               <p className="text-xs text-muted-foreground">ID {employee.id} · {employee.position || "Jabatan belum diisi"}</p>
               <p className="text-xs text-muted-foreground">{employee.email || employee.phone || "Kontak belum tersedia"}</p>
-              <p className="text-xs text-muted-foreground">Status: {employee.status || "Tidak diketahui"}</p>
+              <p className="text-xs text-muted-foreground">Status: {employee.status==="active"?"Aktif":employee.status==="inactive"?"Nonaktif":employee.status||"Tidak diketahui"}</p>
             </div>
             <Button type="button" size="sm" variant="outline" onClick={() => navigate(`/hr/employees/${employee.id}`)}>Detail</Button>
           </CardContent>

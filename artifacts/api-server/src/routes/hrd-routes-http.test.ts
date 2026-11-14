@@ -53,11 +53,14 @@ describe("HRD production API company isolation", () => {
   let root: string;
   const originalHrdProdEnabled = process.env.HRD_PROD_ENABLED;
   const originalCanaryEnabled=process.env.HRD_PROD_STORAGE_CANARY_ENABLED;
+  const originalStatusEnabled=process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED;
   afterEach(async () => {
     if (originalHrdProdEnabled === undefined) delete process.env.HRD_PROD_ENABLED;
     else process.env.HRD_PROD_ENABLED = originalHrdProdEnabled;
     if (originalCanaryEnabled === undefined) delete process.env.HRD_PROD_STORAGE_CANARY_ENABLED;
     else process.env.HRD_PROD_STORAGE_CANARY_ENABLED = originalCanaryEnabled;
+    if (originalStatusEnabled === undefined) delete process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED;
+    else process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED = originalStatusEnabled;
     state.session = null; state.actor = null; state.activeUser=true; state.dbUserId="other_user"; state.queries.length = 0; state.role.length = 0;
     if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -185,6 +188,17 @@ describe("HRD production API company isolation", () => {
     state.activeUser=false;
     response=await fetch(root+"/api/hrd/readiness?companyId=1");
     expect(response.status).toBe(403);
+  });
+  it("refuses anonymous resign even with feature flag and valid origin",async()=>{
+    await start();
+    process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED="true";
+    const response=await fetch(root+"/api/hrd/employees/10/status?companyId=1",{
+      method:"PATCH",headers:{"origin":"https://bizportal.cstlogistic.co.id",
+        "content-type":"application/json","x-hrd-status-intent":"deactivate-employee"},
+      body:JSON.stringify({status:"inactive",confirm:true,reason:"Surat pengunduran diri terverifikasi"}),
+    });
+    expect(response.status).toBe(401);
+    expect(state.queries).toHaveLength(0);
   });
   it("rejects anonymous calls before touching DB", async () => {
     await start();
