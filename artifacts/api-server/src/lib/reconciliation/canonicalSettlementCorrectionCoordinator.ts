@@ -282,11 +282,11 @@ export async function rebuildIssue292WithOwnerFunctions(
       `);
     } else {
       const refRows=await tx.execute(sql`
-        SELECT correlation_id FROM sport_center.canonical_settlement_group_identity(
+        SELECT settlement_reference FROM sport_center.canonical_settlement_group_identity(
           1,${provider},${account},${cohort.date}::date,${rule}
         )
       `);
-      const reference=String((refRows.rows[0] as Record<string,unknown>|undefined)?.correlation_id??"");
+      const reference=String((refRows.rows[0] as Record<string,unknown>|undefined)?.settlement_reference??"");
       if (!reference) throw new Error("Issue #292 canonical group identity missing.");
       batchResult=await tx.execute(sql`
         SELECT sport_center.create_payment_settlement_batch(
