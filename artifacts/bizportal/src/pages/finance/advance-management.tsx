@@ -128,6 +128,9 @@ export default function AdvanceManagementPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [dashboard, setDashboard] = useState<any>(null);
+  const [readError,setReadError]=useState("");
+  // Standalone BizPortal currently supports only RLS-scoped historical kasbon reads.
+  const readOnly=true;
   const [aging, setAging] = useState<any[]>([]);
   const [allAccounts, setAllAccounts] = useState<CoaAccount[]>([]);
   const [advanceAccounts, setAdvanceAccounts] = useState<CoaAccount[]>([]);
@@ -154,14 +157,15 @@ export default function AdvanceManagementPage() {
 
   // ── API helpers ──────────────────────────────────────────────────────────
   const api = useCallback(async (path: string, opts?: RequestInit) => {
-    const url = `/api/advances${path}`;
+    const url = `/api/advances${path}` +
+      (path.includes("?")?"&":"?") + "companyId=" + encodeURIComponent(String(activeCompanyId??""));
     const res = await fetch(url, { credentials: "include", ...opts });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
     }
     return res.json();
-  }, []);
+  }, [activeCompanyId]);
 
   const coaApi = useCallback(async (type?: string, subtype?: string) => {
     const params = new URLSearchParams();
@@ -175,7 +179,7 @@ export default function AdvanceManagementPage() {
   // ── Data loading ──────────────────────────────────────────────────────────
   const loadAdvances = useCallback(async () => {
     if (!activeCompanyId) return;
-    setLoading(true);
+    setLoading(true);setReadError("");
     try {
       const params = new URLSearchParams({ page: String(page), limit: "50" });
       if (filterType)    params.set("advance_type", filterType);
@@ -184,10 +188,14 @@ export default function AdvanceManagementPage() {
       if (filterDateTo)   params.set("date_to", filterDateTo);
       if (filterParty)    params.set("party_name", filterParty);
       const data = await api(`/?${params}`);
-      setAdvances(data.data ?? []);
-      setTotal(data.total ?? 0);
+      if(data.readOnly!==true||data.coverage!=="EMPLOYEE_KASBON_ONLY")
+        throw Error("Sumber kasbon belum terverifikasi sebagai pembacaan historis khusus.");
+      setAdvances(Array.isArray(data.data)?data.data:[]);
+      setTotal(Number(data.total??0));
     } catch (err: any) {
-      toast({ variant: "destructive", title: "Gagal memuat data", description: err?.message });
+      setAdvances([]);setTotal(0);
+      setReadError(err?.message??"Sumber riwayat kasbon tidak tersedia.");
+      toast({ variant: "destructive", title: "Riwayat kasbon belum dapat dibaca", description: err?.message });
     } finally {
       setLoading(false);
     }
@@ -195,7 +203,7 @@ export default function AdvanceManagementPage() {
 
   const loadDashboard = useCallback(async () => {
     if (!activeCompanyId) return;
-    try { const d = await api("/dashboard"); setDashboard(d); } catch {}
+    try { const d = await api("/dashboard"); if(d.readOnly===true)setDashboard(d); } catch { setDashboard(null); }
   }, [activeCompanyId, api]);
 
   const loadAging = useCallback(async () => {
@@ -256,32 +264,45 @@ export default function AdvanceManagementPage() {
           </button>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Advance Management</h1>
-            <p className="text-sm text-slate-500 mt-0.5">Kelola semua jenis advance — kasbon, talangan, uang muka, dan lainnya</p>
+            <p className="text-sm text-slate-500 mt-0.5">Kasbon Karyawan Historis — sumber baca-saja, bukan pembayaran atau pencairan</p>
           </div>
         </div>
-        <Button onClick={() => setCreateOpen(true)} className="gap-2">
+        {!readOnly && <Button onClick={() => setCreateOpen(true)} className="gap-2">
           <Plus className="w-4 h-4" /> Buat Advance
-        </Button>
+        </Button>}
       </div>
 
-      {/* Stats cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard icon={<Wallet className="w-5 h-5 text-orange-600" />} bg="bg-orange-50"
-          label="Total Outstanding" value={IDR(Number(stats.outstanding_amount ?? 0))} sub={`${stats.outstanding_count ?? 0} advance`} />
-        <StatCard icon={<Clock className="w-5 h-5 text-yellow-600" />} bg="bg-yellow-50"
-          label="Menunggu Approval" value={String(stats.pending_count ?? 0)} sub="advance" />
-        <StatCard icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} bg="bg-green-50"
-          label="Total Dilunasi" value={IDR(Number(stats.total_settled ?? 0))} sub="kumulatif" />
-        <StatCard icon={<TrendingDown className="w-5 h-5 text-blue-600" />} bg="bg-blue-50"
-          label="Sisa Terhutang" value={IDR(Number(stats.total_remaining ?? 0))} sub="dari outstanding" />
+      <div role="status" className="rounded-lg border border-amber-400/40 p-4 text-sm">
+        <p className="font-semibold">Data kasbon historis — hanya baca</p>
+        <p className="mt-1 text-muted-foreground">
+          Advance Management universal belum terhubung ke backend mandiri.
+          Data di bawah berasal dari kasbon yang sudah ada, bukan impor atau transaksi baru.
+          Status Draft/PENDING dan saldo tercatat bukan bukti uang sudah dicairkan.
+        </p>
       </div>
+      {readError && <div role="alert" className="rounded-lg border border-red-500/40 p-3 text-sm text-red-500">
+        {readError} — jangan membuat Advance baru untuk menggantikan catatan yang tidak tampil.
+      </div>}
+      {dashboard?.coverage==="EMPLOYEE_KASBON_ONLY" && <div className="grid grid-cols-2 gap-3">
+        <StatCard icon={<Wallet className="w-5 h-5 text-orange-600" />} bg="bg-orange-50"
+          label="Saldo kasbon tercatat, belum terverifikasi"
+          value={IDR(Number(stats.recorded_unverified_amount??0))}
+          sub={`${stats.recorded_unverified_count??0} transaksi perlu pembuktian`}/>
+        <StatCard icon={<CheckCircle2 className="w-5 h-5 text-green-600" />} bg="bg-green-50"
+          label="Saldo pencairan terverifikasi"
+          value={IDR(Number(stats.outstanding_amount??0))}
+          sub={`${stats.outstanding_count??0} transaksi terverifikasi`}/>
+      </div>}
+      {!dashboard && !loading && <p role="status" className="text-sm text-muted-foreground">
+        Ringkasan saldo belum tersedia. Rp0 tidak boleh dianggap sebagai saldo akhir.
+      </p>}
 
       {/* Tabs */}
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-9">
           <TabsTrigger value="list" className="text-xs">Daftar Advance</TabsTrigger>
-          <TabsTrigger value="aging" className="text-xs">Laporan Aging</TabsTrigger>
-          <TabsTrigger value="by_type" className="text-xs">Rekapitulasi</TabsTrigger>
+          <TabsTrigger value="aging" disabled={readOnly} className="text-xs">Laporan Aging</TabsTrigger>
+          <TabsTrigger value="by_type" disabled={readOnly} className="text-xs">Rekapitulasi</TabsTrigger>
         </TabsList>
 
         {/* ── LIST TAB ──────────────────────────────────────────────────── */}
@@ -293,8 +314,8 @@ export default function AdvanceManagementPage() {
               <Select value={filterType} onValueChange={v => { setFilterType(v === "__all__" ? "" : v); setPage(1); }}>
                 <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="Semua tipe" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__all__">Semua tipe</SelectItem>
-                  {ADVANCE_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  <SelectItem value="__all__">Kasbon karyawan (historis)</SelectItem>
+                  {ADVANCE_TYPES.map(t => <SelectItem key={t.value} value={t.value} disabled={readOnly && t.value!=="EMPLOYEE"}>{t.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -353,10 +374,10 @@ export default function AdvanceManagementPage() {
                 {!loading && advances.length === 0 && (
                   <TableRow><TableCell colSpan={8} className="text-center py-12 text-slate-400 text-sm">
                     <Wallet className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                    <p>Belum ada advance</p>
-                    <Button className="mt-3 text-xs h-8" size="sm" onClick={() => setCreateOpen(true)}>
+                    <p>{readError?"Pembacaan kasbon gagal.":"Tidak ada kasbon pada filter yang dipilih."}</p>
+                    {!readOnly && <Button className="mt-3 text-xs h-8" size="sm" onClick={() => setCreateOpen(true)}>
                       <Plus className="w-3 h-3 mr-1" /> Buat Advance Pertama
-                    </Button>
+                    </Button>}
                   </TableCell></TableRow>
                 )}
                 {advances.map(adv => {
@@ -382,7 +403,9 @@ export default function AdvanceManagementPage() {
                         {adv.remaining_amount > 0 ? <span className="text-orange-700">{IDR(adv.remaining_amount)}</span> : <span className="text-green-600">Lunas</span>}
                       </TableCell>
                       <TableCell>
-                        <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${statusInfo.color}`}>{statusInfo.label}</span>
+                        <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${statusInfo.color}`}>
+                          {adv.requires_source_review?"Belum diverifikasi ("+adv.status+"/"+adv.posting_status+")":statusInfo.label}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -491,7 +514,7 @@ export default function AdvanceManagementPage() {
       </Tabs>
 
       {/* ── DIALOGS ─────────────────────────────────────────────────────── */}
-      {createOpen && (
+      {createOpen && !readOnly && (
         <CreateAdvanceDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
@@ -506,6 +529,7 @@ export default function AdvanceManagementPage() {
       {detailId != null && (
         <AdvanceDetailDrawer
           advance={detailAdv}
+          readOnly={readOnly}
           loading={detailLoading}
           onClose={() => { setDetailId(null); setDetailAdv(null); }}
           onRefresh={() => loadDetail(detailId)}
@@ -701,8 +725,8 @@ function CreateAdvanceDialog({ open, onOpenChange, advanceAccounts, bankAccounts
 }
 
 // ─── Detail Drawer ────────────────────────────────────────────────────────────
-function AdvanceDetailDrawer({ advance, loading, onClose, onRefresh, onListRefresh, allAccounts, bankAccounts, api }: {
-  advance: any; loading: boolean;
+function AdvanceDetailDrawer({ advance, readOnly, loading, onClose, onRefresh, onListRefresh, allAccounts, bankAccounts, api }: {
+  advance: any; loading: boolean; readOnly: boolean;
   onClose: () => void; onRefresh: () => void; onListRefresh: () => void;
   allAccounts: CoaAccount[]; bankAccounts: CoaAccount[];
   api: (path: string, opts?: RequestInit) => Promise<any>;
@@ -776,11 +800,11 @@ function AdvanceDetailDrawer({ advance, loading, onClose, onRefresh, onListRefre
     Number(adv.responsible_company_id) !== Number(adv.company_id)
   );
 
-  const canApprove   = ["pending_approval", "draft"].includes(adv?.lifecycle_status ?? "");
-  const canDisburse  = ["approved"].includes(adv?.lifecycle_status ?? "");
-  const canSettle    = ["outstanding", "partially_settled", "disbursed"].includes(adv?.lifecycle_status ?? "");
+  const canApprove   = !readOnly && ["pending_approval", "draft"].includes(adv?.lifecycle_status ?? "");
+  const canDisburse  = !readOnly && ["approved"].includes(adv?.lifecycle_status ?? "");
+  const canSettle    = !readOnly && ["outstanding", "partially_settled", "disbursed"].includes(adv?.lifecycle_status ?? "");
   const canRepay     = canSettle;
-  const canVoid      = !["settled", "closed", "void"].includes(adv?.lifecycle_status ?? "");
+  const canVoid      = !readOnly && !["settled", "closed", "void"].includes(adv?.lifecycle_status ?? "");
 
   const allocTotal = allocLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const allocBalance = Number(stlAmtReceived) - allocTotal;
