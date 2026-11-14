@@ -12,7 +12,7 @@ describe("Gmail DEV mailbox isolation", () => {
       const route = `"/recon-classification/invoice-sources/gmail/${action}"`;
       const start = source.indexOf(route);
       expect(start).toBeGreaterThan(-1);
-      const nextRoute = source.indexOf("\\nrouter.", start);
+      const nextRoute = source.indexOf("\nrouter.", start);
       const handler = source.slice(start, nextRoute < 0 ? undefined : nextRoute);
       expect(handler).toContain('"GMAIL_DEV_SOURCE_EMAIL_REQUIRED"');
     }
