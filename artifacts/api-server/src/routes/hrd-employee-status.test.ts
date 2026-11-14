@@ -45,8 +45,9 @@ vi.mock("./hrd-db",()=>({
             state.auditRows++;
             return{rowCount:1,rows:[{id:7}]};
           }
-          if(sql.includes("SELECT id FROM public.employees")){
-            return{rowCount:1,rows:[{id:61}]};
+          if(sql.includes("SELECT id FROM public.employees")||
+             sql.includes("SELECT id,status FROM public.employees")){
+            return{rowCount:1,rows:[{id:61,status:state.employeeStatus}]};
           }
           if(sql.includes("FROM hrd_private.employee_status_audit")){
             return{rowCount:state.auditRows,rows:state.auditRows?[{
