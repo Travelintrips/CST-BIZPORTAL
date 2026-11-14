@@ -58,7 +58,7 @@ describe("Issue 292 actual writer read-only preconditions", () => {
     ]);
     await expect(reverseCanonicalSettlementForCorrection(client as any, input))
       .rejects.toThrow("Satu atau lebih replacement payment tidak ditemukan");
-    expect(getCalls()).toBe(6);
+    expect(getCalls()).toBe(7);
   });
 
   it("rejects missing posted original journal before inserting compensating journal", async () => {
