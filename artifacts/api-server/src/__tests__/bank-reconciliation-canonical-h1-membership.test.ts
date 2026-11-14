@@ -34,6 +34,28 @@ describe("QRIS canonical historical membership H+1 protection", () => {
     expect(approval).toContain("sum(sp.mdr_amount)");
     expect(approval).toContain("CANONICAL_SETTLEMENT_MEMBER_TOTALS_INVALID");
   });
+  it("rejects mismatched actual paid_at dates before creating an owner canonical batch", () => {
+    const build = source.slice(
+      source.indexOf("async function ensureCanonicalQrisSettlement("),
+      source.indexOf("async function prepareCanonicalQrisSettlement("),
+    );
+    expect(build).toContain("((p.paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date");
+    expect(build).toContain("payment.actual_h_plus_one_date !== groupDate");
+    expect(build.indexOf("payment.actual_h_plus_one_date !== groupDate"))
+      .toBeLessThan(build.indexOf("sport_center.create_payment_settlement_batch("));
+  });
+
+  it("rejects stale H+1 snapshot payments before preparing QRIS settlement or posting receipt journals", () => {
+    const prepare = source.slice(
+      source.indexOf("async function prepareCanonicalQrisSettlement("),
+      source.indexOf("async function prepareCanonicalQrisSettlement(") + 14000,
+    );
+    expect(prepare).toContain("((paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date");
+    expect(prepare).toContain("payment.actual_h_plus_one_date !== mutationDate");
+    expect(prepare.indexOf("payment.actual_h_plus_one_date !== mutationDate"))
+      .toBeLessThan(prepare.indexOf("sport_center.create_payment_settlement_batch("));
+  });
+
   it("keeps canonical approval link-only and blocks generic bank posting", () => {
     expect(approval).toContain("journal_entry_id=null");
     expect(source).toContain("CANONICAL_SETTLEMENT_GENERIC_POST_BLOCKED");
