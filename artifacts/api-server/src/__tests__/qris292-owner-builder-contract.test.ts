@@ -50,6 +50,10 @@ describe("Issue 292 canonical rebuild integration contract", () => {
     expect(rebuild).toContain("FOR UPDATE OF m,a");
     expect(rebuild).toContain('row.source_classification!=="actual_bank_mutation"');
     expect(rebuild).toContain('row.status!=="unmatched"');
+    expect(rebuild).toContain('row.reconciliation_status!=="unmatched"');
+    expect(rebuild).toContain("candidate.status='approved'");
+    expect(rebuild).toContain("row.has_prior_approved_match!==false");
+    expect(rebuild).toContain("AS has_prior_approved_match");
     expect(rebuild).toContain("row.journal_entry_id!=null");
     expect(rebuild).toContain("row.approved_at!=null");
     expect(rebuild).toContain("row.posted_at!=null");
