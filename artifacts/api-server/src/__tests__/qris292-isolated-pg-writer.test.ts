@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import pg from "pg";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { reverseCanonicalSettlementForCorrection } from "../lib/reconciliation/canonicalSettlementCorrection";
+import { runAtomicCanonicalSettlementCorrection } from "../lib/reconciliation/canonicalSettlementCorrectionCoordinator";
 
 const local = process.env.QRIS292_ISOLATED_PG_URL;
 const suite = local ? describe : describe.skip;
@@ -125,6 +126,80 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       const check = await conn.query("SELECT count(*)::int AS n FROM sport_center.accounting_journals WHERE reversal_of_id=7207");
       expect(check.rows[0].n).toBe(1);
     } finally {await conn.query("ROLLBACK");await conn.end();}
+  });
+
+  it("rolls back reversal and replacement if approval fails after rebuilding", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = {execute: async (statement: any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql,compiled.params);
+    }};
+    const db = {transaction: async (callback: any) => {
+      try {
+        const result = await callback(tx);
+        await conn.query("COMMIT");
+        return result;
+      } catch (e) {
+        await conn.query("ROLLBACK");
+        throw e;
+      }
+    }} as any;
+    try {
+      await expect(runAtomicCanonicalSettlementCorrection(db,input,{
+        rebuildBothDatedBatches: async () => {
+          // Synthetic replacement only. This is NOT the canonical PROD builder.
+          await conn.query(`
+            INSERT INTO sport_center.payment_settlement_batches
+              (id,company_id,status,settlement_date,provider_code,bank_account_id,
+               settlement_rule_version,gross_amount,mdr_amount,net_amount)
+            VALUES(5739,1,'calculated','2026-11-05','mandiri','1640006707220',
+                   'TEST_RULE',930000,6300,923700)
+          `);
+          await conn.query(`
+            INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
+            SELECT 5739,id,'active',amount FROM sport_center.sport_payments
+            WHERE id IN (859,860,861,862)
+          `);
+          return {replacementBatchIds:[5739]};
+        },
+        approveBothCanonicalBankMatches: async () => {
+          const inside = await conn.query(`
+            SELECT (SELECT status FROM sport_center.payment_settlement_batches WHERE id=5738)
+              AS old_status,
+              (SELECT count(*)::int FROM sport_center.payment_settlement_items
+               WHERE settlement_id=5739 AND item_status='active') AS replacement_items
+          `);
+          expect(inside.rows[0]).toMatchObject({old_status:"reversed",replacement_items:4});
+          throw new Error("INJECTED_DOWNSTREAM_APPROVAL_FAILURE");
+        },
+      })).rejects.toThrow("INJECTED_DOWNSTREAM_APPROVAL_FAILURE");
+    } finally {
+      // Already rolled back by the outer transaction handler.
+      await conn.end();
+    }
+    const check = new pg.Client({connectionString:local});
+    await check.connect();
+    try {
+      const state = await check.query(`
+        SELECT b.status,
+          (SELECT count(*)::int FROM sport_center.accounting_journals
+           WHERE reversal_of_id=7207) AS reversals,
+          (SELECT count(*)::int FROM sport_center.payment_settlement_batches
+           WHERE id=5739) AS replacement_batches,
+          (SELECT count(*)::int FROM sport_center.payment_settlement_items
+           WHERE settlement_id=5738 AND item_status='active') AS old_active,
+          (SELECT status FROM public.bank_mutations WHERE id=434464) AS bank_status,
+          (SELECT count(*)::int FROM public.bank_reconciliation_audit
+           WHERE action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED') AS audit_rows
+        FROM sport_center.payment_settlement_batches b WHERE b.id=5738
+      `);
+      expect(state.rows[0]).toMatchObject({
+        status:"posted",reversals:0,replacement_batches:0,
+        old_active:4,bank_status:"matched",audit_rows:0,
+      });
+    } finally {await check.end();}
   });
 
   it("rejects wrong replacement MDR before writing any compensating journal", async () => {
