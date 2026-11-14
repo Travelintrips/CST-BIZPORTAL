@@ -66,8 +66,8 @@ WITH
            coalesce(sum(p.amount),0) AS gross,
            coalesce(sum(p.mdr_amount),0) AS mdr,
            bool_and(p.status='confirmed'
-             AND lower(p.payment_method)='qris'
-             AND lower(p.payment_provider)='mandiri_direct'
+             AND lower(p.payment_method::text)='qris'
+             AND lower(p.payment_provider::text)='mandiri_direct'
              AND p.company_id=1 AND p.bank_account_id='1640006707220'
              AND p.expected_settlement_date=((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)
              AND p.settlement_rule_version='PROD-MANDIRI-SC-20260831-v1') AS eligible
