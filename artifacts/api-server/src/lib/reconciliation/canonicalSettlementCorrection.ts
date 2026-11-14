@@ -215,6 +215,7 @@ export async function reverseCanonicalSettlementForCorrection(
         p.id,
         p.company_id,
         p.amount,
+        p.mdr_amount,
         p.status::text AS payment_status,
         p.settlement_status::text AS settlement_status,
         p.payment_method::text AS payment_method,
@@ -239,11 +240,22 @@ export async function reverseCanonicalSettlementForCorrection(
         WHERE settlement_id=${settlementId} AND item_status='active'
       `);
       const old = oldTotals.rows[0] as Record<string,unknown> | undefined;
-      const newGross = replacementResult.rows.reduce(
-        (sum,row) => sum + Number((row as Record<string,unknown>).amount),0);
-      if (replacementPaymentIds.length !== Number(old?.payment_count)
-        || Math.abs(newGross - Number(old?.gross_amount)) > 0.01) {
-        throw new Error("Replacement cohort must preserve member count and gross settlement value.");
+      const newGrossCents = replacementResult.rows.reduce(
+        (sum,row) => sum + Math.round(Number((row as Record<string,unknown>).amount) * 100),0);
+      const newMdrCents = replacementResult.rows.reduce(
+        (sum,row) => sum + Math.round(Number((row as Record<string,unknown>).mdr_amount) * 100),0);
+      const totals = await tx.execute(sql`
+        SELECT gross_amount, mdr_amount, net_amount
+        FROM sport_center.payment_settlement_batches WHERE id=${settlementId}
+      `);
+      const amounts = totals.rows[0] as Record<string,unknown> | undefined;
+      if (!amounts
+        || replacementPaymentIds.length !== Number(old?.payment_count)
+        || newGrossCents !== Math.round(Number(old?.gross_amount) * 100)
+        || newGrossCents !== Math.round(Number(amounts.gross_amount) * 100)
+        || newMdrCents !== Math.round(Number(amounts.mdr_amount) * 100)
+        || newGrossCents - newMdrCents !== Math.round(Number(amounts.net_amount) * 100)) {
+        throw new Error("Replacement cohort gross/MDR/net or member count does not match posted settlement.");
       }
     }
 
