@@ -3433,7 +3433,8 @@ async function assertApprovalCandidateExists(
   }
 }
 
-async function approveCanonicalSettlementLink(
+/** @internal Existing canonical link-only approval. Exported for isolated finance E2E regression; no HTTP route added. */
+export async function approveCanonicalSettlementLink(
   client: ApprovalClient,
   mutationId: number,
   settlementId: number,
