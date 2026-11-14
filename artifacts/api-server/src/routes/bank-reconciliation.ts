@@ -6453,6 +6453,7 @@ async function ensureCanonicalQrisSettlement(
     provider_code: string | null;
     bank_account_id: string | null;
     expected_settlement_date: string | null;
+    actual_h_plus_one_date: string | null;
     settlement_rule_version: string | null;
     settlement_status: string | null;
     payment_status: string | null;
@@ -6465,6 +6466,7 @@ async function ensureCanonicalQrisSettlement(
             lower(btrim(p.payment_provider::text)) as provider_code,
             p.bank_account_id::text as bank_account_id,
             p.expected_settlement_date::text as expected_settlement_date,
+            ((p.paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date,
             p.settlement_rule_version,
             p.settlement_status::text as settlement_status,
             p.status::text as payment_status
@@ -6500,6 +6502,7 @@ async function ensureCanonicalQrisSettlement(
       || String(payment.provider_code ?? "").trim().toLowerCase() !== providerCode
       || String(payment.bank_account_id ?? "").trim() !== bankAccountId
       || calendarDateValue(payment.expected_settlement_date) !== groupDate
+      || payment.actual_h_plus_one_date !== groupDate
       || String(payment.settlement_rule_version ?? "").trim() !== ruleVersion
       || String(payment.payment_status ?? "").toLowerCase() !== "confirmed"
       || String(payment.settlement_status ?? "unsettled").toLowerCase() !== "unsettled",
@@ -7149,13 +7152,15 @@ async function prepareCanonicalQrisSettlement(
     company_id: number | null;
     bank_account_id: string | null;
     expected_settlement_date: string | null;
+    actual_h_plus_one_date: string | null;
     settlement_rule_version: string | null;
     settlement_status: string | null;
   }>(
     `select id, amount::text, status::text, payment_method,
             payment_provider::text, company_id, bank_account_id::text,
-            expected_settlement_date::text, settlement_rule_version,
-            settlement_status::text
+            expected_settlement_date::text,
+            ((paid_at at time zone 'Asia/Jakarta')::date + 1)::text as actual_h_plus_one_date,
+            settlement_rule_version, settlement_status::text
        from sport_center.sport_payments
       where id = any($1::int[])
       order by id
@@ -7191,6 +7196,7 @@ async function prepareCanonicalQrisSettlement(
       || String(payment.payment_provider ?? "").trim().toLowerCase() !== providerCode
       || String(payment.bank_account_id ?? "").trim() !== externalBankAccountId
       || String(payment.expected_settlement_date ?? "").slice(0, 10) !== mutationDate
+      || payment.actual_h_plus_one_date !== mutationDate
       || String(payment.settlement_rule_version ?? "").trim() !== settlementRuleVersion
       || String(payment.settlement_status ?? "unsettled").toLowerCase() !== "unsettled"
     ) {
