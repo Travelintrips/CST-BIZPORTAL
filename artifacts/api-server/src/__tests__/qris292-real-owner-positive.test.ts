@@ -173,6 +173,35 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
         {date:"2026-11-05",gross:930000,mdr:6300,net:923700,
           status:"calculated",ids:nov5Ids},
       ]);
+      // Real owner journal drafts, not manually inserted fake journal lines.
+      const journals=[];
+      for(const batchId of [day4.rows[0].id,day5.rows[0].id]){
+        const draft=await client.query<{id:number}>(`
+          SELECT sport_center.create_settlement_journal_draft(
+            $1::bigint,'1-1023-CST','isolated-ci-only') AS id
+        `,[batchId]);
+        journals.push(Number(draft.rows[0].id));
+      }
+      const lines=await client.query<{
+        journal_id:number; account_code:string;line_type:string;amount:string;
+      }>(`
+        SELECT journal_id,account_code,line_type,amount::text AS amount
+        FROM sport_center.accounting_journal_lines
+        WHERE journal_id=ANY($1::integer[])
+        ORDER BY journal_id,account_code
+      `,[journals]);
+      const byJournal=(id:number)=>lines.rows.filter(x=>x.journal_id===id)
+        .map(x=>[x.account_code,x.line_type,Number(x.amount)]);
+      expect(byJournal(journals[0])).toEqual([
+        ["1-1023-CST","debit",685800],
+        ["1-1024-CST","credit",690000],
+        ["5-3050-CST","debit",4200],
+      ]);
+      expect(byJournal(journals[1])).toEqual([
+        ["1-1023-CST","debit",923700],
+        ["1-1024-CST","credit",930000],
+        ["5-3050-CST","debit",6300],
+      ]);
     }finally{
       await client.query("ROLLBACK").catch(()=>undefined);
       await client.end();
