@@ -31,7 +31,27 @@ vi.mock("./payroll-prod-db",()=>({
   payrollScopedQuery:async(companyId:number,sql:string,values:unknown[])=>{
     state.queries.push({companyId,sql,values});
     if(state.readFailure)throw Error("PASSWORD=EXAMPLE_SECRET");
-    return{rowCount:state.rows.length,rows:state.rows};
+    const companyRows=state.rows.filter(r=>r.company_id===companyId);
+    if(sql.includes("AS verified_count")) {
+      const pending=companyRows.filter(r=>Number(r.remaining_amount)>0);
+      return{rowCount:1,rows:[{verified_count:"0",verified_amount:"0",
+        pending_count:String(pending.length),
+        pending_amount:String(pending.reduce((n,r)=>n+Number(r.remaining_amount),0))}]};
+    }
+    if(sql.includes("AND a.id=$2")) {
+      const rows=companyRows.filter(r=>r.id===values[1]);
+      return{rowCount:rows.length,rows};
+    }
+    const filtered=companyRows.filter(r=>
+      (!values[1] || (r.status.toLowerCase()==="draft"?"draft":r.lifecycle_status.toLowerCase())===values[1]) &&
+      (!values[2] || r.employee_name.toLowerCase().includes(String(values[2]))) &&
+      (!values[3] || r.advance_date>=String(values[3])) &&
+      (!values[4] || r.advance_date<=String(values[4]))
+    );
+    if(sql.includes("count(*)::text AS total"))return{rowCount:1,rows:[{total:String(filtered.length)}]};
+    const limit=Number(values[5]),offset=Number(values[6]);
+    const rows=filtered.slice(offset,offset+limit);
+    return{rowCount:rows.length,rows};
   },
 }));
 import router from "./advance-kasbon-readonly";
@@ -72,10 +92,13 @@ describe("Standalone Advance canonical read-only employee kasbon visibility",()=
       lifecycle_status:"draft",amount:5000000,remaining_amount:5000000,
       verified_disbursement:false,requires_source_review:true,
     });
-    expect(state.queries).toHaveLength(1);
-    expect(state.queries[0]).toMatchObject({companyId:1,values:[1]});
-    expect(state.queries[0].sql).toContain("a.company_id=$1 AND a.type='kasbon'");
-    expect(state.queries[0].sql).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
+    expect(state.queries).toHaveLength(2);
+    expect(state.queries[0].sql).toContain("count(*)::text AS total");
+    expect(state.queries[1]).toMatchObject({companyId:1,values:[1,"","",null,null,50,0]});
+    expect(state.queries[1].sql).toContain("a.company_id=$1 AND a.type='kasbon'");
+    expect(state.queries[1].sql).toContain("LIMIT $6 OFFSET $7");
+    expect(state.queries[1].sql).not.toMatch(/LIMIT 2000/);
+    expect(state.queries[1].sql).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
   });
   it("dashboard distinguishes recorded but unverified balance from verified debt",async()=>{
     const r=await get("/advances/dashboard?companyId=1");
@@ -96,6 +119,26 @@ describe("Standalone Advance canonical read-only employee kasbon visibility",()=
       financialActionsDisabled:true,verified_disbursement:false,
     });
     expect((await get("/advances/9999?companyId=1")).status).toBe(404);
+  });
+  it("paginates and filters in SQL without truncating historical records",async()=>{
+    const r=await get("/advances?companyId=1&page=2&limit=1&party_name=andi");
+    expect(r.status).toBe(200);
+    const body=await r.json() as Record<string,any>;
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(1);
+    expect(state.queries[0].sql).toContain("count(*)::text AS total");
+    expect(state.queries[1].values).toEqual([1,"","andi",null,null,1,1]);
+  });
+  it("aggregates full company scope without LIMIT and fetches detail directly",async()=>{
+    await get("/advances/dashboard?companyId=1");
+    expect(state.queries).toHaveLength(1);
+    expect(state.queries[0].sql).toContain("sum(remaining_amount)");
+    expect(state.queries[0].sql).not.toMatch(/LIMIT/);
+    state.queries.length=0;
+    await get("/advances/39?companyId=1");
+    expect(state.queries).toHaveLength(1);
+    expect(state.queries[0].sql).toContain("AND a.id=$2");
+    expect(state.queries[0].values).toEqual([1,39]);
   });
   it("denies missing session and unauthorized actor with no DB query",async()=>{
     state.sessionEnabled=false;
