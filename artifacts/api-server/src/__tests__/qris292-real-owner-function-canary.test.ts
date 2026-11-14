@@ -8,6 +8,39 @@ import pg from "pg";
  */
 const isolated = process.env.QRIS292_ISOLATED_PG_URL;
 describe.skipIf(!isolated)("Issue #292 genuine owner SQL canary, read-only", () => {
+  it("rejects real populated payment groups on the wrong H+1 day before any batch is created", async () => {
+    const client=new pg.Client({connectionString:isolated});
+    await client.connect();
+    await client.query("BEGIN READ ONLY");
+    try {
+      const wrongDayCalls=[
+        `SELECT sport_center.create_payment_settlement_batch(
+          'ISSUE292-WRONG-DATE',1,'mandiri_direct','1640006707220',
+          '2026-11-05'::date,ARRAY[856]::integer[],'issue292-ci-readonly')`,
+        `SELECT sport_center.create_payment_settlement_supplemental_batch(
+          1,'mandiri_direct','1640006707220',
+          '2026-11-04'::date,'PROD-MANDIRI-SC-20260831-v1',
+          ARRAY[859]::integer[],'issue292-ci-readonly')`,
+      ];
+      for(const sql of wrongDayCalls){
+        await client.query("SAVEPOINT wrong_day");
+        await expect(client.query(sql)).rejects.toMatchObject({
+          code:"P0001",
+          message:expect.stringContaining("CANONICAL_SETTLEMENT_GROUP_INVALID"),
+        });
+        await client.query("ROLLBACK TO SAVEPOINT wrong_day");
+      }
+      const check=await client.query(`
+        SELECT count(*)::int AS replacements
+          FROM sport_center.payment_settlement_batches WHERE id<>5738
+      `);
+      expect(check.rows[0].replacements).toBe(0);
+    } finally {
+      await client.query("ROLLBACK").catch(()=>undefined);
+      await client.end();
+    }
+  });
+
   it("runs both genuine owner functions and rejects empty payment IDs without writes", async () => {
     const client = new pg.Client({ connectionString: isolated });
     await client.connect();
