@@ -1,5 +1,6 @@
 import {describe,it,expect} from "vitest";
 import pg from "pg";
+import { approveCanonicalSettlementLink } from "../routes/bank-reconciliation";
 
 const isolated=process.env.QRIS292_ISOLATED_PG_URL;
 describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transaction",()=>{
@@ -238,6 +239,47 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
         {batch:"posted",journal:"posted",members:nov4Ids,settled:5},
         {batch:"posted",journal:"posted",members:nov5Ids,settled:4},
       ]);
+      // Connect both real canonical bank mutations with the existing
+      // application approval function. Never create generic bank journals.
+      // All writes are in the SAME connection/transaction as the owner batches.
+      await client.query(`
+        INSERT INTO public.bank_mutations
+          (id,status,company_id,amount,transaction_date,source_classification,
+           direction,bank_account_id,reconciliation_status)
+        VALUES(434462,'unmatched',1,685800,'2026-11-04',
+               'actual_bank_mutation','IN','17','unmatched')
+      `);
+      await client.query(`
+        UPDATE public.bank_mutations
+           SET status='unmatched',reconciliation_status='unmatched'
+         WHERE id=434464 AND status='matched'
+      `);
+      const approvalActor={email:"isolated-ci-only",companyId:1};
+      for(const [bankId,batchId] of [[434462,day4.rows[0].id],[434464,day5.rows[0].id]] as const){
+        const approved=await approveCanonicalSettlementLink(
+          client,bankId,Number(batchId),null,approvalActor,`issue292-test:${bankId}`,
+        );
+        expect(approved).toMatchObject({ok:true,status:"approved",journal_entry_id:null});
+        const retry=await approveCanonicalSettlementLink(
+          client,bankId,Number(batchId),null,approvalActor,`issue292-test:${bankId}`,
+        );
+        expect(retry).toMatchObject({ok:true,status:"approved",idempotent:true});
+      }
+      const linked=await client.query(`
+        SELECT b.settlement_date::text AS day,b.status AS batch_status,
+               m.status AS bank_status,m.journal_entry_id,
+               (SELECT count(*)::int FROM public.bank_reconciliation_matches x
+                 WHERE x.mutation_id=m.id AND x.status='approved') AS approved_matches
+        FROM sport_center.payment_settlement_batches b
+        JOIN public.bank_mutations m ON m.id=b.bank_mutation_id
+        WHERE b.id=ANY($1::bigint[]) ORDER BY b.settlement_date
+      `,[[day4.rows[0].id,day5.rows[0].id]]);
+      expect(linked.rows).toEqual([
+        {day:"2026-11-04",batch_status:"reconciled",bank_status:"approved",
+         journal_entry_id:null,approved_matches:1},
+        {day:"2026-11-05",batch_status:"reconciled",bank_status:"approved",
+         journal_entry_id:null,approved_matches:1},
+      ]);
     }finally{
       await client.query("ROLLBACK").catch(()=>undefined);
       await client.end();
@@ -256,12 +298,19 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
           (SELECT count(*)::int FROM sport_center.accounting_journals
            WHERE journal_type='settlement' AND settlement_batch_id<>5738)
            AS extra_settlement_journals,
+          (SELECT count(*)::int FROM public.bank_reconciliation_matches
+           WHERE mutation_id IN (434462,434464) AND status='approved') AS approved_matches,
+          (SELECT count(*)::int FROM public.bank_reconciliation_audit
+           WHERE action='CANONICAL_SETTLEMENT_LINK_APPROVED') AS approval_audits,
+          (SELECT status FROM public.bank_mutations WHERE id=434464) AS original_bank_status,
+          (SELECT count(*)::int FROM public.bank_mutations WHERE id=434462) AS new_bank_rows,
           (SELECT status FROM sport_center.payment_settlement_batches
            WHERE id=5738) AS original_status
       `,[all]);
       expect(r.rows[0]).toEqual({
         synthetic_payments:0,synthetic_receipts:0,extra_batches:0,
-        extra_settlement_journals:0,original_status:"posted",
+        extra_settlement_journals:0,approved_matches:0,approval_audits:0,
+        original_bank_status:"matched",new_bank_rows:0,original_status:"posted",
       });
     } finally { await verify.end(); }
   });
