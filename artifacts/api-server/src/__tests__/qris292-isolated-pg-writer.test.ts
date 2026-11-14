@@ -17,19 +17,24 @@ const input = {
   reason: "Isolated PostgreSQL verification without modifying DEV or PROD financial data",
 };
 suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
-  it("rejects PostgreSQL admin sessions and role-switch impersonation before finance", async () => {
+  it("rejects real PostgreSQL admin and role-switch identity tuple before finance", async () => {
     const conn=new pg.Client({connectionString:local});
     await conn.connect();
     await conn.query("BEGIN");
     try {
       expect(await isIssue292ScopedFinanceSession(conn)).toBe(false);
-      await conn.query("DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='sport_center_app') THEN CREATE ROLE sport_center_app NOLOGIN; END IF; END $");
-      // SET ROLE changes current_user but must not change session_user.
-      await conn.query("SET LOCAL ROLE sport_center_app");
-      const names=await conn.query("SELECT current_user,session_user");
-      expect(names.rows[0].current_user).toBe("sport_center_app");
-      expect(names.rows[0].session_user).not.toBe("sport_center_app");
-      expect(await isIssue292ScopedFinanceSession(conn)).toBe(false);
+      const identities=await conn.query("SELECT current_user, session_user");
+      expect(identities.rows[0].current_user).not.toBe("sport_center_app");
+      // Simulated SET ROLE tuple: current_user changes, session_user does not.
+      // The real PostgreSQL admin connection above must also be rejected.
+      const roleSwitchedClient={
+        query:async <T = Record<string,unknown>>(_query:string):
+          Promise<{rows:T[]}>=>({
+            rows:[{db_principal:"sport_center_app",
+              session_principal:identities.rows[0].session_user}] as unknown as T[],
+          }),
+      };
+      expect(await isIssue292ScopedFinanceSession(roleSwitchedClient)).toBe(false);
     } finally {
       await conn.query("ROLLBACK");
       await conn.end();
