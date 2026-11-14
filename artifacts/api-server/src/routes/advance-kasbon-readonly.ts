@@ -45,7 +45,7 @@ function normalized(r:Row){
     readOnly:true,coverage:"EMPLOYEE_KASBON_ONLY",
   };
 }
-const sql=`
+const sourceSql=`
   SELECT a.id,a.company_id,a.employee_id,a.advance_number,
     a.date::text AS advance_date,a.type,a.amount::text,a.remaining_amount::text,
     a.settled_amount::text,a.paid_amount::text,a.status,a.lifecycle_status,
@@ -55,7 +55,6 @@ const sql=`
   FROM public.cash_advances a
   LEFT JOIN public.employees e ON e.id=a.employee_id AND e.company_id=a.company_id
   WHERE a.company_id=$1 AND a.type='kasbon'
-  ORDER BY a.date DESC,a.id DESC LIMIT 2000
 `;
 
 async function auth(req:ScopedRequest,res:Response,next:NextFunction):Promise<void>{
@@ -77,10 +76,49 @@ async function auth(req:ScopedRequest,res:Response,next:NextFunction):Promise<vo
   }
 }
 router.use("/advances",auth);
-async function readRows(req:ScopedRequest):Promise<ReturnType<typeof normalized>[]>{
+// All queries retain both the company predicate and RLS scope. Pagination must
+// happen in PostgreSQL, not after a capped in-memory historical read.
+const listFilterSql = `
+  AND ($2::text = '' OR
+    CASE WHEN lower(a.status)='draft' THEN 'draft' ELSE lower(a.lifecycle_status) END = $2)
+  AND ($3::text = '' OR lower(btrim(concat_ws(' ',e.first_name,e.last_name))) LIKE '%' || $3 || '%')
+  AND ($4::date IS NULL OR a.date >= $4::date)
+  AND ($5::date IS NULL OR a.date <= $5::date)
+`;
+async function readList(req:ScopedRequest, values:unknown[],page:number,limit:number){
   const companyId=req.advanceCompanyId!;
-  const result=await payrollScopedQuery(companyId,sql,[companyId]);
-  return result.rows.map(normalized);
+  const filtered=sourceSql+listFilterSql;
+  const count=await payrollScopedQuery(companyId,`SELECT count(*)::text AS total FROM (${filtered}) records`,values);
+  const result=await payrollScopedQuery(companyId,
+    filtered+' ORDER BY a.date DESC,a.id DESC LIMIT $6 OFFSET $7',
+    [...values,limit,(page-1)*limit]);
+  return {data:result.rows.map(normalized),total:Number(count.rows[0]?.total??0)};
+}
+const verifiedSql=`lower(a.status) NOT IN ('draft','void','repaid','rejected','cancelled')
+  AND a.lifecycle_status IN ('outstanding','partially_settled','disbursed')
+  AND a.approved_at IS NOT NULL AND nullif(btrim(a.approved_by::text),'') IS NOT NULL
+  AND a.disbursed_at IS NOT NULL AND nullif(btrim(a.disbursed_by::text),'') IS NOT NULL
+  AND a.accounting_entry_id IS NOT NULL AND lower(a.posting_status)='posted'
+  AND a.voided_at IS NULL`;
+async function readDashboard(req:ScopedRequest){
+  const companyId=req.advanceCompanyId!;
+  const result=await payrollScopedQuery(companyId,`
+    SELECT
+      count(*) FILTER (WHERE remaining_amount>0 AND (${verifiedSql}))::text AS verified_count,
+      coalesce(sum(remaining_amount) FILTER (WHERE remaining_amount>0 AND (${verifiedSql})),0)::text AS verified_amount,
+      count(*) FILTER (WHERE remaining_amount>0 AND NOT (${verifiedSql}))::text AS pending_count,
+      coalesce(sum(remaining_amount) FILTER (WHERE remaining_amount>0 AND NOT (${verifiedSql})),0)::text AS pending_amount
+    FROM public.cash_advances a WHERE a.company_id=$1 AND a.type='kasbon'
+  `,[companyId]);
+  const r=result.rows[0]??{};
+  return {verifiedCount:number(r.verified_count),verifiedAmount:number(r.verified_amount),
+    pendingCount:number(r.pending_count),pendingAmount:number(r.pending_amount)};
+}
+async function readDetail(req:ScopedRequest,id:number){
+  const companyId=req.advanceCompanyId!;
+  const result=await payrollScopedQuery(companyId,
+    sourceSql+' AND a.id=$2',[companyId,id]);
+  return result.rows[0]?normalized(result.rows[0]):null;
 }
 function queryFailure(req:ScopedRequest,res:Response,e:unknown){
   req.log?.error?.({error:e,companyId:req.advanceCompanyId},"Advance historical read unavailable");
@@ -105,11 +143,9 @@ router.get("/advances",async(req:ScopedRequest,res:Response)=>{
        (to&&!/^\d{4}-\d{2}-\d{2}$/.test(to))){
       res.status(400).json({message:"Filter Advance tidak valid."});return;
     }
-    const all=await readRows(req);
-    const filtered=all.filter(x=>(!status||x.lifecycle_status===status) &&
-      (!party||x.party_name.toLowerCase().includes(party))&&(!from||x.date>=from)&&(!to||x.date<=to));
+    const {data,total}=await readList(req,[req.advanceCompanyId,status,party,from||null,to||null],page,limit);
     res.json({
-      data:filtered.slice((page-1)*limit,page*limit),total:filtered.length,
+      data,total,
       companyId:req.advanceCompanyId,coverage:"EMPLOYEE_KASBON_ONLY",
       readOnly:true,canCreate:false,canApprove:false,canDisburse:false,canRepay:false,
       canVoid:false,canPostJournal:false,warning:"Hanya catatan kasbon historis, bukan saldo utang terverifikasi.",
@@ -118,20 +154,17 @@ router.get("/advances",async(req:ScopedRequest,res:Response)=>{
 });
 router.get("/advances/dashboard",async(req:ScopedRequest,res:Response)=>{
   try{
-    const all=await readRows(req);
-    const open=all.filter(x=>x.remaining_amount>0);
-    const verifiedOpen=open.filter(x=>x.verified_disbursement);
-    const pendingReview=open.filter(x=>!x.verified_disbursement);
+    const stats=await readDashboard(req);
     res.json({
       companyId:req.advanceCompanyId,readOnly:true,coverage:"EMPLOYEE_KASBON_ONLY",
       stats:{
-        outstanding_count:verifiedOpen.length,
-        outstanding_amount:verifiedOpen.reduce((n,x)=>n+x.remaining_amount,0),
-        total_remaining:verifiedOpen.reduce((n,x)=>n+x.remaining_amount,0),
-        pending_count:pendingReview.length,
+        outstanding_count:stats.verifiedCount,
+        outstanding_amount:stats.verifiedAmount,
+        total_remaining:stats.verifiedAmount,
+        pending_count:stats.pendingCount,
         total_settled:0,
-        recorded_unverified_count:pendingReview.length,
-        recorded_unverified_amount:pendingReview.reduce((n,x)=>n+x.remaining_amount,0),
+        recorded_unverified_count:stats.pendingCount,
+        recorded_unverified_amount:stats.pendingAmount,
       },
     });
   }catch(e){queryFailure(req,res,e);}
@@ -140,8 +173,7 @@ router.get("/advances/:id",async(req:ScopedRequest,res:Response)=>{
   const id=positive(req.params.id);
   if(!id){res.status(400).json({message:"ID Advance tidak valid."});return;}
   try{
-    const all=await readRows(req);
-    const row=all.find(x=>x.id===id);
+    const row=await readDetail(req,id);
     if(!row){res.status(404).json({message:"Kasbon tidak ada dalam perusahaan aktif."});return;}
     res.json({...row,settlements:[],repayments:[],installment_schedule:[],
       financialActionsDisabled:true,readOnly:true});
