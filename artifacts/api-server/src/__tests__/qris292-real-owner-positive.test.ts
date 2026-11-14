@@ -253,12 +253,15 @@ describe.skipIf(!isolated)("Issue #292 actual owner batch writer positive transa
            WHERE payment_id=ANY($1::integer[])) AS synthetic_receipts,
           (SELECT count(*)::int FROM sport_center.payment_settlement_batches
            WHERE id<>5738) AS extra_batches,
+          (SELECT count(*)::int FROM sport_center.accounting_journals
+           WHERE journal_type='settlement' AND settlement_batch_id<>5738)
+           AS extra_settlement_journals,
           (SELECT status FROM sport_center.payment_settlement_batches
            WHERE id=5738) AS original_status
       `,[all]);
       expect(r.rows[0]).toEqual({
         synthetic_payments:0,synthetic_receipts:0,extra_batches:0,
-        original_status:"posted",
+        extra_settlement_journals:0,original_status:"posted",
       });
     } finally { await verify.end(); }
   });
