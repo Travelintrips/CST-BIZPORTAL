@@ -4286,6 +4286,42 @@ async function postBankMutationCanonical(
   if (mutation.journal_entry_id !== entryId) {
     throw new ApprovalError("Jurnal approval tidak sama dengan jurnal mutasi.", 409, "JOURNAL_ID_MISMATCH");
   }
+  // An identical bank-row already posted elsewhere is an accounting conflict,
+  // not permission to post a second expense. Keep this draft untouched until
+  // Finance verifies the underlying statement rows are genuinely distinct.
+  // The lock serializes concurrent posting attempts for the same bank account.
+  await client.query(
+    "select pg_advisory_xact_lock(hashtext('bank-recon-duplicate-post'), $1::integer)",
+    [Number(mutation.company_id)],
+  );
+  const duplicatePosted = await client.query<{ id: number; journal_entry_id: number | null }>(
+    `select other.id, other.journal_entry_id
+       from public.bank_mutations current_mutation
+       join public.bank_mutations other
+         on other.id <> current_mutation.id
+        and other.company_id = current_mutation.company_id
+        and other.bank_account_id = current_mutation.bank_account_id
+        and other.transaction_date = current_mutation.transaction_date
+        and other.direction = current_mutation.direction
+        and other.amount = current_mutation.amount
+        and btrim(coalesce(other.description, '')) = btrim(coalesce(current_mutation.description, ''))
+       join public.accounting_entries posted_entry
+         on posted_entry.id = other.journal_entry_id
+        and posted_entry.company_id = other.company_id
+        and posted_entry.source = 'bank_reconciliation'
+        and posted_entry.source_id = other.id
+        and posted_entry.status = 'posted'
+      where current_mutation.id = $1
+      limit 1`,
+    [mutationId],
+  );
+  if (duplicatePosted.rows.length > 0) {
+    throw new ApprovalError(
+      `Posting diblokir: mutasi bank identik sudah diposting sebagai mutasi #${duplicatePosted.rows[0].id}. Verifikasi sumber bank sebelum mencatat transaksi kedua.`,
+      409,
+      "BANK_MUTATION_POSSIBLE_DUPLICATE_POSTED",
+    );
+  }
   const entry = await client.query<{ status: string; total_debit: string; total_credit: string }>(
     `select status,total_debit,total_credit from public.accounting_entries
       where id=$1 and company_id=$2 and source='bank_reconciliation' and source_id=$3
