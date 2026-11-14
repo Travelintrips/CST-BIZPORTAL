@@ -25,6 +25,12 @@ describe("Issue #292 existing canonical approval transaction bridge",()=>{
     expect(bridge).toContain("actor.companyId !== 1");
     expect(bridge).toContain("dialect.sqlToQuery(statement)");
     expect(bridge).toContain("return client.query(compiled.sql, compiled.params)");
+    expect(bridge).toContain("SELECT current_user AS db_principal");
+    expect(bridge).toContain('principal.rows[0]?.db_principal !== "sport_center_app"');
+    expect(bridge).toContain("ISSUE292_FINANCE_PRINCIPAL_UNVERIFIED");
+    expect(bridge.indexOf("ISSUE292_FINANCE_PRINCIPAL_UNVERIFIED"))
+      .toBeLessThan(bridge.indexOf("const value = await callback(tx)"));
+    expect(bridge).toContain("await assertIssue292OwnerRuleParity(client)");
     expect(bridge).toContain("actor: actor.email");
     expect(bridge).toContain("reason:");
     expect(bridge).toContain('if (nov4.status !== "approved" || nov5.status !== "approved")');
