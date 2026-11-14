@@ -260,7 +260,7 @@ export default function HrdEmployeeDetailPage() {
               Karyawan sudah tidak aktif; tetap terlihat dalam direktori HRD dan riwayat Payroll lama.
             </p>}
             {statusError && <p role="alert" className="text-xs text-destructive">{statusError}</p>}
-            {statusNotice && <p role="status" className="text-xs text-green-700">{statusNotice}</p>
+            {statusNotice && <p role="status" className="text-xs text-green-700">{statusNotice}</p>}
             <p>Email: {scopedDetail.employee.email || "Belum diisi"}</p>
             <h3 className="pt-3 font-semibold">Hasil identitas terverifikasi</h3>
             {Object.keys(scopedDetail.verifiedProfile).length === 0
