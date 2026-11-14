@@ -25,9 +25,7 @@ describe("Issue #292 existing canonical approval transaction bridge",()=>{
     expect(bridge).toContain("actor.companyId !== 1");
     expect(bridge).toContain("dialect.sqlToQuery(statement)");
     expect(bridge).toContain("return client.query(compiled.sql, compiled.params)");
-    expect(bridge).toContain("SELECT current_user AS db_principal, session_user AS session_principal");
-    expect(bridge).toContain('principal.rows[0]?.db_principal !== "sport_center_app"');
-    expect(bridge).toContain('principal.rows[0]?.session_principal !== "sport_center_app"');
+    expect(bridge).toContain("await isIssue292ScopedFinanceSession(client)");
     expect(bridge).toContain("ISSUE292_FINANCE_PRINCIPAL_UNVERIFIED");
     expect(bridge.indexOf("ISSUE292_FINANCE_PRINCIPAL_UNVERIFIED"))
       .toBeLessThan(bridge.indexOf("const value = await callback(tx)"));
