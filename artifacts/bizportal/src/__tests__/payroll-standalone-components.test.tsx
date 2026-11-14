@@ -71,6 +71,23 @@ describe("Standalone Payroll PROD compensation UI",()=>{
    expect((screen.getByRole("button",{name:"Simpan Gaji & Seluruh Potongan"}) as HTMLButtonElement).disabled).toBe(true);
    expect(payloads.filter(x=>x.method!=="GET")).toHaveLength(0);
  });
+ it("shows why historical prefill is unsavable, then enables Save only after six explicit HRD-zero confirmations",async()=>{
+  render(<PayrollStandaloneComponents/>);
+  const prefill=await screen.findByRole("button",{name:"Isi ke formulir"});
+  await waitFor(()=>expect((prefill as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(prefill);
+  await waitFor(()=>expect((screen.getByLabelText("Gaji Pokok") as HTMLInputElement).value).toBe("3000000.00"));
+  const save=screen.getByRole("button",{name:"Simpan Gaji & Seluruh Potongan"}) as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+  expect(screen.getByText(/Komponen belum terverifikasi:/)).toBeTruthy();
+  await waitFor(()=>expect(screen.getAllByRole("button",{name:"HRD sudah memverifikasi nihil — isi Rp0"})).toHaveLength(6));
+  for(let i=0;i<6;i++){
+    fireEvent.click(screen.getAllByRole("button",{name:"HRD sudah memverifikasi nihil — isi Rp0"})[0]);
+  }
+  await waitFor(()=>expect(save.disabled).toBe(false));
+  expect((screen.getByLabelText("Potongan Kasbon / Cicilan Gaji") as HTMLInputElement).value).toBe("0");
+  expect(payloads.filter(x=>x.method!=="GET")).toHaveLength(0);
+ });
  it("requires seven verified values and a kasbon source before enabling Save",async()=>{
   render(<PayrollStandaloneComponents/>);
   const choose=await screen.findByLabelText("Karyawan Payroll");
