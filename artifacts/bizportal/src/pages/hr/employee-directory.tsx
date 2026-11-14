@@ -82,8 +82,8 @@ export default function HrdEmployeeDirectory() {
       </div>
       {!loading && !error && companyId !== null && !statusChangeEnabled &&
         <p role="status" className="rounded-lg border border-amber-500/30 p-3 text-sm text-muted-foreground">
-          Tombol Nonaktifkan (Resign) tersedia pada karyawan aktif, tetapi perubahan status belum
-          diaktifkan di server. Periksa pengaturan HRD sebelum menggunakannya.
+          Pengelolaan status HRD sedang nonaktif di server. Tombol Resign tetap
+          dapat membuka Detail, tetapi perubahan karyawan tidak dapat disimpan hingga diaktifkan.
         </p>}
       {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</div>}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -102,8 +102,7 @@ export default function HrdEmployeeDirectory() {
               <Button type="button" size="sm" variant="outline"
                 onClick={() => navigate(`/hr/employees/${employee.id}`)}>Detail</Button>
               {employee.status==="active" && <Button type="button" size="sm" variant="outline"
-                disabled={!statusChangeEnabled}
-                title={!statusChangeEnabled?"Pengelolaan resign belum diaktifkan pada server":undefined}
+                title={!statusChangeEnabled?"Buka Detail karyawan untuk melihat status dan persyaratan resign":undefined}
                 onClick={() => navigate(`/hr/employees/${employee.id}`)}>
                 Nonaktifkan (Resign)
               </Button>}
