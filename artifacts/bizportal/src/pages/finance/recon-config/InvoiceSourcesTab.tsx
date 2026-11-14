@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -259,6 +260,7 @@ export default function InvoiceSourcesTab() {
     useState<string | null>(null);
   const [notice, setNotice] =
     useState<string | null>(null);
+  const verifyRequestSerial = useRef(0);
 
   const companyId = useMemo(() => {
     if (isConsolidated) return null;
@@ -395,9 +397,12 @@ export default function InvoiceSourcesTab() {
     void loadData();
   }, [loadData]);
 
-  // A verification notice must not survive a switch to another company.
+  // Invalidate in-flight profile checks when the active company changes:
+  // a result from tenant A must never be shown while tenant B is selected.
   useEffect(() => {
+    verifyRequestSerial.current += 1;
     setNotice(null);
+    setAction((current) => current === "verify" ? null : current);
   }, [companyId]);
 
   const connect = async () => {
@@ -445,6 +450,7 @@ export default function InvoiceSourcesTab() {
 
   const verifyConnection = async () => {
     if (!companyId) return;
+    const requestSerial = ++verifyRequestSerial.current;
 
     setAction("verify");
     setError(null);
@@ -461,6 +467,7 @@ export default function InvoiceSourcesTab() {
         },
       );
       const verified = await readJson<GmailVerificationResult>(response);
+      if (requestSerial !== verifyRequestSerial.current) return;
       if (!verified.ok || verified.companyId !== companyId
           || verified.verifiedScope !== "gmail_profile_only"
           || verified.inboxScanned !== false
@@ -471,11 +478,13 @@ export default function InvoiceSourcesTab() {
         `Gmail ${verified.email} terverifikasi untuk perusahaan ID ${companyId}. Hanya profil Gmail diperiksa; inbox dan invoice belum diproses.`,
       );
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Koneksi Gmail belum dapat diverifikasi.",
-      );
+      if (requestSerial === verifyRequestSerial.current) {
+        setError(
+          err instanceof Error ? err.message : "Koneksi Gmail belum dapat diverifikasi.",
+        );
+      }
     } finally {
-      setAction(null);
+      if (requestSerial === verifyRequestSerial.current) setAction(null);
     }
   };
 
