@@ -203,9 +203,14 @@ export async function rebuildIssue292WithOwnerFunctions(
   // Fail closed if either historical bank source is no longer eligible.
   const bankEvidence=await tx.execute(sql`
     SELECT m.id,m.amount,m.transaction_date::text AS date,m.status::text AS status,
+      m.reconciliation_status::text AS reconciliation_status,
       m.company_id,m.source_classification,m.direction,m.journal_entry_id,
       m.approved_at,m.posted_at,a.company_id AS bank_company,
-      a.account_number,a.is_active
+      a.account_number,a.is_active,
+      EXISTS(
+        SELECT 1 FROM public.bank_reconciliation_matches candidate
+        WHERE candidate.mutation_id=m.id AND candidate.status='approved'
+      ) AS has_prior_approved_match
     FROM public.bank_mutations m
     JOIN public.company_bank_accounts a ON a.id::text=m.bank_account_id
     WHERE m.id IN (434462,434464)
@@ -220,7 +225,9 @@ export async function rebuildIssue292WithOwnerFunctions(
     if (![434462,434464].includes(id) || Number(row.company_id)!==1
       || Number(row.bank_company)!==1 || row.is_active!==true
       || row.account_number!==account || row.source_classification!=="actual_bank_mutation"
-      || row.direction!=="IN" || row.status!=="unmatched" || row.date!==date
+      || row.direction!=="IN" || row.status!=="unmatched"
+      || row.reconciliation_status!=="unmatched"
+      || row.has_prior_approved_match!==false || row.date!==date
       || Number(row.amount)!==net || row.journal_entry_id!=null
       || row.approved_at!=null || row.posted_at!=null) {
       throw new Error("Issue #292 bank evidence mismatch.");
