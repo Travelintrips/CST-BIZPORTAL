@@ -202,6 +202,7 @@ export async function rebuildIssue292WithOwnerFunctions(
         p.payment_method::text AS method,p.payment_provider::text AS provider,
         p.bank_account_id::text AS bank_account,
         p.settlement_rule_version AS rule_version,
+        p.expected_settlement_date::text AS expected_date,
         p.settlement_status::text AS settlement_status,
         ((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)::text AS h_plus_one,
         (SELECT count(*)::integer FROM sport_center.accounting_journals j
@@ -217,8 +218,10 @@ export async function rebuildIssue292WithOwnerFunctions(
       || row.status!=="confirmed" || String(row.method).toLowerCase()!=="qris"
       || String(row.provider).toLowerCase()!==provider
       || String(row.bank_account)!==account || String(row.rule_version)!==rule
-      || row.h_plus_one!==cohort.date || Number(row.source_journal_count)!==1
-      || !["unsettled","settled"].includes(String(row.settlement_status).toLowerCase())
+      || row.h_plus_one!==cohort.date || row.expected_date!==cohort.date
+      || row.amount==null || row.mdr_amount==null
+      || Number(row.source_journal_count)!==1
+      || String(row.settlement_status).toLowerCase()!=="unsettled"
     )) throw new Error(`Issue #292 source payments fail canonical H+1 evidence: ${cohort.date}`);
     const grossCents=rows.reduce((n,r)=>n+Math.round(Number(r.amount)*100),0);
     const mdrCents=rows.reduce((n,r)=>n+Math.round(Number(r.mdr_amount)*100),0);
