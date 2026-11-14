@@ -127,6 +127,35 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       expect(rows.rows[0].n).toBe(0);
     } finally {await check.end();}
   });
+  it("rejects original posted journal with wrong clearing COA before issuing compensation", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = {execute: async (statement:any) => {
+      const query=dialect.sqlToQuery(statement);
+      return conn.query(query.sql,query.params);
+    }};
+    try {
+      await conn.query(`
+        UPDATE sport_center.accounting_journal_lines
+        SET account_code='4-9999-CST'
+        WHERE journal_id=7207 AND account_code='1-1024-CST'
+      `);
+      await expect(reverseCanonicalSettlementForCorrection({
+        transaction:async(callback:any)=>callback(tx),
+      } as any,input)).rejects.toThrow("source journal #7207 bank/MDR/clearing structure has changed");
+      const check=await conn.query(`
+        SELECT b.status,
+          (SELECT count(*)::int FROM sport_center.accounting_journals
+           WHERE reversal_of_id=7207) AS reversals,
+          (SELECT count(*)::int FROM public.bank_reconciliation_audit
+           WHERE action='CANONICAL_SETTLEMENT_MEMBERSHIP_CORRECTION_REVERSED') AS audit_rows
+        FROM sport_center.payment_settlement_batches b WHERE b.id=5738
+      `);
+      expect(check.rows[0]).toMatchObject({status:"posted",reversals:0,audit_rows:0});
+    } finally {await conn.query("ROLLBACK");await conn.end();}
+  });
+
   it("rolls back every financial mutation when audit persistence fails", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
