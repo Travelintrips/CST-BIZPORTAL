@@ -6,6 +6,7 @@ on:
       - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
       - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
+      - "scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql"
       - ".github/workflows/qris292-isolated-postgres.yml"
   workflow_dispatch:
 permissions:
@@ -50,5 +51,7 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-isolated-postgres.sql
       - name: Mirror CST-DEV journal column types in isolated fixture
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql
+      - name: Install CST-DEV lifecycle guards in isolated fixture
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql
       - name: Exercise real SQL writer and rollback
         run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-isolated-pg-writer.test.ts src/__tests__/qris-correction-writer-preconditions.test.ts
