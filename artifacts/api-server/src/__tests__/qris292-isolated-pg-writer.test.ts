@@ -3,6 +3,7 @@ import pg from "pg";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { reverseCanonicalSettlementForCorrection } from "../lib/reconciliation/canonicalSettlementCorrection";
 import { runAtomicCanonicalSettlementCorrection } from "../lib/reconciliation/canonicalSettlementCorrectionCoordinator";
+import { assertIssue292OwnerRuleParity } from "../lib/reconciliation/issue292OwnerRuleGate";
 
 const local = process.env.QRIS292_ISOLATED_PG_URL;
 const suite = local ? describe : describe.skip;
@@ -15,6 +16,57 @@ const input = {
   reason: "Isolated PostgreSQL verification without modifying DEV or PROD financial data",
 };
 suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
+  it("verifies historical owner MDR parity using real PostgreSQL and rejects DEV 0.3% without persistent changes", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    try {
+      await expect(assertIssue292OwnerRuleParity(conn)).resolves.toBeUndefined();
+      await conn.query(`
+        UPDATE sport_center.payment_settlement_configs
+           SET mdr_rate=0.003,rule_version='PROD-MANDIRI-SC-20260810-v1'
+         WHERE company_id=1 AND provider_code='mandiri_direct'
+      `);
+      await expect(assertIssue292OwnerRuleParity(conn))
+        .rejects.toThrow("ISSUE292_OWNER_RULE_NOT_PARITY");
+      const journal = await conn.query(`
+        SELECT status, (SELECT COUNT(*)::int FROM sport_center.accounting_journals
+          WHERE reversal_of_id=7207) AS reversals
+        FROM sport_center.payment_settlement_batches WHERE id=5738
+      `);
+      expect(journal.rows[0]).toMatchObject({status:"posted",reversals:0});
+    } finally {
+      await conn.query("ROLLBACK");
+      await conn.end();
+    }
+    const check = new pg.Client({connectionString:local});
+    await check.connect();
+    try { await expect(assertIssue292OwnerRuleParity(check)).resolves.toBeUndefined(); }
+    finally { await check.end(); }
+  });
+
+  it("blocks overlapping historical owner rules and rolls them back", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    try {
+      await conn.query(`
+        INSERT INTO sport_center.payment_settlement_configs
+          (company_id,provider_code,bank_account_id,rule_version,source,is_active,
+           mdr_rate,calculation_method,fixed_provider_fee,fee_tax_rate,
+           rounding_scale,rounding_method,effective_from,effective_until)
+        VALUES(1,'mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',
+          'OWNER_APPROVED',true,0.007,'percentage_of_gross',0,0,2,
+          'round_half_up','2026-10-03','2027-01-01')
+      `);
+      await expect(assertIssue292OwnerRuleParity(conn))
+        .rejects.toThrow("ISSUE292_OWNER_RULE_NOT_PARITY");
+    } finally {
+      await conn.query("ROLLBACK");
+      await conn.end();
+    }
+  });
+
   it("executes real SQL reversal and inspects its journal before rolling back", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
