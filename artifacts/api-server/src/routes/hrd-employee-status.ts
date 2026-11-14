@@ -1,3 +1,4 @@
+import { hrdEmployeeStatusChangeEnabled } from "./hrd-employee-status-gate";
 import type { IRouter, Request, Response } from "express";
 import { withHrdCompanyScope } from "./hrd-db";
 
@@ -10,8 +11,7 @@ const idOf=(input:unknown):number|null=>{
   const parsed=Number(input);
   return Number.isSafeInteger(parsed)?parsed:null;
 };
-const enabled=()=>process.env.APP_ENV?.trim().toLowerCase()==="production" &&
-  process.env.HRD_EMPLOYEE_STATUS_WRITE_ENABLED==="true";
+const enabled=hrdEmployeeStatusChangeEnabled;
 
 /**
  * Uses the already-authorized, active BizPortal HRD session. All mutation and
@@ -25,6 +25,10 @@ export function registerHrdEmployeeStatusRoutes(router: IRouter):void {
     if(req.get("origin")!=="https://bizportal.cstlogistic.co.id" ||
        req.get("x-hrd-status-intent")!=="deactivate-employee"){
       res.status(403).json({message:"Konfirmasi perubahan status tidak valid."});return;
+    }
+    const role=req.hrdActor?.role?.trim().toLowerCase();
+    if(role!=="owner" && role!=="super_admin"){
+      res.status(403).json({message:"Hanya Owner atau Super Admin HRD yang terverifikasi boleh menonaktifkan karyawan."});return;
     }
     const employeeId=idOf(req.params.id);
     const companyId=req.hrdCompanyId;
