@@ -17,6 +17,7 @@ on:
       - "scripts/tests/fixtures/qris292-real-owner-builder-functions.sql"
       - "scripts/tests/fixtures/qris292-real-owner-support-functions.sql"
       - "scripts/tests/fixtures/qris292-real-owner-posting-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-posting-functions.sql"
       - "scripts/tests/fixtures/qris292-real-owner-positive-schema.sql"
       - "artifacts/api-server/src/__tests__/qris292-real-owner-positive.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-real-owner-function-canary.test.ts"
@@ -78,6 +79,8 @@ jobs:
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-support-functions.sql
       - name: Verify genuine owner SQL stack and MDR arithmetic
         run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-real-owner-stack.test.ts
+      - name: Install unchanged CST-DEV owner journal approval, posting, period lock functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-posting-functions.sql
       - name: Extend only disposable PG fixture to real owner schema
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-positive-schema.sql
       - name: Install genuine CST-DEV journal approval and posting functions
