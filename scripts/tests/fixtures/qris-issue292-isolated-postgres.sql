@@ -76,7 +76,7 @@ CREATE TRIGGER trg_guard_finalized_settlement_items BEFORE UPDATE ON sport_cente
 FOR EACH ROW EXECUTE FUNCTION sport_center.guard_finalized_settlement_items();
 INSERT INTO sport_center.payment_settlement_batches
 (id,company_id,status,settlement_journal_id,settlement_date,provider_code,bank_account_id,settlement_rule_version,gross_amount,mdr_amount,net_amount)
-VALUES(5738,1,'posted',7207,'2026-11-05','mandiri','1640006707220','TEST_RULE',930000,6300,923700);
+VALUES(5738,1,'posted',7207,'2026-11-05','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',930000,6300,923700);
 INSERT INTO sport_center.accounting_journals
 (id,journal_type,status,is_reversal,settlement_batch_id,notes,debit_amount,credit_revenue_amount,credit_ppn_amount)
 VALUES(7207,'settlement','posted',false,5738,'ORIGINAL HISTORIC',923700,923700,0);
@@ -86,10 +86,12 @@ VALUES(7207,'debit','1001','clearing',923700,'original'),
 (7207,'credit','4001','revenue',923700,'original');
 INSERT INTO sport_center.sport_payments
 (id,company_id,amount,status,settlement_status,payment_method,payment_provider,bank_account_id,paid_at,expected_settlement_date,settlement_rule_version,mdr_amount)
-SELECT x,1,232500,'confirmed','settled','qris','mandiri','1640006707220',
- CASE WHEN x=856 THEN '2026-11-03 12:00:00+07'::timestamptz ELSE '2026-11-04 12:00:00+07'::timestamptz END,
+SELECT x,1,CASE WHEN x=861 THEN 30000 ELSE 300000 END,
+ 'confirmed','settled','qris','mandiri_direct','1640006707220',
+ CASE WHEN x=856 THEN '2026-11-03 12:00:00+07'::timestamptz
+      ELSE '2026-11-04 12:00:00+07'::timestamptz END,
  CASE WHEN x=856 THEN '2026-11-04' ELSE '2026-11-05' END,
-'TEST_RULE',1575
+ 'PROD-MANDIRI-SC-20260831-v1',CASE WHEN x=861 THEN 0 ELSE 2100 END
 FROM unnest(ARRAY[856,859,860,861,862]) x;
 INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
 SELECT 5738,id,'active',amount FROM sport_center.sport_payments WHERE id IN (856,859,860,861);
