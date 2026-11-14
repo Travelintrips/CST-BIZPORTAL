@@ -281,7 +281,7 @@ export default function AdvanceManagementPage() {
         <p className="font-semibold">Data kasbon historis — hanya baca</p>
         <p className="mt-1 text-muted-foreground">
           Advance Management universal belum terhubung ke backend mandiri.
-          Data di bawah berasal dari kasbon yang sudah ada, bukan impor atau transaksi baru.
+          Data di bawah berasal dari kasbon perusahaan terpilih (ID {activeCompanyId ?? "—"}), bukan impor atau transaksi baru.
           Status Draft/PENDING dan saldo tercatat bukan bukti uang sudah dicairkan.
         </p>
       </div>
@@ -815,6 +815,10 @@ function AdvanceDetailDrawer({ advance, readOnly, loading, onClose, onRefresh, o
   const allocBalance = Number(stlAmtReceived) - allocTotal;
 
   const action = async (method: string, path: string, body?: any) => {
+    if(readOnly){
+      toast({variant:"destructive",title:"Hanya baca",description:"Pencairan, pelunasan, persetujuan dan Void harus melalui Accounting yang sudah diverifikasi."});
+      return;
+    }
     setActionLoading(true);
     try {
       await api(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
