@@ -351,6 +351,121 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
     } finally {await check.end();}
   });
 
+
+  it("accepts the exact two-bank synthetic completion with balanced posted settlement journals", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    const tx = {execute: async (statement:any) => {
+      const compiled = dialect.sqlToQuery(statement);
+      return conn.query(compiled.sql,compiled.params);
+    }};
+    const db = {transaction: async (callback:any) => callback(tx)} as any;
+    try {
+      // These are isolated fixture rows, NOT the production builder/approval functions.
+      await conn.query(`
+        INSERT INTO sport_center.sport_payments
+          (id,company_id,amount,status,settlement_status,payment_method,
+           payment_provider,bank_account_id,paid_at,expected_settlement_date,
+           settlement_rule_version,mdr_amount)
+        VALUES
+          (834,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 10:00+07','2026-11-04','TEST_RULE',600),
+          (843,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 11:00+07','2026-11-04','TEST_RULE',600),
+          (853,1,100000,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 13:00+07','2026-11-04','TEST_RULE',600),
+          (858,1,157500,'confirmed','unsettled','qris','mandiri','1640006707220','2026-11-03 14:00+07','2026-11-04','TEST_RULE',825);
+        INSERT INTO public.bank_mutations
+          (id,status,company_id,amount,transaction_date,source_classification,
+           direction,bank_account_id,reconciliation_status)
+        VALUES(434462,'unmatched',1,685800,'2026-11-04',
+               'actual_bank_mutation','IN','17','unmatched');
+      `);
+      const result = await runAtomicCanonicalSettlementCorrection(db,input,{
+        rebuildBothDatedBatches: async () => {
+          await conn.query(`
+            INSERT INTO sport_center.payment_settlement_batches
+              (id,company_id,status,settlement_date,provider_code,bank_account_id,
+               settlement_rule_version,gross_amount,mdr_amount,net_amount)
+            VALUES
+              (5739,1,'calculated','2026-11-04','mandiri','1640006707220','TEST_RULE',690000,4200,685800),
+              (5740,1,'calculated','2026-11-05','mandiri','1640006707220','TEST_RULE',930000,6300,923700);
+            INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
+            SELECT 5739,id,'active',amount FROM sport_center.sport_payments
+            WHERE id IN (834,843,853,856,858);
+            INSERT INTO sport_center.payment_settlement_items(settlement_id,payment_id,item_status,gross_amount)
+            SELECT 5740,id,'active',amount FROM sport_center.sport_payments
+            WHERE id IN (859,860,861,862);
+          `);
+          // The fixture substitutes balanced journals for the canonical
+          // create_settlement_journal_draft/finalize functions.
+          const journals = await conn.query(`
+            INSERT INTO sport_center.accounting_journals
+              (journal_type,status,is_reversal,settlement_batch_id,notes,
+               debit_amount,credit_revenue_amount,credit_ppn_amount)
+            VALUES
+              ('settlement','draft',false,5739,'TEST COHORT NOV4',685800,685800,0),
+              ('settlement','draft',false,5740,'TEST COHORT NOV5',923700,923700,0)
+            RETURNING id,settlement_batch_id
+          `);
+          for (const j of journals.rows) {
+            const amount = j.settlement_batch_id===5739 ? 685800 : 923700;
+            await conn.query(`
+              INSERT INTO sport_center.accounting_journal_lines
+                (journal_id,line_type,account_code,account_name,amount,description)
+              VALUES($1,'debit','1001','clearing',$2,'synthetic bank'),
+                    ($1,'credit','4001','revenue',$2,'synthetic settlement')
+            `,[j.id,amount]);
+            await conn.query("SELECT sport_center.validate_accounting_journal($1)",[j.id]);
+            await conn.query("UPDATE sport_center.accounting_journals SET status='posted' WHERE id=$1",[j.id]);
+            await conn.query(`
+              UPDATE sport_center.payment_settlement_batches
+              SET settlement_journal_id=$1,status='posted' WHERE id=$2
+            `,[j.id,j.settlement_batch_id]);
+          }
+          return {ids:[5739,5740]};
+        },
+        approveBothCanonicalBankMatches: async (_tx,batches) => {
+          for (const [batchId,mutationId] of [[5739,434462],[5740,434464]]) {
+            await conn.query(`
+              UPDATE sport_center.payment_settlement_batches
+              SET bank_mutation_id=$1,canonical_bank_mutation_id=$1,status='reconciled'
+              WHERE id=$2 AND status='posted'
+            `,[mutationId,batchId]);
+            await conn.query(`
+              UPDATE public.bank_mutations
+              SET status='approved',reconciliation_status='approved'
+              WHERE id=$1 AND journal_entry_id IS NULL
+            `,[mutationId]);
+          }
+          return {approved:[434462,434464],batches};
+        },
+      });
+      expect(result.reversal.ok).toBe(true);
+      expect(result.batches.ids).toEqual([5739,5740]);
+      const bank = await conn.query(`
+        SELECT COALESCE(SUM(amount),0)::numeric AS net FROM public.bank_mutations
+        WHERE id IN (434462,434464) AND status='approved'
+      `);
+      expect(Number(bank.rows[0].net)).toBe(1609500);
+      const original = await conn.query(`
+        SELECT status FROM sport_center.payment_settlement_batches WHERE id=5738
+      `);
+      expect(original.rows[0].status).toBe("reversed");
+    } finally {
+      await conn.query("ROLLBACK");
+      await conn.end();
+    }
+    const check = new pg.Client({connectionString:local});
+    await check.connect();
+    try {
+      const readback = await check.query(`
+        SELECT (SELECT status FROM sport_center.payment_settlement_batches WHERE id=5738) AS original_status,
+          (SELECT count(*)::int FROM sport_center.payment_settlement_batches WHERE id IN (5739,5740)) AS replacements,
+          (SELECT count(*)::int FROM sport_center.accounting_journals WHERE reversal_of_id=7207) AS reversals
+      `);
+      expect(readback.rows[0]).toMatchObject({original_status:"posted",replacements:0,reversals:0});
+    } finally {await check.end();}
+  });
+
   it("rejects wrong replacement MDR before writing any compensating journal", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
