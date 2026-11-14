@@ -4,6 +4,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { reverseCanonicalSettlementForCorrection } from "../lib/reconciliation/canonicalSettlementCorrection";
 import { runAtomicCanonicalSettlementCorrection } from "../lib/reconciliation/canonicalSettlementCorrectionCoordinator";
 import { assertIssue292OwnerRuleParity } from "../lib/reconciliation/issue292OwnerRuleGate";
+import { isIssue292ScopedFinanceSession } from "../lib/reconciliation/issue292FinancePrincipalGate";
 
 const local = process.env.QRIS292_ISOLATED_PG_URL;
 const suite = local ? describe : describe.skip;
@@ -16,6 +17,25 @@ const input = {
   reason: "Isolated PostgreSQL verification without modifying DEV or PROD financial data",
 };
 suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
+  it("rejects PostgreSQL admin sessions and role-switch impersonation before finance", async () => {
+    const conn=new pg.Client({connectionString:local});
+    await conn.connect();
+    await conn.query("BEGIN");
+    try {
+      expect(await isIssue292ScopedFinanceSession(conn)).toBe(false);
+      await conn.query("DO $ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='sport_center_app') THEN CREATE ROLE sport_center_app NOLOGIN; END IF; END $");
+      // SET ROLE changes current_user but must not change session_user.
+      await conn.query("SET LOCAL ROLE sport_center_app");
+      const names=await conn.query("SELECT current_user,session_user");
+      expect(names.rows[0].current_user).toBe("sport_center_app");
+      expect(names.rows[0].session_user).not.toBe("sport_center_app");
+      expect(await isIssue292ScopedFinanceSession(conn)).toBe(false);
+    } finally {
+      await conn.query("ROLLBACK");
+      await conn.end();
+    }
+  });
+
   it("verifies historical owner MDR parity using real PostgreSQL and rejects DEV 0.3% without persistent changes", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
