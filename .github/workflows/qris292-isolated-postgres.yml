@@ -6,7 +6,8 @@ on:
       - "artifacts/api-server/src/lib/reconciliation/canonicalSettlementCorrectionCoordinator.ts"
       - "artifacts/api-server/src/lib/reconciliation/issue292OwnerRuleGate.ts"
       - "artifacts/api-server/src/lib/reconciliation/issue292FinancePrincipalGate.ts"
-      - "artifacts/api-server/src/__tests__/qris292-owner-rule-gate.test.ts src/__tests__/qris292-real-owner-function-canary.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-owner-rule-gate.test.ts"
+      - "artifacts/api-server/src/__tests__/qris292-real-owner-stack.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-isolated-pg-writer.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-owner-builder-contract.test.ts"
       - "artifacts/api-server/src/__tests__/qris292-existing-approval-bridge.test.ts"
@@ -14,6 +15,7 @@ on:
       - "scripts/tests/fixtures/qris-issue292-isolated-postgres.sql"
       - "scripts/tests/fixtures/qris292-real-owner-group-identity.sql"
       - "scripts/tests/fixtures/qris292-real-owner-builder-functions.sql"
+      - "scripts/tests/fixtures/qris292-real-owner-support-functions.sql"
       - "artifacts/api-server/src/__tests__/qris292-real-owner-function-canary.test.ts"
       - "scripts/tests/fixtures/qris-issue292-dev-journal-column-shape.sql"
       - "scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql"
@@ -68,4 +70,8 @@ jobs:
       - name: Install CST-DEV lifecycle guards in isolated fixture
         run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris-issue292-dev-lifecycle-guards.sql
       - name: Exercise real SQL writer and rollback
-        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-isolated-pg-writer.test.ts src/__tests__/qris-correction-writer-preconditions.test.ts src/__tests__/qris292-owner-builder-contract.test.ts src/__tests__/qris292-existing-approval-bridge.test.ts src/__tests__/qris292-owner-rule-gate.test.ts
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-isolated-pg-writer.test.ts src/__tests__/qris-correction-writer-preconditions.test.ts src/__tests__/qris292-owner-builder-contract.test.ts src/__tests__/qris292-existing-approval-bridge.test.ts src/__tests__/qris292-owner-rule-gate.test.ts src/__tests__/qris292-real-owner-function-canary.test.ts
+      - name: Load unchanged CST-DEV dependent owner SQL functions
+        run: psql -h 127.0.0.1 -U postgres -d qris292_test -v ON_ERROR_STOP=1 -f scripts/tests/fixtures/qris292-real-owner-support-functions.sql
+      - name: Verify genuine owner SQL stack and MDR arithmetic
+        run: pnpm --filter @workspace/api-server exec vitest run src/__tests__/qris292-real-owner-stack.test.ts
