@@ -7,6 +7,8 @@ import {registerHrdEmployeeStatusRoutes} from "./hrd-employee-status";
 const state=vi.hoisted(()=>({
   companyId:1,employeeStatus:"active",employeeId:61,
   auditFail:false,auditRows:0,commits:0,rollbacks:0,
+  checkUnavailable:false,
+  unverifiedCount:0,verifiedCount:0,reservations:0,
   commands:[] as Array<{sql:string;values:unknown[]}>,
 }));
 vi.mock("./hrd-db",()=>({
@@ -22,6 +24,17 @@ vi.mock("./hrd-db",()=>({
               ?{rowCount:1,rows:[{id:61,status:state.employeeStatus}]}
               :{rowCount:0,rows:[]};
           }
+          if(sql.includes("FROM hrd_private.employee_resign_kasbon_precheck(")){
+            if(state.checkUnavailable)throw Error("FINANCIAL_SOURCE_UNAVAILABLE");
+            return {rowCount:1,rows:[{
+              unverifiedCount:String(state.unverifiedCount),
+              unverifiedAmount:state.unverifiedCount?"150000.00":"0.00",
+              verifiedUnsettledCount:String(state.verifiedCount),
+              verifiedUnsettledAmount:state.verifiedCount?"250000.00":"0.00",
+              activeReservations:String(state.reservations),
+              activeReservationAmount:state.reservations?"75000.00":"0.00",
+            }]};
+          }
           if(sql.includes("UPDATE public.employees SET status='inactive'")){
             if(state.employeeStatus!=="active")return{rowCount:0,rows:[]};
             state.employeeStatus="inactive";
@@ -32,8 +45,9 @@ vi.mock("./hrd-db",()=>({
             state.auditRows++;
             return{rowCount:1,rows:[{id:7}]};
           }
-          if(sql.includes("SELECT id FROM public.employees")){
-            return{rowCount:1,rows:[{id:61}]};
+          if(sql.includes("SELECT id FROM public.employees")||
+             sql.includes("SELECT id,status FROM public.employees")){
+            return{rowCount:1,rows:[{id:61,status:state.employeeStatus}]};
           }
           if(sql.includes("FROM hrd_private.employee_status_audit")){
             return{rowCount:state.auditRows,rows:state.auditRows?[{
@@ -73,6 +87,7 @@ describe("HRD scoped and audited resign / inactive transition",()=>{
   beforeEach(()=>{
     vi.stubEnv("APP_ENV","production");vi.stubEnv("HRD_PROD_ENABLED","true");vi.stubEnv("HRD_EMPLOYEE_STATUS_WRITE_ENABLED","true");
     state.companyId=1;state.employeeId=61;state.employeeStatus="active";state.auditFail=false;
+    state.checkUnavailable=false;state.unverifiedCount=0;state.verifiedCount=0;state.reservations=0;
     state.auditRows=0;state.commits=0;state.rollbacks=0;state.commands.length=0;
   });
   afterEach(()=>vi.unstubAllEnvs());
@@ -120,6 +135,47 @@ describe("HRD scoped and audited resign / inactive transition",()=>{
     expect(state.commands.some(q=>q.sql.includes("UPDATE public.employees SET status='inactive'"))).toBe(true);
     expect(state.commands.some(q=>q.sql.includes("INSERT INTO hrd_private.employee_status_audit"))).toBe(true);
     expect(state.commands.some(q=>/\bDELETE\b|\bpayroll_items\b|\bsalary_payments\b/i.test(q.sql))).toBe(false);
+  });
+  it("returns read-only, scoped precheck with no employee status mutation",async()=>{
+    state.unverifiedCount=2;
+    const resp=await fetch(root+"/api/hrd/employees/61/resign-kasbon-precheck?companyId=1");
+    expect(resp.status).toBe(200);
+    const result=await resp.json() as Record<string,unknown>;
+    expect(result).toMatchObject({
+      companyId:1,employeeId:61,unverifiedCount:2,
+      verifiedUnsettledCount:0,activeReservations:0,
+      hasUnresolved:true,canDeactivate:false,checkReadOnly:true,
+      kasbonUnchanged:true,canPay:false,canPostJournal:false,
+    });
+    expect(state.commands.some(q=>q.sql.includes("UPDATE public.employees"))).toBe(false);
+    expect(state.auditRows).toBe(0);
+  });
+  it("blocks resign for unverified DRAFT kasbon without touching employee or audit",async()=>{
+    state.unverifiedCount=1;
+    const resp=await patch(valid);
+    expect(resp.status).toBe(409);
+    const body=await resp.json() as Record<string,unknown>;
+    expect(body).toMatchObject({code:"HRD_RESIGN_KASBON_REQUIRES_REVIEW",
+      employeeStatusUnchanged:true,noSettlement:true,noPayrollWrite:true});
+    expect(state.employeeStatus).toBe("active");
+    expect(state.auditRows).toBe(0);
+    expect(state.commands.some(q=>q.sql.includes("UPDATE public.employees"))).toBe(false);
+  });
+  it("blocks resign for verified unsettled kasbon and active payroll reservation",async()=>{
+    for(const target of ["verifiedCount","reservations"] as const){
+      state[target]=1;
+      expect((await patch(valid)).status).toBe(409);
+      expect(state.employeeStatus).toBe("active");
+      expect(state.auditRows).toBe(0);
+      state[target]=0;
+    }
+  });
+  it("fails closed if financial precheck unavailable, with status unchanged",async()=>{
+    state.checkUnavailable=true;
+    expect((await patch(valid)).status).toBe(503);
+    expect(state.employeeStatus).toBe("active");
+    expect(state.auditRows).toBe(0);
+    expect(state.rollbacks).toBeGreaterThan(0);
   });
   it("will not update other tenant or already-inactive employee",async()=>{
     state.companyId=3;
