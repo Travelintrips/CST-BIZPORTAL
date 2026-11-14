@@ -69,7 +69,7 @@ WITH
              AND lower(p.payment_method::text)='qris'
              AND lower(p.payment_provider::text)='mandiri_direct'
              AND p.company_id=1 AND p.bank_account_id='1640006707220'
-             AND p.expected_settlement_date=((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)
+             AND p.expected_settlement_date::date=((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)
              AND p.settlement_rule_version='PROD-MANDIRI-SC-20260831-v1') AS eligible
       FROM sport_center.sport_payments p
      WHERE p.id IN (834,843,853,856,858,859,860,861,862)
