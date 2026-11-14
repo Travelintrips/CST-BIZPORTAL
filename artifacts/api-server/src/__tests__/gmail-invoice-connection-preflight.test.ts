@@ -43,4 +43,12 @@ describe("DEV Gmail connection preflight is read-only and tenant scoped", () => 
     expect(tab).toContain("verified.invoiceImported !== false");
     expect(tab).toContain("Hanya profil Gmail diperiksa; inbox dan invoice belum diproses.");
   });
+
+  it("ignores an old verification response after selecting a different company", () => {
+    expect(tab).toContain("const verifyRequestSerial = useRef(0)");
+    expect(tab).toContain("verifyRequestSerial.current += 1");
+    expect(tab).toContain("const requestSerial = ++verifyRequestSerial.current");
+    expect(tab).toContain("if (requestSerial !== verifyRequestSerial.current) return");
+    expect(tab).toContain("if (requestSerial === verifyRequestSerial.current) setAction(null)");
+  });
 });
