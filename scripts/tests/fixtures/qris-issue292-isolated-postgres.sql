@@ -79,11 +79,12 @@ INSERT INTO sport_center.payment_settlement_batches
 VALUES(5738,1,'posted',7207,'2026-11-05','mandiri_direct','1640006707220','PROD-MANDIRI-SC-20260831-v1',930000,6300,923700);
 INSERT INTO sport_center.accounting_journals
 (id,journal_type,status,is_reversal,settlement_batch_id,notes,debit_amount,credit_revenue_amount,credit_ppn_amount)
-VALUES(7207,'settlement','posted',false,5738,'ORIGINAL HISTORIC',923700,923700,0);
+VALUES(7207,'settlement','posted',false,5738,'ORIGINAL HISTORIC',930000,930000,0);
 SELECT setval(pg_get_serial_sequence('sport_center.accounting_journals','id'),7207,true);
 INSERT INTO sport_center.accounting_journal_lines(journal_id,line_type,account_code,account_name,amount,description)
-VALUES(7207,'debit','1001','clearing',923700,'original'),
-(7207,'credit','4001','revenue',923700,'original');
+VALUES(7207,'debit','1-1023-CST','Bank Mandiri Ciputat',923700,'original net bank'),
+(7207,'debit','5-3050-CST','Beban MDR QRIS',6300,'original mdr'),
+(7207,'credit','1-1024-CST','QRIS clearing',930000,'original gross clearing');
 INSERT INTO sport_center.sport_payments
 (id,company_id,amount,status,settlement_status,payment_method,payment_provider,bank_account_id,paid_at,expected_settlement_date,settlement_rule_version,mdr_amount)
 SELECT x,1,CASE WHEN x=861 THEN 30000 ELSE 300000 END,
