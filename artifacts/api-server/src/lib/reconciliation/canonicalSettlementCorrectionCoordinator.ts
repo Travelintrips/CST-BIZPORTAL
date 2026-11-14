@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { reverseCanonicalSettlementForCorrection } from "./canonicalSettlementCorrection";
 import type {
   CanonicalSettlementCorrectionInput,
@@ -53,6 +54,70 @@ export async function runAtomicCanonicalSettlementCorrection<TBatches, TApproval
     }
     const batches = await stages.rebuildBothDatedBatches(tx, reversal);
     const approvals = await stages.approveBothCanonicalBankMatches(tx, batches, reversal);
+    // Issue #292 is deliberately restricted to the verified historical case.
+    // A stage callback returning without doing the finance work must NEVER
+    // commit the reversal. Re-read canonical DB records within the same tx.
+    if (input.settlementId !== 5738 || input.expectedBankMutationId !== 434464
+      || [...input.replacementPaymentIds].sort((a,b)=>a-b).join(",") !== "859,860,861,862") {
+      throw new Error("Issue #292 coordinator rejects non-approved correction identity.");
+    }
+    const expected = [
+      {mutationId:434462, date:"2026-11-04", ids:[834,843,853,856,858], gross:690000, mdr:4200, net:685800},
+      {mutationId:434464, date:"2026-11-05", ids:[859,860,861,862], gross:930000, mdr:6300, net:923700},
+    ];
+    const used = new Set<number>();
+    for (const cohort of expected) {
+      const result = await tx.execute(sql`
+        SELECT b.id AS batch_id, b.status::text AS batch_status,
+          b.settlement_date::text AS settlement_date,
+          b.gross_amount, b.mdr_amount, b.net_amount,
+          b.settlement_journal_id, j.status::text AS journal_status,
+          j.is_reversal, m.status::text AS bank_status,
+          m.amount AS bank_amount, m.journal_entry_id,
+          COALESCE(array_agg(i.payment_id ORDER BY i.payment_id)
+            FILTER (WHERE i.payment_id IS NOT NULL),ARRAY[]::integer[]) AS payment_ids
+        FROM sport_center.payment_settlement_batches b
+        JOIN sport_center.accounting_journals j ON j.id=b.settlement_journal_id
+        JOIN public.bank_mutations m ON m.id=b.bank_mutation_id
+        LEFT JOIN sport_center.payment_settlement_items i
+          ON i.settlement_id=b.id AND i.item_status='active'
+        WHERE b.bank_mutation_id=${cohort.mutationId} AND b.company_id=1
+        GROUP BY b.id,j.id,m.id
+      `);
+      if (result.rows.length !== 1) {
+        throw new Error(`Issue #292 missing or duplicate canonical bank batch for ${cohort.mutationId}.`);
+      }
+      const row = result.rows[0] as Record<string,unknown>;
+      const actualIds = (row.payment_ids as Array<number|string>).map(Number).sort((a,b)=>a-b);
+      const valid = Number(row.batch_id) !== 5738
+        && row.batch_status === "reconciled" && row.bank_status === "approved"
+        && row.journal_status === "posted" && row.is_reversal === false
+        && row.journal_entry_id == null
+        && row.settlement_date === cohort.date
+        && Number(row.gross_amount) === cohort.gross
+        && Number(row.mdr_amount) === cohort.mdr
+        && Number(row.net_amount) === cohort.net
+        && Number(row.bank_amount) === cohort.net
+        && actualIds.join(",") === cohort.ids.join(",");
+      if (!valid || used.has(Number(row.batch_id))) {
+        throw new Error(`Issue #292 canonical bank or membership postcondition failed: ${cohort.mutationId}.`);
+      }
+      used.add(Number(row.batch_id));
+    }
+    const original = await tx.execute(sql`
+      SELECT b.status::text AS status,
+        (SELECT count(*)::integer FROM sport_center.payment_settlement_items
+          WHERE settlement_id=5738 AND item_status='active') AS active_members,
+        (SELECT count(*)::integer FROM sport_center.accounting_journals
+          WHERE reversal_of_id=b.settlement_journal_id AND is_reversal=true
+            AND status='posted') AS posted_reversals
+      FROM sport_center.payment_settlement_batches b WHERE b.id=5738
+    `);
+    const state = original.rows[0] as Record<string,unknown>|undefined;
+    if (!state || state.status !== "reversed" || Number(state.active_members)!==0
+      || Number(state.posted_reversals)!==1) {
+      throw new Error("Issue #292 original posted settlement correction incomplete.");
+    }
     return { reversal, batches, approvals };
   });
 }
