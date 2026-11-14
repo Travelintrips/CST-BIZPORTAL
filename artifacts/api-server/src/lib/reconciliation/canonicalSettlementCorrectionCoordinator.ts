@@ -136,3 +136,149 @@ export async function runAtomicCanonicalSettlementCorrection<TBatches, TApproval
     return { reversal, batches, approvals };
   });
 }
+
+
+/**
+ * Issue #292 canonical rebuild stage. Only call with the authenticated
+ * coordinator's transaction after original #5738 has been reversed.
+ * No independent transaction, no direct INSERTs, no approval and no route.
+ *
+ * 4 Nov: standard owner canonical builder.
+ * 5 Nov: supplemental builder, since the reversed historical #5738 still
+ * reserves its canonical identity under the unique reference constraints.
+ */
+export async function rebuildIssue292WithOwnerFunctions(
+  tx: Transaction,
+  reversal: CanonicalSettlementCorrectionResult,
+  actor: string,
+): Promise<{nov4BatchId:number;nov5BatchId:number}> {
+  if (reversal.settlementId !== 5738 || reversal.bankMutationId !== 434464
+    || reversal.settlementStatus !== "reversed"
+    || [...reversal.replacementPaymentIds].sort((a,b)=>a-b).join(",") !== "859,860,861,862") {
+    throw new Error("Issue #292 canonical rebuild requires the audited reversal identity.");
+  }
+  const operator=actor.trim();
+  if (!operator) throw new Error("An authenticated correction actor is required.");
+  const identityRows=await tx.execute(sql`
+    SELECT company_id, lower(provider_code) AS provider_code,
+      bank_account_id::text AS bank_account_id,
+      settlement_rule_version AS rule_version
+    FROM sport_center.payment_settlement_batches
+    WHERE id=5738 AND status='reversed' FOR UPDATE
+  `);
+  const identity=identityRows.rows[0] as Record<string,unknown>|undefined;
+  if (!identity || Number(identity.company_id)!==1 || !identity.provider_code
+    || !identity.bank_account_id || !identity.rule_version) {
+    throw new Error("Issue #292 source identity is not verified.");
+  }
+  const provider=String(identity.provider_code);
+  const account=String(identity.bank_account_id);
+  const rule=String(identity.rule_version);
+
+  const bankMapping=await tx.execute(sql`
+    SELECT cba.id
+    FROM public.company_bank_accounts cba
+    JOIN public.chart_of_accounts coa ON coa.id=cba.coa_id
+    JOIN sport_center.coa_accounts sc ON sc.code=coa.code
+    WHERE cba.company_id=1 AND cba.account_number::text=${account}
+      AND cba.is_active=true AND coa.is_active=true AND sc.is_active=true
+      AND coa.code='1-1023-CST' AND sc.code='1-1023-CST'
+      AND coa.name='Bank Mandiri Ciputat' AND sc.name=coa.name
+      AND coa.account_type::text='asset' AND sc.account_type::text='asset'
+    FOR UPDATE OF cba,coa,sc
+  `);
+  if (bankMapping.rows.length!==1) {
+    throw new Error("Issue #292 requires exactly one verified owner bank COA mapping.");
+  }
+
+  const expected=[
+    {date:"2026-11-04",ids:[834,843,853,856,858],gross:690000,mdr:4200,net:685800},
+    {date:"2026-11-05",ids:[859,860,861,862],gross:930000,mdr:6300,net:923700},
+  ] as const;
+  const built:number[]=[];
+  for (const cohort of expected) {
+    const paymentRows=await tx.execute(sql`
+      SELECT p.id,p.amount,p.mdr_amount,p.company_id,p.status::text AS status,
+        p.payment_method::text AS method,p.payment_provider::text AS provider,
+        p.bank_account_id::text AS bank_account,
+        p.settlement_rule_version AS rule_version,
+        p.settlement_status::text AS settlement_status,
+        ((p.paid_at AT TIME ZONE 'Asia/Jakarta')::date+1)::text AS h_plus_one,
+        (SELECT count(*)::integer FROM sport_center.accounting_journals j
+          WHERE j.payment_id=p.id AND j.journal_type='payment_confirmed'
+            AND j.is_reversal=false AND j.status='posted') AS source_journal_count
+      FROM sport_center.sport_payments p
+      WHERE p.id=ANY(${[...cohort.ids]}::integer[])
+      ORDER BY p.id FOR UPDATE
+    `);
+    const rows=paymentRows.rows as Array<Record<string,unknown>>;
+    if (rows.length!==cohort.ids.length || rows.some((row,i)=>
+      Number(row.id)!==cohort.ids[i] || Number(row.company_id)!==1
+      || row.status!=="confirmed" || String(row.method).toLowerCase()!=="qris"
+      || String(row.provider).toLowerCase()!==provider
+      || String(row.bank_account)!==account || String(row.rule_version)!==rule
+      || row.h_plus_one!==cohort.date || Number(row.source_journal_count)!==1
+      || !["unsettled","settled"].includes(String(row.settlement_status).toLowerCase())
+    )) throw new Error(`Issue #292 source payments fail canonical H+1 evidence: ${cohort.date}`);
+    const grossCents=rows.reduce((n,r)=>n+Math.round(Number(r.amount)*100),0);
+    const mdrCents=rows.reduce((n,r)=>n+Math.round(Number(r.mdr_amount)*100),0);
+    if (grossCents!==cohort.gross*100 || mdrCents!==cohort.mdr*100
+      || grossCents-mdrCents!==cohort.net*100) {
+      throw new Error(`Issue #292 source totals fail exact bank evidence: ${cohort.date}`);
+    }
+
+    let batchResult;
+    if (cohort.date==="2026-11-05") {
+      batchResult=await tx.execute(sql`
+        SELECT sport_center.create_payment_settlement_supplemental_batch(
+          1,${provider},${account},${cohort.date}::date,${rule},
+          ${[...cohort.ids]}::integer[],${operator}
+        ) AS id
+      `);
+    } else {
+      const refRows=await tx.execute(sql`
+        SELECT correlation_id FROM sport_center.canonical_settlement_group_identity(
+          1,${provider},${account},${cohort.date}::date,${rule}
+        )
+      `);
+      const reference=String((refRows.rows[0] as Record<string,unknown>|undefined)?.correlation_id??"");
+      if (!reference) throw new Error("Issue #292 canonical group identity missing.");
+      batchResult=await tx.execute(sql`
+        SELECT sport_center.create_payment_settlement_batch(
+          ${reference},1,${provider},${account},${cohort.date}::date,
+          ${[...cohort.ids]}::integer[],${operator}
+        ) AS id
+      `);
+    }
+    const batchId=Number((batchResult.rows[0] as Record<string,unknown>|undefined)?.id);
+    if (!Number.isSafeInteger(batchId) || batchId<=0 || batchId===5738
+      || built.includes(batchId)) throw new Error("Issue #292 owner batch returned invalid ID.");
+    const calculated=await tx.execute(sql`
+      SELECT status::text AS status FROM sport_center.payment_settlement_batches
+      WHERE id=${batchId} AND company_id=1 FOR UPDATE
+    `);
+    if ((calculated.rows[0] as Record<string,unknown>|undefined)?.status!=="calculated")
+      throw new Error("Issue #292 owner batch is not calculated.");
+    await tx.execute(sql`
+      SELECT sport_center.create_settlement_journal_draft(
+        ${batchId}::bigint,'1-1023-CST',${operator}
+      )
+    `);
+    await tx.execute(sql`SELECT set_config(
+      'sport_center.allow_posted_accounting_metadata_correction','on',true
+    )`);
+    await tx.execute(sql`
+      SELECT sport_center.finalize_payment_settlement(${batchId}::bigint,${operator})
+    `);
+    const posted=await tx.execute(sql`
+      SELECT status::text AS status,settlement_journal_id
+      FROM sport_center.payment_settlement_batches WHERE id=${batchId} FOR UPDATE
+    `);
+    if ((posted.rows[0] as Record<string,unknown>|undefined)?.status!=="posted"
+      || !Number((posted.rows[0] as Record<string,unknown>|undefined)?.settlement_journal_id)) {
+      throw new Error("Issue #292 owner journal finalization did not post.");
+    }
+    built.push(batchId);
+  }
+  return {nov4BatchId:built[0]!,nov5BatchId:built[1]!};
+}
