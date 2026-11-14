@@ -466,6 +466,24 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
     } finally {await check.end();}
   });
 
+  it("distinguishes SC-1707 Nov 4 and SC-1720 Nov 5 from actual paid_at using Jakarta H+1", async () => {
+    const conn = new pg.Client({connectionString:local});
+    await conn.connect();
+    try {
+      const evidence = await conn.query(`
+        SELECT id,
+          expected_settlement_date::text AS expected_date,
+          ((paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1)::text AS actual_h_plus_one_date
+        FROM sport_center.sport_payments WHERE id IN (856,862) ORDER BY id
+      `);
+      expect(evidence.rows).toEqual([
+        {id:856,expected_date:"2026-11-04",actual_h_plus_one_date:"2026-11-04"},
+        {id:862,expected_date:"2026-11-05",actual_h_plus_one_date:"2026-11-05"},
+      ]);
+      expect(evidence.rows[0].actual_h_plus_one_date).not.toBe("2026-11-05");
+    } finally {await conn.end();}
+  });
+
   it("rejects wrong replacement MDR before writing any compensating journal", async () => {
     const conn = new pg.Client({connectionString:local});
     await conn.connect();
