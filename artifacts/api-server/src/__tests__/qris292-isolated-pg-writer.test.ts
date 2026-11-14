@@ -407,7 +407,7 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
             RETURNING id,settlement_batch_id
           `);
           for (const j of journals.rows) {
-            const amount = j.settlement_batch_id===5739 ? 685800 : 923700;
+            const amount = Number(j.settlement_batch_id)===5739 ? 685800 : 923700;
             await conn.query(`
               INSERT INTO sport_center.accounting_journal_lines
                 (journal_id,line_type,account_code,account_name,amount,description)
