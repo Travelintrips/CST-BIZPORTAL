@@ -120,11 +120,29 @@ export default function PayrollStandaloneComponents(){
     return {gross,deductions,net:gross-deductions};
   },[values]);
   const kasbon=cents(values.kasbonDeduction);
+  // Historical prefill supplies only baseSalary. Never interpret empty fields
+  // as Rp0 or implicitly approve salary deductions.
+  const unverifiedFields=fields.filter(f=>cents(values[f.key])===null);
+  const effectiveDateValid=/^20[0-9]{2}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])$/.test(effectiveFrom)
+    && !Number.isNaN(Date.parse(effectiveFrom+"T00:00:00Z"))
+    && new Date(effectiveFrom+"T00:00:00Z").toISOString().slice(0,10)===effectiveFrom;
+  const missingReasons:string[]=[];
+  if(!selected)missingReasons.push("Pilih karyawan aktif.");
+  if(!canEdit)missingReasons.push("Penyimpanan komponen gaji belum aktif atau akun tidak berwenang.");
+  if(loading||busy)missingReasons.push("Sedang memuat data atau menyimpan.");
+  if(!effectiveDateValid)missingReasons.push("Tanggal mulai berlaku harus tanggal yang valid.");
+  if(unverifiedFields.length)missingReasons.push("Komponen belum terverifikasi: "+
+    unverifiedFields.map(f=>f.label).join(", ")+".");
+  if(cents(values.baseSalary)!==null&&cents(values.baseSalary)!<=0n)
+    missingReasons.push("Gaji Pokok wajib lebih dari Rp0.");
+  if(calc!==null&&calc.net<0n)missingReasons.push("Total potongan melebihi gaji kotor.");
+  if(canConfigureAutoKasbon&&kasbon!==null&&kasbon>0n)
+    missingReasons.push("Potongan kasbon manual harus Rp0 saat kasbon otomatis aktif.");
+  if(kasbon!==null&&kasbon>0n&&notes.trim().length<5)
+    missingReasons.push("Kasbon manual memerlukan catatan sumber HRD minimal 5 karakter.");
   useEffect(()=>setAutoKasbonPreview(null),[selected,effectiveFrom,validCompany]);
-  const ready=!!selected&&canEdit&&!busy&&!loading&&calc!==null&&
-    (!canConfigureAutoKasbon || kasbon===0n)&&
-    calc.gross>0n&&cents(values.baseSalary)!>0n&&calc.net>=0n&&
-    (kasbon===0n||((notes.trim().length>=5)&&notes.length<=500));
+  const ready=missingReasons.length===0&&calc!==null&&calc.gross>0n&&
+    notes.length<=500;
   function useHistoricalCandidate(candidate:HistoricalCandidate,_year:number,_month:number){
     if(validCompany===null||!canEdit||!employees.some(e=>e.id===candidate.employeeId)||
        candidate.status!=="NEEDS_HR_CONFIRMATION"||!candidate.proposedBaseSalary)return;
@@ -201,6 +219,11 @@ export default function PayrollStandaloneComponents(){
           <input aria-label={f.label} className="mt-1 w-full rounded border bg-background p-2" inputMode="decimal"
             placeholder="Kosong jika belum diverifikasi; ketik 0 jika nihil"
             value={values[f.key]} onChange={e=>{setValues(v=>({...v,[f.key]:e.target.value.trim()}));setLastReadback(null)}}/>
+          {f.key!=="baseSalary" && !busy && !loading && values[f.key]==="" &&
+            <button type="button" className="mt-1 block text-xs underline text-muted-foreground hover:text-foreground"
+              onClick={()=>{setValues(prev=>({...prev,[f.key]:"0"}));setLastReadback(null)}}>
+              HRD sudah memverifikasi nihil — isi Rp0
+            </button>}
           {f.key==="kasbonDeduction"&&<span className="mt-1 block text-xs text-muted-foreground">
             {canConfigureAutoKasbon
               ? "Ketika kasbon otomatis aktif, isi Rp0 pada potongan manual. Pilih Penuh/Cicilan pada panel sumber di bawah; sistem akan mengisi potongan ke Draft tanpa mencatat dua kali."
@@ -233,8 +256,17 @@ export default function PayrollStandaloneComponents(){
       </div>
       {canConfigureAutoKasbon && kasbon!==null && kasbon>0n &&
         <p role="alert" className="text-sm text-red-600">Potongan kasbon manual harus Rp0 sebelum menggunakan rencana Penuh/Cicilan otomatis. Data lama tidak ditimpa otomatis.</p>}
+      {!ready && selected && <div aria-label="Alasan tombol simpan belum aktif" className="rounded-lg border border-amber-500/40 p-3 text-sm">
+        <p className="font-medium">Agar tombol Simpan aktif, lengkapi berikut:</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          {missingReasons.map(reason=><li key={reason}>{reason}</li>)}
+        </ul>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Isi Rp0 hanya jika HRD sudah memastikan komponen tersebut benar-benar nihil.
+          Gaji historis tidak membuktikan potongan bulan berjalan.
+        </p>
+      </div>}
       <Button onClick={()=>void save()} disabled={!ready}> {busy?"Menyimpan...":"Simpan Gaji & Seluruh Potongan"} </Button>
-      {!canEdit&&<p className="text-xs text-muted-foreground">Penyimpanan belum diaktifkan atau akun tidak berwenang. Tidak ada data diubah.</p>}
       {lastReadback&&<p role="status" className="text-sm">Baca ulang terverifikasi: gaji bersih {formatted(lastReadback.net)}.</p>}
     </section>}
   </div></AppShell>;
