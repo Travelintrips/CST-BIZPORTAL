@@ -75,6 +75,7 @@ interface Advance {
   amount: number;
   remaining_amount: number;
   settled_amount: number;
+  paid_amount?: number;
   date: string;
   purpose: string | null;
   notes: string | null;
@@ -908,7 +909,7 @@ function AdvanceDetailDrawer({ advance, readOnly, loading, onClose, onRefresh, o
                     <InfoRow label="Akun Bank/Kas (CR)"
                       value={adv.cash_bank_account_name ? `${adv.cash_bank_account_code} — ${adv.cash_bank_account_name}` : "-"} />
                     <InfoRow label="Entry Jurnal" value={adv.entry_id ? `#${adv.entry_id}` : "Belum diposting"} />
-                    <InfoRow label={readOnly?"Pembayaran tercatat (belum diverifikasi)":"Sudah Dilunasi"} value={IDR(readOnly?adv.paid_amount:adv.settled_amount)} />
+                    <InfoRow label={readOnly?"Pembayaran tercatat (belum diverifikasi)":"Sudah Dilunasi"} value={IDR(readOnly?(adv.paid_amount??0):adv.settled_amount)} />
                     <InfoRow label={readOnly?"Sisa tercatat (belum diverifikasi)":"Sisa Outstanding"} value={IDR(adv.remaining_amount)} />
                     {adv.notes && <InfoRow label="Catatan" value={adv.notes} className="col-span-2" />}
                   </div>
