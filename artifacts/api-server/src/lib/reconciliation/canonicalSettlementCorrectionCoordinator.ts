@@ -107,15 +107,24 @@ export async function runAtomicCanonicalSettlementCorrection<TBatches, TApproval
       const ledger = await tx.execute(sql`
         SELECT COALESCE(SUM(amount) FILTER (WHERE line_type='debit'),0) AS debits,
                COALESCE(SUM(amount) FILTER (WHERE line_type='credit'),0) AS credits,
+               COALESCE(SUM(amount) FILTER (
+                 WHERE line_type='debit' AND account_code='1-1023-CST'),0) AS bank_debit,
+               COALESCE(SUM(amount) FILTER (
+                 WHERE line_type='debit' AND account_code='5-3050-CST'),0) AS mdr_debit,
+               COALESCE(SUM(amount) FILTER (
+                 WHERE line_type='credit' AND account_code='1-1024-CST'),0) AS clearing_credit,
                COUNT(*)::integer AS lines
         FROM sport_center.accounting_journal_lines
         WHERE journal_id=${Number(row.settlement_journal_id)}
       `);
       const amounts = ledger.rows[0] as Record<string,unknown>|undefined;
-      if (!amounts || Number(amounts.lines)<2 || Number(amounts.debits)<=0
-        || Number(amounts.debits)!==Number(amounts.credits)
-        || Number(amounts.debits)!==cohort.net) {
-        throw new Error(`Issue #292 posted settlement journal is unbalanced or does not equal bank net: ${cohort.mutationId}.`);
+      if (!amounts || Number(amounts.lines)!==3
+        || Number(amounts.debits)!==cohort.gross
+        || Number(amounts.credits)!==cohort.gross
+        || Number(amounts.bank_debit)!==cohort.net
+        || Number(amounts.mdr_debit)!==cohort.mdr
+        || Number(amounts.clearing_credit)!==cohort.gross) {
+        throw new Error(`Issue #292 posted journal bank/MDR/clearing amounts are not canonical: ${cohort.mutationId}.`);
       }
       used.add(Number(row.batch_id));
     }
