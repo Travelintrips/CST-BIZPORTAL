@@ -33,6 +33,16 @@ suite("Issue 292 actual TypeScript writer in isolated PostgreSQL", () => {
       expect(nov4.rows).toEqual(nov4Again.rows);
       expect(nov4.rows).toHaveLength(1);
       expect(nov5.rows).toHaveLength(1);
+      // Exact results were independently read from both CST-DEV and PROD.
+      // The isolated function must remain byte-for-byte behaviorally aligned.
+      expect(nov4.rows[0]).toEqual({
+        settlement_reference:"SCB1-7b2854445a3dab7ee7bbd918a41a9cf188aba435ca1d00abcbf6b44047b318c9",
+        correlation_id:"scb:v1:7b2854445a3dab7ee7bbd918a41a9cf188aba435ca1d00abcbf6b44047b318c9",
+      });
+      expect(nov5.rows[0]).toEqual({
+        settlement_reference:"SCB1-baff3c001d1fb0b66eacd59b7436fc226f1fcd1658a863188effff38ea156d3c",
+        correlation_id:"scb:v1:baff3c001d1fb0b66eacd59b7436fc226f1fcd1658a863188effff38ea156d3c",
+      });
       expect(nov4.rows[0].settlement_reference).toMatch(/^SCB1-[a-f0-9]{64}$/);
       expect(nov4.rows[0].correlation_id).toMatch(/^scb:v1:[a-f0-9]{64}$/);
       expect(nov4.rows[0].settlement_reference.slice(5))
