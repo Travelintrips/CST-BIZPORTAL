@@ -3730,11 +3730,15 @@ async function runIssue292CorrectionWithCanonicalApproval(
         // Same connection and transaction, before the first finance write.
         // DEV must provide matching historical owner-rule evidence, not a
         // generic 0.3% Mandiri rule which would calculate wrong journals.
-        const principal = await client.query<{ db_principal: string }>(
-          "SELECT current_user AS db_principal",
+        const principal = await client.query<{
+          db_principal: string;
+          session_principal: string;
+        }>(
+          "SELECT current_user AS db_principal, session_user AS session_principal",
         );
         if (principal.rows.length !== 1
-          || principal.rows[0]?.db_principal !== "sport_center_app") {
+          || principal.rows[0]?.db_principal !== "sport_center_app"
+          || principal.rows[0]?.session_principal !== "sport_center_app") {
           throw new ApprovalError(
             "Issue #292 finance executor must use a verified scoped application principal.",
             403,
