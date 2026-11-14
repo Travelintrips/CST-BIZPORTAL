@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+/**
+ * #292: keep the replacement stage bound to the genuine owner functions,
+ * not fixture-only SQL INSERTs or a second independent transaction.
+ */
+const source = readFileSync(
+  new URL("../lib/reconciliation/canonicalSettlementCorrectionCoordinator.ts", import.meta.url),
+  "utf8",
+);
+const rebuild = source.slice(source.indexOf("export async function rebuildIssue292WithOwnerFunctions("));
+
+describe("Issue 292 canonical rebuild integration contract", () => {
+  it("uses the real canonical and supplemental owner builders in the same transaction", () => {
+    expect(rebuild).toContain("sport_center.create_payment_settlement_batch(");
+    expect(rebuild).toContain("sport_center.create_payment_settlement_supplemental_batch(");
+    expect(rebuild).toContain("sport_center.canonical_settlement_group_identity(");
+    expect(rebuild).toContain("sport_center.create_settlement_journal_draft(");
+    expect(rebuild).toContain("sport_center.finalize_payment_settlement(");
+    expect(rebuild).not.toMatch(/INSERT INTO sport_center\\.(?:payment_settlement_batches|accounting_journals)/i);
+    expect(rebuild).not.toContain("client.transaction(");
+  });
+
+  it("blocks wrong day, missing source journals and stale payment statuses before owner writes", () => {
+    expect(rebuild).toContain("p.paid_at AT TIME ZONE 'Asia/Jakarta'");
+    expect(rebuild).toContain("row.h_plus_one!==cohort.date");
+    expect(rebuild).toContain("row.expected_date!==cohort.date");
+    expect(rebuild).toContain("Number(row.source_journal_count)!==1");
+    expect(rebuild).toContain('String(row.settlement_status).toLowerCase()!=="unsettled"');
+    const firstWriter=rebuild.indexOf("sport_center.create_payment_settlement_supplemental_batch(");
+    expect(firstWriter).toBeGreaterThan(rebuild.indexOf('row.h_plus_one!==cohort.date'));
+    expect(firstWriter).toBeGreaterThan(rebuild.indexOf('source totals fail exact bank evidence'));
+  });
+
+  it("preserves historical #5738 and blocks external bank approval or deployment by itself", () => {
+    expect(rebuild).toContain("reversal.settlementId !== 5738");
+    expect(rebuild).toContain("reversal.bankMutationId !== 434464");
+    expect(rebuild).toContain('"2026-11-04"');
+    expect(rebuild).toContain('"2026-11-05"');
+    expect(rebuild).toContain("1-1023-CST");
+    expect(rebuild).not.toContain("UPDATE public.bank_mutations");
+    expect(rebuild).not.toContain("router.post(");
+  });
+});
